@@ -45,6 +45,21 @@ def pos_label(tag):
     desc = TAGS.get(tag, tag)
     return desc[0].upper() + desc[1:] if desc else tag
 
+# pinned kana reading -> romaji, matching src/kana.ts toRomaji for the fixture
+# readings (kept in sync with the TS enrichment; the regenerator is standalone
+# and doesn't reimplement Hepburn).
+ROMAJI = {
+    "のむ": "nomu", "ある": "aru", "あつい": "atsui", "あづい": "azui",
+    "あぢぃ": "ajii", "あぢー": "ajii", "あぢい": "ajii", "あっつい": "attsui",
+    "アツイ": "atsui", "アツい": "atsui", "たべる": "taberu", "たべもの": "tabemono",
+    "しょくじ": "shokuji", "くる": "kuru", "クる": "kuru", "きれい": "kirei",
+    "キレイ": "kirei", "きれーい": "kireei", "くう": "kuu", "よい": "yoi",
+    "えい": "ei", "かんずる": "kanzuru", "いい": "ii", "する": "suru",
+}
+
+def romaji(text):
+    return ROMAJI.get(text, text)
+
 # pinned furigana (kanji writing -> ruby segments), known-correct
 FURIGANA = {
     "食べる": "食[たべ]る", "喰べる": "喰[たべ]る",
@@ -124,7 +139,7 @@ def render_word(word, limit=None):
         for p in s["partOfSpeech"]:
             if p not in pos:
                 pos.append(p)
-    labels = [pos_label(p) for p in pos]
+    labels = sorted((pos_label(p) for p in pos), key=str.lower)
     lines.append(labels[0] + (("; " + "; ".join(l.lower() for l in labels[1:])) if len(labels) > 1 else ""))
     lines.append("")
     senses = word["sense"]
@@ -281,18 +296,19 @@ def main():
     eat = sorted([w(i) for i in entries if "eat" in gloss_tokens(w(i))], key=lambda x: int(x["id"]))
     write("search-eat.txt", render_search("eat", [(display_header(x)[0], display_header(x)[1], first_gloss(x)) for x in eat]))
 
-    def prefix_rows(prefix):
+    def prefix_rows(prefix, col="kana"):
         rows = []
         for i in sorted(entries, key=int):
             w_ = entries[i]
             for k in w_.get("kana", []):
-                if k["text"].startswith(prefix):
+                value = romaji(k["text"]) if col == "romaji" else k["text"]
+                if value.startswith(prefix):
                     rows.append((display_header(w_)[0], k["text"], first_gloss(w_)))
                     break
         return rows
 
     write("search-taberu.txt", render_search("たべ", prefix_rows("たべ")))
-    write("search-taberu-romaji.txt", render_search("taberu", prefix_rows("たべ")))
+    write("search-taberu-romaji.txt", render_search("taberu", prefix_rows("taberu", "romaji")))
 
     # --- radical ---
     write("radical-mizu.txt", render_radical("水", load(os.path.join(E, "radk-水.json"))))

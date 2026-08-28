@@ -30,6 +30,7 @@ export interface BuildSummary {
   kanjiRadicals: number;
   kanjiWords: number;
   conjugations: number;
+  furigana: number;
   dbBytes: number;
 }
 
@@ -47,6 +48,7 @@ export function summarize(rows: Transformed, dbBytes: number): BuildSummary {
     kanjiRadicals: rows.kanjiRadicals.length,
     kanjiWords: rows.kanjiWords.length,
     conjugations: rows.conjugations.length,
+    furigana: rows.furigana.length,
     dbBytes,
   };
 }
@@ -95,6 +97,7 @@ export function buildDb(rows: Transformed, meta: Record<string, string>, options
     kanjiRadicals: db.prepare("INSERT INTO kanji_radicals (kanji, radical) VALUES (?, ?)"),
     kanjiWords: db.prepare("INSERT INTO kanji_words (kanji, word_id, writing_id, position) VALUES (?, ?, ?, ?)"),
     conjugations: db.prepare("INSERT INTO conjugations (word_id, reading, class, form, value, display) VALUES (?, ?, ?, ?, ?, ?)"),
+    furigana: db.prepare("INSERT INTO furigana (word_id, writing, reading, segments) VALUES (?, ?, ?, ?)"),
     meta: db.prepare("INSERT INTO meta (key, value) VALUES (?, ?)"),
   };
 
@@ -111,6 +114,7 @@ export function buildDb(rows: Transformed, meta: Record<string, string>, options
     for (const r of rows.kanjiRadicals) insert.kanjiRadicals.run(r.kanji, r.radical);
     for (const r of rows.kanjiWords) insert.kanjiWords.run(r.kanji, r.word_id, r.writing_id, r.position);
     for (const c of rows.conjugations) insert.conjugations.run(c.word_id, c.reading, c.class, c.form, c.value, c.display);
+    for (const f of rows.furigana) insert.furigana.run(f.word_id, f.writing, f.reading, f.segments);
   });
   tx();
 

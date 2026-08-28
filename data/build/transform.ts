@@ -3,6 +3,7 @@
  * in data-model.md §3. Deterministic: identical input ⇒ identical rows.
  */
 import { toRomaji } from "../../src/kana.js";
+import { furiganaFor } from "../../src/furigana.js";
 import { CONJUGATABLE, conjugateReading, type ConjClass } from "../../src/conjugation.js";
 import type {
   JmdictFile,
@@ -98,6 +99,12 @@ export interface ConjugationRow {
   value: string;
   display: string | null;
 }
+export interface FuriganaRow {
+  word_id: string;
+  writing: string;
+  reading: string;
+  segments: string;
+}
 
 export interface Transformed {
   words: WordRow[];
@@ -112,6 +119,7 @@ export interface Transformed {
   kanjiRadicals: KanjiRadicalRow[];
   kanjiWords: KanjiWordRow[];
   conjugations: ConjugationRow[];
+  furigana: FuriganaRow[];
 }
 
 const json = (v: unknown): string => JSON.stringify(v);
@@ -133,6 +141,7 @@ export function transform(
   const glosses: GlossRow[] = [];
   const kanjiWords: KanjiWordRow[] = [];
   const conjugations: ConjugationRow[] = [];
+  const furigana: FuriganaRow[] = [];
 
   let writingId = 1;
   let senseId = 1;
@@ -231,6 +240,20 @@ export function transform(
         }
       }
     }
+
+    // furigana: pin ruby only for known writings (M1 pinned map; M2 = JmdictFurigana)
+    const headReading = word.kana[0]?.text ?? "";
+    for (const k of kanjiWritings) {
+      const ruby = furiganaFor(k.text);
+      if (ruby !== k.text) {
+        furigana.push({
+          word_id: word.id,
+          writing: k.text,
+          reading: headReading,
+          segments: ruby,
+        });
+      }
+    }
   }
 
   // ---- KANJIDIC2 ----
@@ -308,6 +331,7 @@ export function transform(
     kanjiRadicals,
     kanjiWords: filteredKanjiWords,
     conjugations,
+    furigana,
   };
 }
 

@@ -1,4 +1,3 @@
 taberu
 
   食べる  [たべる]  to eat
-  食べ物  [たべもの]  food

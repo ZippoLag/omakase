@@ -4,13 +4,17 @@
   "private": true,
   "description": "100% offline Japanese quick-reference CLI (kanji, words, conjugations, examples)",
   "type": "module",
+  "bin": {
+    "japanese": "bin/japanese"
+  },
   "engines": {
-    "node": ">=20"
+    "node": ">=20 <24"
   },
   "scripts": {
     "build:db": "tsx data/build/index.ts",
     "typecheck": "tsc --noEmit",
     "test": "tsx --test tests/*.test.ts",
+    "cli": "tsx src/cli.ts",
     "validate:conjugations": "tsx data/validate/conjugations.ts"
   },
   "devDependencies": {

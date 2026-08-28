@@ -1,0 +1,34 @@
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+
+jobs:
+  test:
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@v4
+
+      # Node 20/22 only: better-sqlite3@11 ships a native binding whose ABI is
+      # unsupported on Node 24+ (it crashes on GC). CI reads the pinned .nvmrc
+      # (22) so the native build always targets a supported Node; keep that file
+      # and this workflow in sync (see package.json engines ">=20 <24").
+      - uses: actions/setup-node@v4
+        with:
+          node-version-file: .nvmrc
+          cache: npm
+
+      - name: Install dependencies
+        run: npm ci
+
+      - name: Typecheck
+        run: npm run typecheck
+
+      - name: Golden tests
+        run: npm test
+
+      - name: Conjugation validation (3,511-table diff + [G] gap fixtures)
+        run: npm run validate:conjugations
