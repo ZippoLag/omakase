@@ -3,7 +3,7 @@
 
 This is the *contract* for the CLI output format. The TypeScript formatter in
 the app must reproduce these files byte-for-byte; the golden test compares
-`japanese <cmd>` output against them.
+`omakase <cmd>` output against them.
 
 Regeneration is deliberate: edit this file, run it, and review the diff.
 `git diff tests/fixtures/golden` is the review surface.

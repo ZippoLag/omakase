@@ -32,7 +32,7 @@ tests/fixtures/
 | `entries/*` (words, kanji, radicals) | **jmdict-simplified 3.6.2+20260824122934** — exact snapshots; download sha256 pinned in `manifest.json` | CC BY-SA 4.0 (EDRDG) |
 | `meta/tags.json` | same release | CC BY-SA 4.0 |
 | `conjugations/{taberu,kuru,suru,yoi,ii}.json` | **jkindrix/japanese-language-data** `data/grammar/conjugations.json` (fetched 2026-08-28; provenance in `_provenance.json`) | CC BY-SA 4.0 |
-| `conjugations/{aru,shokuji,kanzuru}.json` | **hand-derived [G] gap classes** per `conjugation-engine.md` §4.5/4.7 (v5r-i bare ある, vs suru noun 食事, vz 感ずる) — not present in the upstream dataset; each file carries a `provenance` field. **`npm run validate:conjugations` diffs these against the engine** (the engine is the only ground truth for these classes) | CC BY-SA 4.0 (our derivation) |
+| `conjugations/{aru,shokuji,kanzuru}.json` | **hand-derived [G] gap classes** per `conjugation-engine.md` §4.5/4.7 (v5r-i bare ある, vs suru noun 食事, vz 感ずる) — not present in the upstream dataset; each file carries a `provenance` field. **`pnpm run validate:conjugations` diffs these against the engine** (the engine is the only ground truth for these classes) | CC BY-SA 4.0 (our derivation) |
 | `sentences/*` | curated Tatoeba subset of the same dataset (real Tatoeba IDs, `license_flag` per sentence) | CC BY 2.0 FR |
 | furigana in goldens | **hand-pinned known-correct values** (e.g. 食[たべ]る) — the pipeline will source these from JmdictFurigana; a deliberate diff is expected when that lands | — |
 | radical numbers (e.g. 184→食) | Kangxi radical numbering (public domain) | — |

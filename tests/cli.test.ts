@@ -1,6 +1,6 @@
 /**
- * CLI help handling: `japanese --help` / `-h` shows the overview of all
- * commands, and `japanese <command> --help` / `-h` shows detailed usage for
+ * CLI help handling: `omakase --help` / `-h` shows the overview of all
+ * commands, and `omakase <command> --help` / `-h` shows detailed usage for
  * that command. Help paths must not require (or open) the database.
  */
 import { test } from "node:test";
@@ -28,7 +28,7 @@ test("no args: shows base help on stdout, exits 1", () => {
   const { code, stdout } = run([]);
   assert.equal(code, 1);
   assert.ok(stdout.includes("Usage:"));
-  assert.ok(/japanese <command> \[args\.\.\.\]/.test(stdout));
+  assert.ok(/omakase <command> \[args\.\.\.\]/.test(stdout));
 });
 
 test("--help: shows base help listing all commands, exits 0", () => {
@@ -47,22 +47,20 @@ test("word --help: detailed usage with --limit, exits 0", () => {
   for (const flag of ["--help", "-h"]) {
     const { code, stdout } = run(["word", flag]);
     assert.equal(code, 0);
-    assert.ok(stdout.includes("japanese word <writing>"));
+    assert.ok(stdout.includes("omakase word <writing>"));
     assert.ok(stdout.includes("--limit N"));
   }
 });
 
 test("kanji --help: detailed usage with <literal>, exits 0", () => {
   const { code, stdout } = run(["kanji", "--help"]);
-  assert.equal(code, 0);
-  assert.ok(stdout.includes("japanese kanji <literal>"));
+  assert.equal(code, 0);    assert.ok(stdout.includes("omakase kanji <literal>"));
   assert.ok(stdout.includes("stroke count"));
 });
 
 test("search --help: detailed usage describing input forms, exits 0", () => {
   const { code, stdout } = run(["search", "-h"]);
-  assert.equal(code, 0);
-  assert.ok(stdout.includes("japanese search <query>"));
+  assert.equal(code, 0);    assert.ok(stdout.includes("omakase search <query>"));
   assert.ok(stdout.includes("gloss token search"));
 });
 
@@ -78,5 +76,5 @@ test("help wins over a missing database", () => {
   // The dbPath is bogus; help must still succeed because it never opens the DB.
   const { code, stdout } = run(["word", "--help"]);
   assert.equal(code, 0);
-  assert.ok(stdout.includes("japanese word"));
+  assert.ok(stdout.includes("omakase word"));
 });

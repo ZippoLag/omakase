@@ -288,7 +288,7 @@ pinned tables byte-for-byte [V]):
    equal `tests/fixtures/conjugations/*.json` exactly, on both `forms` (kana) and
    `display_forms` — 食べる (v1), 来る (vk), 為る (vs-i), 良い (adj-i), いい (adj-ix).
    These are already the `conjugate-*.txt` goldens.
-2. **Full-corpus diff (3,511 tables):** `npm run validate:conjugations` runs the
+2. **Full-corpus diff (3,511 tables):** `pnpm run validate:conjugations` runs the
    engine over every entry in the pinned upstream `conjugations.json` (sha256
    verified, cached in `data/raw/`), diffs `forms` and `display_forms`, and
    writes `dist/conjugation-validation.json`. **Result (2026-08-28): 3,511/3,511
@@ -298,7 +298,7 @@ pinned tables byte-for-byte [V]):
    engine change; a new mismatch triages into: (a) engine bug → fix,
    (b) upstream quirk → documented divergence, (c) unsupported form → extend
    taxonomy.
-3. **Gap coverage (marked [G]):** `npm run validate:conjugations` also diffs the
+3. **Gap coverage (marked [G]):** `pnpm run validate:conjugations` also diffs the
    [G] gap fixtures in `tests/fixtures/conjugations/` through the same engine
    path — bare ある (v5r-i, id 1296400), suru noun 食事 (vs, 1358490), and vz
    感ずる (1609650), plus a v5uru verb (覆う — still to pin). **Result

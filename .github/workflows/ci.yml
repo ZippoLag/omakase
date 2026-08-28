@@ -19,16 +19,21 @@ jobs:
       - uses: actions/setup-node@v4
         with:
           node-version-file: .nvmrc
-          cache: npm
+          cache: pnpm
+
+      # pnpm version is pinned via the packageManager field in package.json;
+      # corepack installs exactly that version.
+      - name: Enable corepack
+        run: corepack enable
 
       - name: Install dependencies
-        run: npm ci
+        run: pnpm install --frozen-lockfile
 
       - name: Typecheck
-        run: npm run typecheck
+        run: pnpm run typecheck
 
       - name: Golden tests
-        run: npm test
+        run: pnpm test
 
       - name: Conjugation validation (3,511-table diff + [G] gap fixtures)
-        run: npm run validate:conjugations
+        run: pnpm run validate:conjugations

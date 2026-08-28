@@ -85,26 +85,26 @@ function isAscii(s: string): boolean {
 const COMMANDS = ["word", "kanji", "search"] as const;
 type Command = (typeof COMMANDS)[number];
 
-/** Base overview shown by `japanese --help` (also used for unknown/missing commands). */
+/** Base overview shown by `omakase --help` (also used for unknown/missing commands). */
 const USAGE = `Japanese quick-reference CLI (100% offline)
 
 Usage:
-  japanese <command> [args...]
-  japanese --help              show this overview
-  japanese <command> --help    show help for a specific command
+  omakase <command> [args...]
+  omakase --help              show this overview
+  omakase <command> --help    show help for a specific command
 
 Commands:
   word    dictionary entry + example sentences
   kanji   kanji page (readings, meanings, compounds)
   search  English gloss / kana / romaji search
 
-Run "japanese <command> --help" for details on a command.
+Run "omakase <command> --help" for details on a command.
 `;
 
-/** Detailed help per command, shown by `japanese <command> --help`. */
+/** Detailed help per command, shown by `omakase <command> --help`. */
 const COMMAND_HELP: Record<Command, string> = {
   word: `Usage:
-  japanese word <writing> [--limit N]
+  omakase word <writing> [--limit N]
 
 Look up a dictionary entry for a word, matching on its kanji or kana spelling.
 
@@ -116,11 +116,11 @@ Options:
                  "… and M more senses" note; also accepts --limit=N
 
 Examples:
-  japanese word 食べる
-  japanese word 為る --limit 3
+  omakase word 食べる
+  omakase word 為る --limit 3
 `,
   kanji: `Usage:
-  japanese kanji <literal>
+  omakase kanji <literal>
 
 Render a kanji page: stroke count, grade/JLPT/frequency, classical radical,
 on/kun/nanori readings, meanings, and compounds that contain the character.
@@ -129,11 +129,11 @@ Arguments:
   <literal>      a single kanji character (e.g. 食)
 
 Examples:
-  japanese kanji 食
-  japanese kanji 水
+  omakase kanji 食
+  omakase kanji 水
 `,
   search: `Usage:
-  japanese search <query>
+  omakase search <query>
 
 Search the dictionary. How the query is interpreted depends on its form:
   - kana input  → reading-prefix match (e.g. たべ)
@@ -145,9 +145,9 @@ Arguments:
   <query>        kana, romaji, or an English gloss
 
 Examples:
-  japanese search たべ
-  japanese search taberu
-  japanese search eat
+  omakase search たべ
+  omakase search taberu
+  omakase search eat
 `,
 };
 
@@ -246,7 +246,7 @@ export function main(
 ): number {
   const [command, ...rest] = argv;
 
-  // Base help: `japanese --help` / `-h`. A missing command also shows help
+  // Base help: `omakase --help` / `-h`. A missing command also shows help
   // (to stdout) but exits non-zero since no command was invoked.
   if (!command) {
     stdout(USAGE);
@@ -263,7 +263,7 @@ export function main(
 
   const { args, flags } = parseArgs(rest);
 
-  // Per-command help: `japanese <command> --help` / `-h`.
+  // Per-command help: `omakase <command> --help` / `-h`.
   if (flags.has("help") || flags.has("h")) {
     stdout(COMMAND_HELP[command as Command]);
     return 0;
@@ -273,7 +273,7 @@ export function main(
   try {
     db = new Database(dbPath, { readonly: true });
   } catch (err) {
-    stderr(`cannot open database at ${dbPath} — run \`npm run build:db\` first.\n${(err as Error).message}\n`);
+    stderr(`cannot open database at ${dbPath} — run \`pnpm run build:db\` first.\n${(err as Error).message}\n`);
     return 1;
   }
 

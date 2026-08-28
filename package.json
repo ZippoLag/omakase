@@ -1,15 +1,16 @@
 {
-  "name": "japanese-cli",
+  "name": "omakase",
   "version": "0.1.0",
   "private": true,
   "description": "100% offline Japanese quick-reference CLI (kanji, words, conjugations, examples)",
   "type": "module",
   "bin": {
-    "japanese": "bin/japanese"
+    "omakase": "bin/omakase"
   },
   "engines": {
     "node": ">=20 <24"
   },
+  "packageManager": "pnpm@11.1.2",
   "scripts": {
     "build:db": "tsx data/build/index.ts",
     "typecheck": "tsc --noEmit",
@@ -23,9 +24,5 @@
     "better-sqlite3": "^11.0.0",
     "tsx": "^4.19.0",
     "typescript": "^5.5.0"
-  },
-  "allowScripts": {
-    "better-sqlite3@11.10.0": true,
-    "esbuild@0.28.2": true
   }
 }

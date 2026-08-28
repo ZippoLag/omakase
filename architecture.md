@@ -64,7 +64,7 @@ JmdictFurigana + kradfile/radkfile ──────┘     fetch.ts (pinned UR
                                                package.ts (dist/: kanji.db, strokes/*.svg, meta.json)
 ```
 
-Output: **`dist/kanji.db`** (~15–20 MB) + **`dist/strokes/*.svg`** (~9–10 MB Jōyō) + **`dist/meta.json`** (source versions, dates, licenses — printed by `japanese info`).
+Output: **`dist/kanji.db`** (~15–20 MB) + **`dist/strokes/*.svg`** (~9–10 MB Jōyō) + **`dist/meta.json`** (source versions, dates, licenses — printed by `omakase info`).
 
 ### Query flow (runtime, every command)
 
@@ -82,20 +82,20 @@ All data is local; there is **no runtime network access** by design.
 
 | Command | Feature | Backing table/index |
 |---|---|---|
-| `japanese kanji 食` | readings (on/kun + nanori), meanings, stroke count, grade, JLPT, frequency, radical, decomposition | `kanji` + `kanji_readings` + `kanji_meanings` + `kanji_radicals` |
-| `japanese kanji 食 --words` | compounds: words containing the kanji (with furigana) | `kanji_words` |
-| `japanese kanji --radical 氵 --radical 口` | multi-radical search (intersection) | `kanji_radicals` (PK) |
-| `japanese kanji --stroke 8 --grade 3` | filter by stroke count / grade / JLPT | `kanji` covering indexes |
-| `japanese word 食べる` | definitions, readings, POS, furigana, common flag | `words` + `writings` + `senses` + `glosses` + `furigana` |
-| `japanese word taberu` | romaji input | WanaKana → `writings.romaji` |
-| `japanese search eat` | English full-text search | `glosses_fts` (unicode61) |
-| `japanese search たべ` | reading prefix / kanji substring search | `writings_fts` (trigram) + `idx_writings_text` |
-| `japanese conjugate 食べる` | full conjugation table (polite/plain, tenses, forms) | `conjugations` (by `word_id`) |
-| `japanese deconjugate 食べて` | → base forms 食べる, 食べれる, … | `conjugations` (by `value`) — index-backed, instant |
-| `japanese sentence 食` | example sentences for a word/kanji | `word_sentences` + `sentences` |
-| `japanese stroke 食` | stroke count, stroke order summary; `--export out.svg` writes the KanjiVG file; `--animate out.gif` (optional) | `stroke_order` + `strokes/*.svg` |
-| `japanese radical 水` | kanji grouped by radical | `radicals` + `kanji_radicals` |
-| `japanese info` | data provenance: sources, versions, dates, licenses | `meta` table |
+| `omakase kanji 食` | readings (on/kun + nanori), meanings, stroke count, grade, JLPT, frequency, radical, decomposition | `kanji` + `kanji_readings` + `kanji_meanings` + `kanji_radicals` |
+| `omakase kanji 食 --words` | compounds: words containing the kanji (with furigana) | `kanji_words` |
+| `omakase kanji --radical 氵 --radical 口` | multi-radical search (intersection) | `kanji_radicals` (PK) |
+| `omakase kanji --stroke 8 --grade 3` | filter by stroke count / grade / JLPT | `kanji` covering indexes |
+| `omakase word 食べる` | definitions, readings, POS, furigana, common flag | `words` + `writings` + `senses` + `glosses` + `furigana` |
+| `omakase word taberu` | romaji input | WanaKana → `writings.romaji` |
+| `omakase search eat` | English full-text search | `glosses_fts` (unicode61) |
+| `omakase search たべ` | reading prefix / kanji substring search | `writings_fts` (trigram) + `idx_writings_text` |
+| `omakase conjugate 食べる` | full conjugation table (polite/plain, tenses, forms) | `conjugations` (by `word_id`) |
+| `omakase deconjugate 食べて` | → base forms 食べる, 食べれる, … | `conjugations` (by `value`) — index-backed, instant |
+| `omakase sentence 食` | example sentences for a word/kanji | `word_sentences` + `sentences` |
+| `omakase stroke 食` | stroke count, stroke order summary; `--export out.svg` writes the KanjiVG file; `--animate out.gif` (optional) | `stroke_order` + `strokes/*.svg` |
+| `omakase radical 水` | kanji grouped by radical | `radicals` + `kanji_radicals` |
+| `omakase info` | data provenance: sources, versions, dates, licenses | `meta` table |
 
 **Output contract:** human-readable aligned tables by default; every command supports `--json` (stable schema for scripting) and `--limit`. Exit 0 on found results, 1 on no match / error. `--help` on every command.
 
@@ -103,7 +103,7 @@ All data is local; there is **no runtime network access** by design.
 
 ## 5. Offline & packaging strategy
 
-- **No runtime network.** The tool ships with `dist/` (DB + strokes + meta). First install = single `npm install` (or copied artifact); no downloads at run time.
+- **No runtime network.** The tool ships with `dist/` (DB + strokes + meta). First install = single `pnpm install` (or copied artifact); no downloads at run time.
 - **kuromoji (41 MB) is an optional dependency** — only required for sentence tokenization; `deconjugate` works without it via the `conjugations` index. `package.json` marks it `optionalDependencies`, loaded lazily.
 - **Refreshing data** = re-running the build pipeline (a maintainer action), producing a new `dist/`. The app binary never changes; data artifacts are versioned via `meta.json`.
 - **Distribution:** plain Node package first; single-binary via Bun `--compile` or `pkg` is a documented follow-up (native-module bundling needs verification).
@@ -127,7 +127,7 @@ All data is local; there is **no runtime network access** by design.
 | Schema | validate against `data-model.md` DDL; integrity checks (FKs, no NULL glosses, sense positions) |
 | Conjugation | diff against japanese-language-data `conjugations.json` for the overlapping word set; hand-verified edge cases (v5k-s, v5aru, いい, suru/来る irregulars) |
 | Search | golden queries: English `eat`, kana `たべ`, kanji substring `食`, romaji `taberu`, deconjugate `食べて` |
-| Data provenance | checksums of pinned source versions; `japanese info` output matches `meta.json` |
+| Data provenance | checksums of pinned source versions; `omakase info` output matches `meta.json` |
 
 ---
 

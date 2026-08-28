@@ -11,7 +11,7 @@
  * fixtures carry a `provenance` field marking them as our engine-generated
  * expected values (no upstream ground truth exists for those classes).
  *
- *   npm run validate:conjugations
+ *   pnpm run validate:conjugations
  *
  * Output: console summary + dist/conjugation-validation.json
  */

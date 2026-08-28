@@ -15,7 +15,7 @@ interface ReleaseAsset {
 }
 
 export async function resolveAssetUrls(): Promise<Map<string, string>> {
-  const res = await fetch(API, { headers: { "User-Agent": "japanese-cli-build" } });
+  const res = await fetch(API, { headers: { "User-Agent": "omakase-cli-build" } });
   if (!res.ok) {
     throw new Error(`GitHub API ${res.status} for release ${RELEASE}: ${await res.text()}`);
   }

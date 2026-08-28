@@ -1,7 +1,7 @@
 /**
  * Build pipeline entry point (M0).
  *
- *   npm run build:db [-- --force]     (--force re-downloads sources)
+ *   pnpm run build:db [-- --force]     (--force re-downloads sources)
  *
  * Downloads the pinned jmdict-simplified release (sha256-verified, cached in
  * data/raw/), transforms it into the relational model from data-model.md, and

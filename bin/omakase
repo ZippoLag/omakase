@@ -1,5 +1,5 @@
 #!/usr/bin/env tsx
-// Executable entrypoint for the japanese CLI. Runs the TypeScript entry under
+// Executable entrypoint for the omakase CLI. Runs the TypeScript entry under
 // tsx (no build step); invoked via the package.json "bin" field.
 import { cli } from "../src/cli.ts";
 
