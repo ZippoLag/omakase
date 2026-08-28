@@ -156,3 +156,78 @@ Tangorin is built from **six open datasets (JMdict, KANJIDIC2, JMnedict, kradfil
 - example sentences → **Tatoeba**
 
 For fastest results, evaluate **jmdict-simplified** (JSON everything except strokes/sentences) or the **jkindrix/japanese-language-data** unified dataset (which already cross-links all of it), then add KanjiVG SVGs and kuromoji for offline tokenization.
+
+---
+
+## 8. Data backbone decision (2026-08-28): jmdict-simplified
+
+Head-to-head, based on live repo state at the research date:
+
+| Dimension | **jmdict-simplified** (scriptin) | **japanese-language-data** (jkindrix) |
+|---|---|---|
+| What it is | Faithful JSON conversion of the 4 EDRDG files (JMdict, JMnedict, Kanjidic2, KRADFILE/RADKFILE) | Unified, cross-linked aggregation of ~10 sources (JMdict, KANJIDIC2, KanjiVG, Tatoeba, Kanjium, Waller JLPT, Kangxi radicals, …) |
+| Word coverage | **Full JMdict committed**: 218,577 entries (eng release 11 MB, eng-common 1.37 MB) | Committed set is **common-only**: 23,119 words; full 216k + names (~720k) are gitignored, built on demand via `just build` |
+| Names | 743,620 entries, committed as release asset | ~720k, built on demand |
+| Kanji | 13,108 entries, committed | 13,108 entries, committed (via jmdict-simplified) |
+| Freshness | **Weekly automated releases** (last: 3.6.2+20260824, 4 days before research date) | **Last commit 2026-04-14** (~4.5 months stale at research date); no release cadence |
+| Maintenance risk | 9 years old, 389★, fully automated CI — low bus factor | Single maintainer, 6★, activity stalled since April 2026 — high bus factor |
+| Enrichments bundled | None — raw per-source JSON, you build the joins | Conjugations (3,511 tables), furigana (28,920), pitch accent (136k), JLPT classifications, jukugo compounds (14,350), kanji→words / reading→words / kanji→radicals / word→sentence cross-refs, sentence difficulty |
+| Schema & tooling | Consistent JSON, human-readable field names, TS types + NPM loader (MIT) | Schema-validated, test-covered, reproducible `just` build with pinned SHA256s; no published packages |
+| License | CC BY-SA 4.0 (data), MIT (NPM packages) | CC BY-SA 4.0 (everything) |
+| Size | eng-common 1.37 MB zip — tiny for quick reference | ~150 MB committed, larger full build |
+
+**Decision: jmdict-simplified is the data backbone.**
+
+Reasons:
+1. **Freshness.** It tracks JMdict weekly and automatically; a dictionary's correctness depends on current entries. japanese-language-data is ~4.5 months stale and its cadence is unpredictable.
+2. **Completeness, committed.** Full 218k-word JMdict + 743k names ship as release assets. japanese-language-data commits only the common subset and makes you run its build for the rest.
+3. **Reliability / bus factor.** 9 years, 389★, fully automated weekly CI vs. one maintainer, 6★, stalled since April 2026.
+4. **Ecosystem.** NPM types + loader, used across many downstream projects; trivial to consume in any stack.
+5. **Everything japanese-language-data adds is derivable from the backbone**: cross-ref indices are a simple join over JMdict entries, conjugations come from JMdict POS tags, furigana comes from the separate JmdictFurigana upstream, and KanjiVG/Tatoeba are needed by both approaches anyway.
+
+**What the backbone does not give you, and where each piece comes from:**
+- Stroke order → **KanjiVG** (needed regardless of choice)
+- Example sentences → **Tatoeba** (needed regardless of choice)
+- Conjugations → generate from JMdict POS tags (own engine, or bootstrap from japanese-language-data's `conjugations.json`, or an off-the-shelf conjugator like Kuroshiro/kamiya-codec)
+- kanji→words / reading→words cross-refs → build a small index at import time (~tens of lines over JMdict entries)
+- Furigana alignment → **JmdictFurigana** upstream, or tokenize with kuromoji/MeCab
+
+**Recommended build (hybrid, best of both):** backbone = jmdict-simplified refreshed weekly; bootstrap enrichment *schemas* and initial values once from japanese-language-data (conjugations.json, furigana.json, cross-ref design); then regenerate enrichments from the fresh backbone in our own import pipeline so nothing depends on a stalled repo's data going forward.
+
+---
+
+## 9. Offline bundle size estimate (verified 2026-08-28)
+
+All numbers below were measured from live sources on the research date (release assets, npm registry, and the committed files in jkindrix/japanese-language-data), not guessed.
+
+### Standard build: eng-common JMdict + Jōyō KanjiVG + curated Tatoeba + kuromoji
+
+| Component | Download (compressed) | On disk (uncompressed) | Source of number |
+|---|---|---|---|
+| **eng-common JMdict** (jmdict-simplified 3.6.2+20260824) | 1.44 MB (tgz asset) | **16.5 MB** JSON (16,482,605 B measured by streaming the release tgz) | jmdict-simplified release asset |
+| **Jōyō KanjiVG SVGs** (2,136 kanji) | ~3–4 MB (zipped) | **~9.4 MB** (6,416 SVGs = 28.09 MB in japanese-language-data → avg 4.4 KB/file; Jōyō = 2,136 files) | measured via GitHub tree API |
+| **Curated Tatoeba JA–EN** (25,980 pairs) | ~2–3 MB | **9.9 MB** (sentences.json exact) | measured via GitHub tree API |
+| **kuromoji.js + ipadic** | ~12–15 MB (npm tarball) | **41.3 MB** (npm unpackedSize exact) | npm registry |
+| **Total** | **~20–25 MB** | **~77 MB** | |
+
+With JSON converted to a compact store (SQLite or binary) the on-disk figure typically drops to **~60–70 MB** (SQLite + indexes usually comes in under the raw JSON), and the SVGs can be gzip-embedded at ~4 MB.
+
+### Variants
+
+| Variant | On disk | Notes |
+|---|---|---|
+| **Lean** (common words + Jōyō SVGs + 5k curated sentences + trimmed kuromoji dict built from eng-common headwords) | **~35–45 MB** | kuromoji is the single biggest chunk; a custom trimmed dictionary cuts it from 41 MB to ~5–10 MB at the cost of tokenization recall |
+| **Standard** (this estimate) | **~65–77 MB** | good balance for a quick-reference app |
+| **Full** (+ full 218k JMdict, JMnedict names, pitch accent, full corpora) | **200 MB+** | full JMdict alone adds ~120 MB uncompressed (23.9 MB compressed asset); JMnedict ~50 MB; pitch-accent.json 17.8 MB; full Tatoeba JP–EN ~50 MB+ |
+
+### Notes
+- **eng-common** covers the ~30k words marked common in JMdict — plenty for quick reference lookups; the long tail (archaic/rare/specialized) lives in the full JMdict, which you can add later without restructuring.
+- The **Jōyō SVG** figure is the lean choice; the official KanjiVG **main zip** (all ~13k kanji, no variants) is 12.65 MB compressed if you want full coverage instead.
+- kuromoji's 41.3 MB is the stock ipadic bundle; browser apps can lazy-load it or ship a trimmed build.
+- Everything above is permissive to redistribute offline under CC BY-SA 4.0 (data) / Apache-2.0 (kuromoji).
+
+---
+
+## 10. Data model & storage
+
+The source-to-schema mapping and the storage decision (SQLite + FTS5, with KanjiVG SVGs as loose files) live in **[`data-model.md`](data-model.md)** — full DDL, index strategy, and build/update notes.
