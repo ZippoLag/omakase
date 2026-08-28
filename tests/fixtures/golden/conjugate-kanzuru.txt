@@ -1,0 +1,18 @@
+Conjugations of 感ずる [かんずる]
+
+  dictionary             感ずる
+  polite nonpast         感じます
+  polite past            感じました
+  polite negative        感じません
+  polite past negative   感じませんでした
+  te-form                感じて
+  ta-form (past)         感じた
+  nai-form (negative)    感じない
+  nakatta (neg. past)    感じなかった
+  potential              感じられる
+  passive                感じられる
+  causative              感じさせる
+  imperative             感じろ
+  volitional             感じよう
+  conditional -ba        感じれば
+  conditional -tara      感じたら

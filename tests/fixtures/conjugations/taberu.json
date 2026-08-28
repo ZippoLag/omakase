@@ -1,0 +1,42 @@
+{
+ "id": "1358280",
+ "dictionary_form": "食べる",
+ "reading": "たべる",
+ "class": "v1",
+ "forms": {
+  "dictionary": "たべる",
+  "polite_nonpast": "たべます",
+  "polite_past": "たべました",
+  "polite_negative": "たべません",
+  "polite_past_negative": "たべませんでした",
+  "te_form": "たべて",
+  "ta_form": "たべた",
+  "nai_form": "たべない",
+  "nakatta_form": "たべなかった",
+  "potential": "たべられる",
+  "passive": "たべられる",
+  "causative": "たべさせる",
+  "imperative": "たべろ",
+  "volitional": "たべよう",
+  "conditional_ba": "たべれば",
+  "conditional_tara": "たべたら"
+ },
+ "display_forms": {
+  "dictionary": "食べる",
+  "polite_nonpast": "食べます",
+  "polite_past": "食べました",
+  "polite_negative": "食べません",
+  "polite_past_negative": "食べませんでした",
+  "te_form": "食べて",
+  "ta_form": "食べた",
+  "nai_form": "食べない",
+  "nakatta_form": "食べなかった",
+  "potential": "食べられる",
+  "passive": "食べられる",
+  "causative": "食べさせる",
+  "imperative": "食べろ",
+  "volitional": "食べよう",
+  "conditional_ba": "食べれば",
+  "conditional_tara": "食べたら"
+ }
+}

@@ -1,0 +1,10 @@
+Conjugations of いい [いい]
+
+  dictionary             いい
+  negative               よくない
+  past                   よかった
+  past negative          よくなかった
+  adverbial              よく
+  te-form                よくて
+  conditional -ba        よければ
+  conditional -tara      よかったら

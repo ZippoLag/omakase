@@ -1,0 +1,18 @@
+Conjugations of 食事 [しょくじ]
+
+  dictionary             食事する
+  polite nonpast         食事します
+  polite past            食事しました
+  polite negative        食事しません
+  polite past negative   食事しませんでした
+  te-form                食事して
+  ta-form (past)         食事した
+  nai-form (negative)    食事しない
+  nakatta (neg. past)    食事しなかった
+  potential              食事できる
+  passive                食事される
+  causative              食事させる
+  imperative             食事しろ
+  volitional             食事しよう
+  conditional -ba        食事すれば
+  conditional -tara      食事したら

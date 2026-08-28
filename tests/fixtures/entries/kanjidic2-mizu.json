@@ -1,0 +1,248 @@
+{
+  "literal": "水",
+  "codepoints": [
+    {
+      "type": "ucs",
+      "value": "6c34"
+    },
+    {
+      "type": "jis208",
+      "value": "1-31-69"
+    }
+  ],
+  "radicals": [
+    {
+      "type": "classical",
+      "value": 85
+    }
+  ],
+  "misc": {
+    "grade": 1,
+    "strokeCounts": [
+      4
+    ],
+    "variants": [],
+    "frequency": 223,
+    "radicalNames": [],
+    "jlptLevel": 4
+  },
+  "dictionaryReferences": [
+    {
+      "type": "nelson_c",
+      "morohashi": null,
+      "value": "2482"
+    },
+    {
+      "type": "nelson_n",
+      "morohashi": null,
+      "value": "3030"
+    },
+    {
+      "type": "halpern_njecd",
+      "morohashi": null,
+      "value": "10"
+    },
+    {
+      "type": "halpern_kkd",
+      "morohashi": null,
+      "value": "10"
+    },
+    {
+      "type": "halpern_kkld",
+      "morohashi": null,
+      "value": "3"
+    },
+    {
+      "type": "halpern_kkld_2ed",
+      "morohashi": null,
+      "value": "3"
+    },
+    {
+      "type": "heisig",
+      "morohashi": null,
+      "value": "130"
+    },
+    {
+      "type": "heisig6",
+      "morohashi": null,
+      "value": "137"
+    },
+    {
+      "type": "gakken",
+      "morohashi": null,
+      "value": "144"
+    },
+    {
+      "type": "oneill_names",
+      "morohashi": null,
+      "value": "54"
+    },
+    {
+      "type": "oneill_kk",
+      "morohashi": null,
+      "value": "16"
+    },
+    {
+      "type": "moro",
+      "morohashi": {
+        "volume": 6,
+        "page": 854
+      },
+      "value": "17083"
+    },
+    {
+      "type": "henshall",
+      "morohashi": null,
+      "value": "40"
+    },
+    {
+      "type": "sh_kk",
+      "morohashi": null,
+      "value": "21"
+    },
+    {
+      "type": "sh_kk2",
+      "morohashi": null,
+      "value": "21"
+    },
+    {
+      "type": "sakade",
+      "morohashi": null,
+      "value": "14"
+    },
+    {
+      "type": "jf_cards",
+      "morohashi": null,
+      "value": "68"
+    },
+    {
+      "type": "henshall3",
+      "morohashi": null,
+      "value": "16"
+    },
+    {
+      "type": "tutt_cards",
+      "morohashi": null,
+      "value": "31"
+    },
+    {
+      "type": "crowley",
+      "morohashi": null,
+      "value": "166"
+    },
+    {
+      "type": "kanji_in_context",
+      "morohashi": null,
+      "value": "19"
+    },
+    {
+      "type": "busy_people",
+      "morohashi": null,
+      "value": "1.A"
+    },
+    {
+      "type": "kodansha_compact",
+      "morohashi": null,
+      "value": "1151"
+    },
+    {
+      "type": "maniette",
+      "morohashi": null,
+      "value": "132"
+    }
+  ],
+  "queryCodes": [
+    {
+      "type": "skip",
+      "skipMisclassification": null,
+      "value": "1-1-3"
+    },
+    {
+      "type": "sh_desc",
+      "skipMisclassification": null,
+      "value": "3a0.1"
+    },
+    {
+      "type": "four_corner",
+      "skipMisclassification": null,
+      "value": "1223.0"
+    },
+    {
+      "type": "deroo",
+      "skipMisclassification": null,
+      "value": "1142"
+    },
+    {
+      "type": "skip",
+      "skipMisclassification": "posn",
+      "value": "4-4-3"
+    }
+  ],
+  "readingMeaning": {
+    "groups": [
+      {
+        "readings": [
+          {
+            "type": "pinyin",
+            "onType": null,
+            "status": null,
+            "value": "shui3"
+          },
+          {
+            "type": "korean_r",
+            "onType": null,
+            "status": null,
+            "value": "su"
+          },
+          {
+            "type": "korean_h",
+            "onType": null,
+            "status": null,
+            "value": "수"
+          },
+          {
+            "type": "vietnam",
+            "onType": null,
+            "status": null,
+            "value": "Thủy"
+          },
+          {
+            "type": "ja_on",
+            "onType": null,
+            "status": null,
+            "value": "スイ"
+          },
+          {
+            "type": "ja_kun",
+            "onType": null,
+            "status": null,
+            "value": "みず"
+          },
+          {
+            "type": "ja_kun",
+            "onType": null,
+            "status": null,
+            "value": "みず-"
+          }
+        ],
+        "meanings": [
+          {
+            "lang": "en",
+            "value": "water"
+          }
+        ]
+      }
+    ],
+    "nanori": [
+      "うず",
+      "ずみ",
+      "つ",
+      "ど",
+      "み",
+      "みさ",
+      "みつ",
+      "みな",
+      "みん"
+    ]
+  }
+}

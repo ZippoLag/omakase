@@ -1,0 +1,26 @@
+{
+ "id": "2820690",
+ "dictionary_form": "いい",
+ "reading": "いい",
+ "class": "adj-ix",
+ "forms": {
+  "dictionary": "いい",
+  "negative": "よくない",
+  "past": "よかった",
+  "past_negative": "よくなかった",
+  "adverbial": "よく",
+  "te_form": "よくて",
+  "conditional_ba": "よければ",
+  "conditional_tara": "よかったら"
+ },
+ "display_forms": {
+  "dictionary": "いい",
+  "negative": "よくない",
+  "past": "よかった",
+  "past_negative": "よくなかった",
+  "adverbial": "よく",
+  "te_form": "よくて",
+  "conditional_ba": "よければ",
+  "conditional_tara": "よかったら"
+ }
+}

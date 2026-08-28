@@ -1,0 +1,167 @@
+{
+  "literal": "綺",
+  "codepoints": [
+    {
+      "type": "ucs",
+      "value": "7dba"
+    },
+    {
+      "type": "jis208",
+      "value": "1-69-26"
+    }
+  ],
+  "radicals": [
+    {
+      "type": "classical",
+      "value": 120
+    }
+  ],
+  "misc": {
+    "grade": 9,
+    "strokeCounts": [
+      14
+    ],
+    "variants": [],
+    "frequency": 2413,
+    "radicalNames": [],
+    "jlptLevel": 1
+  },
+  "dictionaryReferences": [
+    {
+      "type": "nelson_c",
+      "morohashi": null,
+      "value": "3558"
+    },
+    {
+      "type": "nelson_n",
+      "morohashi": null,
+      "value": "4522"
+    },
+    {
+      "type": "halpern_njecd",
+      "morohashi": null,
+      "value": "1371"
+    },
+    {
+      "type": "halpern_kkd",
+      "morohashi": null,
+      "value": "1734"
+    },
+    {
+      "type": "halpern_kkld",
+      "morohashi": null,
+      "value": "927"
+    },
+    {
+      "type": "halpern_kkld_2ed",
+      "morohashi": null,
+      "value": "1252"
+    },
+    {
+      "type": "heisig",
+      "morohashi": null,
+      "value": "2667"
+    },
+    {
+      "type": "heisig6",
+      "morohashi": null,
+      "value": "2709"
+    },
+    {
+      "type": "oneill_names",
+      "morohashi": null,
+      "value": "2533"
+    },
+    {
+      "type": "moro",
+      "morohashi": {
+        "volume": 8,
+        "page": 1106
+      },
+      "value": "27586"
+    },
+    {
+      "type": "sh_kk",
+      "morohashi": null,
+      "value": "2195"
+    }
+  ],
+  "queryCodes": [
+    {
+      "type": "skip",
+      "skipMisclassification": null,
+      "value": "1-6-8"
+    },
+    {
+      "type": "sh_desc",
+      "skipMisclassification": null,
+      "value": "6a8.16"
+    },
+    {
+      "type": "four_corner",
+      "skipMisclassification": null,
+      "value": "2492.1"
+    }
+  ],
+  "readingMeaning": {
+    "groups": [
+      {
+        "readings": [
+          {
+            "type": "pinyin",
+            "onType": null,
+            "status": null,
+            "value": "qi3"
+          },
+          {
+            "type": "korean_r",
+            "onType": null,
+            "status": null,
+            "value": "gi"
+          },
+          {
+            "type": "korean_h",
+            "onType": null,
+            "status": null,
+            "value": "기"
+          },
+          {
+            "type": "vietnam",
+            "onType": null,
+            "status": null,
+            "value": "Khỉ"
+          },
+          {
+            "type": "vietnam",
+            "onType": null,
+            "status": null,
+            "value": "Ỷ"
+          },
+          {
+            "type": "ja_on",
+            "onType": null,
+            "status": null,
+            "value": "キ"
+          },
+          {
+            "type": "ja_kun",
+            "onType": null,
+            "status": null,
+            "value": "あや"
+          }
+        ],
+        "meanings": [
+          {
+            "lang": "en",
+            "value": "figured cloth"
+          },
+          {
+            "lang": "en",
+            "value": "beautiful"
+          }
+        ]
+      }
+    ],
+    "nanori": []
+  }
+}

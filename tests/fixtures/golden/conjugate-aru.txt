@@ -1,0 +1,18 @@
+Conjugations of 有る [ある]
+
+  dictionary             有る
+  polite nonpast         有ります
+  polite past            有りました
+  polite negative        有りません
+  polite past negative   有りませんでした
+  te-form                有って
+  ta-form (past)         有った
+  nai-form (negative)    ない
+  nakatta (neg. past)    なかった
+  potential              
+  passive                
+  causative              
+  imperative             有れ
+  volitional             有ろう
+  conditional -ba        有れば
+  conditional -tara      有ったら

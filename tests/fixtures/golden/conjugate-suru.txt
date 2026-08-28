@@ -1,0 +1,18 @@
+Conjugations of 為る [する]
+
+  dictionary             為る
+  polite nonpast         します
+  polite past            しました
+  polite negative        しません
+  polite past negative   しませんでした
+  te-form                して
+  ta-form (past)         した
+  nai-form (negative)    しない
+  nakatta (neg. past)    しなかった
+  potential              できる
+  passive                される
+  causative              させる
+  imperative             しろ
+  volitional             しよう
+  conditional -ba        為れば
+  conditional -tara      したら

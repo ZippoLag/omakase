@@ -1,0 +1,43 @@
+{
+ "id": "1296400",
+ "dictionary_form": "有る",
+ "reading": "ある",
+ "class": "v5r-i",
+ "provenance": "[G] hand-derived per conjugation-engine.md §4.5 (v5r-i ある family). Not in japanese-language-data.",
+ "forms": {
+  "dictionary": "ある",
+  "polite_nonpast": "あります",
+  "polite_past": "ありました",
+  "polite_negative": "ありません",
+  "polite_past_negative": "ありませんでした",
+  "te_form": "あって",
+  "ta_form": "あった",
+  "nai_form": "ない",
+  "nakatta_form": "なかった",
+  "potential": "",
+  "passive": "",
+  "causative": "",
+  "imperative": "あれ",
+  "volitional": "あろう",
+  "conditional_ba": "あれば",
+  "conditional_tara": "あったら"
+ },
+ "display_forms": {
+  "dictionary": "有る",
+  "polite_nonpast": "有ります",
+  "polite_past": "有りました",
+  "polite_negative": "有りません",
+  "polite_past_negative": "有りませんでした",
+  "te_form": "有って",
+  "ta_form": "有った",
+  "nai_form": "ない",
+  "nakatta_form": "なかった",
+  "potential": "",
+  "passive": "",
+  "causative": "",
+  "imperative": "有れ",
+  "volitional": "有ろう",
+  "conditional_ba": "有れば",
+  "conditional_tara": "有ったら"
+ }
+}

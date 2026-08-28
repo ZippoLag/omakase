@@ -1,0 +1,18 @@
+Conjugations of 食べる [たべる]
+
+  dictionary             食べる
+  polite nonpast         食べます
+  polite past            食べました
+  polite negative        食べません
+  polite past negative   食べませんでした
+  te-form                食べて
+  ta-form (past)         食べた
+  nai-form (negative)    食べない
+  nakatta (neg. past)    食べなかった
+  potential              食べられる
+  passive                食べられる
+  causative              食べさせる
+  imperative             食べろ
+  volitional             食べよう
+  conditional -ba        食べれば
+  conditional -tara      食べたら

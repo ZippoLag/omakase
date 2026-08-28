@@ -1,0 +1,27 @@
+{
+  "name": "japanese-cli",
+  "version": "0.1.0",
+  "private": true,
+  "description": "100% offline Japanese quick-reference CLI (kanji, words, conjugations, examples)",
+  "type": "module",
+  "engines": {
+    "node": ">=20"
+  },
+  "scripts": {
+    "build:db": "tsx data/build/index.ts",
+    "typecheck": "tsc --noEmit",
+    "test": "tsx --test tests/*.test.ts",
+    "validate:conjugations": "tsx data/validate/conjugations.ts"
+  },
+  "devDependencies": {
+    "@types/better-sqlite3": "^7.6.11",
+    "@types/node": "^22.0.0",
+    "better-sqlite3": "^11.0.0",
+    "tsx": "^4.19.0",
+    "typescript": "^5.5.0"
+  },
+  "allowScripts": {
+    "better-sqlite3@11.10.0": true,
+    "esbuild@0.28.2": true
+  }
+}

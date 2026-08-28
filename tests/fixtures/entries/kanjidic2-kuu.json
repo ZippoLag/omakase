@@ -1,0 +1,179 @@
+{
+  "literal": "喰",
+  "codepoints": [
+    {
+      "type": "ucs",
+      "value": "55b0"
+    },
+    {
+      "type": "jis208",
+      "value": "1-22-84"
+    }
+  ],
+  "radicals": [
+    {
+      "type": "classical",
+      "value": 30
+    }
+  ],
+  "misc": {
+    "grade": 9,
+    "strokeCounts": [
+      12
+    ],
+    "variants": [],
+    "frequency": null,
+    "radicalNames": [],
+    "jlptLevel": null
+  },
+  "dictionaryReferences": [
+    {
+      "type": "nelson_c",
+      "morohashi": null,
+      "value": "955"
+    },
+    {
+      "type": "nelson_n",
+      "morohashi": null,
+      "value": "849"
+    },
+    {
+      "type": "halpern_njecd",
+      "morohashi": null,
+      "value": "552"
+    },
+    {
+      "type": "halpern_kkd",
+      "morohashi": null,
+      "value": "670"
+    },
+    {
+      "type": "halpern_kkld_2ed",
+      "morohashi": null,
+      "value": "507"
+    },
+    {
+      "type": "heisig",
+      "morohashi": null,
+      "value": "2182"
+    },
+    {
+      "type": "heisig6",
+      "morohashi": null,
+      "value": "2298"
+    },
+    {
+      "type": "oneill_names",
+      "morohashi": null,
+      "value": "1832"
+    },
+    {
+      "type": "moro",
+      "morohashi": {
+        "volume": 2,
+        "page": 1114
+      },
+      "value": "4015"
+    }
+  ],
+  "queryCodes": [
+    {
+      "type": "skip",
+      "skipMisclassification": null,
+      "value": "1-3-9"
+    },
+    {
+      "type": "sh_desc",
+      "skipMisclassification": null,
+      "value": "3d9.1"
+    },
+    {
+      "type": "four_corner",
+      "skipMisclassification": null,
+      "value": "6803.2"
+    }
+  ],
+  "readingMeaning": {
+    "groups": [
+      {
+        "readings": [
+          {
+            "type": "pinyin",
+            "onType": null,
+            "status": null,
+            "value": "shi2"
+          },
+          {
+            "type": "pinyin",
+            "onType": null,
+            "status": null,
+            "value": "si4"
+          },
+          {
+            "type": "korean_r",
+            "onType": null,
+            "status": null,
+            "value": "sig"
+          },
+          {
+            "type": "korean_h",
+            "onType": null,
+            "status": null,
+            "value": "식"
+          },
+          {
+            "type": "vietnam",
+            "onType": null,
+            "status": null,
+            "value": "Thặc"
+          },
+          {
+            "type": "vietnam",
+            "onType": null,
+            "status": null,
+            "value": "Thực"
+          },
+          {
+            "type": "vietnam",
+            "onType": null,
+            "status": null,
+            "value": "Tự"
+          },
+          {
+            "type": "ja_kun",
+            "onType": null,
+            "status": null,
+            "value": "く.う"
+          },
+          {
+            "type": "ja_kun",
+            "onType": null,
+            "status": null,
+            "value": "く.らう"
+          }
+        ],
+        "meanings": [
+          {
+            "lang": "en",
+            "value": "eat"
+          },
+          {
+            "lang": "en",
+            "value": "drink"
+          },
+          {
+            "lang": "en",
+            "value": "receive (a blow)"
+          },
+          {
+            "lang": "en",
+            "value": "(kokuji)"
+          }
+        ]
+      }
+    ],
+    "nanori": [
+      "じき"
+    ]
+  }
+}

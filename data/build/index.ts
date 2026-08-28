@@ -1,0 +1,69 @@
+/**
+ * Build pipeline entry point (M0).
+ *
+ *   npm run build:db [-- --force]     (--force re-downloads sources)
+ *
+ * Downloads the pinned jmdict-simplified release (sha256-verified, cached in
+ * data/raw/), transforms it into the relational model from data-model.md, and
+ * writes dist/kanji.db + dist/meta.json.
+ */
+import { mkdirSync, writeFileSync } from "node:fs";
+import { statSync } from "node:fs";
+import { fetchAll } from "./fetch.js";
+import { loadJmdict, loadKanjidic2, loadKradfile, loadRadkfile, RELEASE_TAG } from "./parse.js";
+import { transform } from "./transform.js";
+import { buildDb, summarize } from "./buildDb.js";
+import { ASSETS, DIST_DIR, META_PATH, DB_PATH } from "./config.js";
+
+const force = process.argv.includes("--force");
+
+async function main(): Promise<void> {
+  console.log("fetching sources (release %s)%s", RELEASE_TAG, force ? " [force]" : "");
+  const blobs = await fetchAll(force);
+
+  const jmdict = loadJmdict(blobs.get(ASSETS[0]!.name)!);
+  const kanjidic2 = loadKanjidic2(blobs.get(ASSETS[1]!.name)!);
+  const kradfile = loadKradfile(blobs.get(ASSETS[2]!.name)!);
+  const radkfile = loadRadkfile(blobs.get(ASSETS[3]!.name)!);
+
+  console.log("parsed: %d words, %d kanji, %d radicals",
+    jmdict.words.length, kanjidic2.characters.length, Object.keys(radkfile.radicals).length);
+
+  console.log("transforming…");
+  const rows = transform(jmdict, kanjidic2, kradfile, radkfile);
+
+  console.log("building %s…", "dist/kanji.db");
+  const db = buildDb(rows, {
+    source: "scriptin/jmdict-simplified",
+    release: RELEASE_TAG,
+    dict_date: jmdict.dictDate,
+    kanjidic_db: kanjidic2.databaseVersion,
+    tags: JSON.stringify(jmdict.tags), // POS tag -> description map (CLI display)
+  });
+  db.close();
+  const summary = summarize(rows, statSync(DB_PATH).size);
+
+  mkdirSync(DIST_DIR, { recursive: true });
+  writeFileSync(META_PATH, JSON.stringify({
+    source: "scriptin/jmdict-simplified",
+    release: RELEASE_TAG,
+    dictDate: jmdict.dictDate,
+    kanjidicDatabaseVersion: kanjidic2.databaseVersion,
+    builtAt: new Date().toISOString(),
+    counts: summary,
+    assets: ASSETS.map((a) => ({ name: a.name, sha256: a.sha256 })),
+  }, null, 2) + "\n");
+
+  console.log("done: dist/kanji.db (" + (summary.dbBytes / 1e6).toFixed(1) + " MB)");
+  console.log("  words=%d writings=%d senses=%d glosses=%d", summary.words, summary.writings, summary.senses, summary.glosses);
+  console.log("  kanji=%d readings=%d meanings=%d nanori=%d", summary.kanji, summary.kanjiReadings, summary.kanjiMeanings, summary.kanjiNanori);
+  console.log("  radicals=%d kanji_radicals=%d kanji_words=%d conjugations=%d",
+    summary.radicals, summary.kanjiRadicals, summary.kanjiWords, summary.conjugations);
+  console.log("  (conjugation tables generated for %d words)", rows.conjugations.length > 0 ? rows.words.filter((w) =>
+    rows.conjugations.some((c) => c.word_id === w.id)).length : 0);
+}
+
+main().catch((err) => {
+  console.error(err);
+  process.exit(1);
+});

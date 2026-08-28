@@ -1,0 +1,15 @@
+食べる [たべる] (common)
+
+Writings: 食べる・喰べる
+Readings: たべる
+Furigana: 食[たべ]る
+
+Ichidan verb; transitive verb
+
+  1. to eat
+  2. to live on (e.g. a salary); to live off; to subsist on
+
+Examples:
+
+  1. いつから日本人は精白米を食べるようになったのですか？
+     When did the Japanese start eating polished rice?

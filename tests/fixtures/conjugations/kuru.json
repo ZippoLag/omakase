@@ -1,0 +1,42 @@
+{
+ "id": "1547720",
+ "dictionary_form": "来る",
+ "reading": "くる",
+ "class": "vk",
+ "forms": {
+  "dictionary": "くる",
+  "polite_nonpast": "きます",
+  "polite_past": "きました",
+  "polite_negative": "きません",
+  "polite_past_negative": "きませんでした",
+  "te_form": "きて",
+  "ta_form": "きた",
+  "nai_form": "こない",
+  "nakatta_form": "こなかった",
+  "potential": "こられる",
+  "passive": "こられる",
+  "causative": "こさせる",
+  "imperative": "こい",
+  "volitional": "こよう",
+  "conditional_ba": "くれば",
+  "conditional_tara": "きたら"
+ },
+ "display_forms": {
+  "dictionary": "来る",
+  "polite_nonpast": "きます",
+  "polite_past": "きました",
+  "polite_negative": "きません",
+  "polite_past_negative": "きませんでした",
+  "te_form": "きて",
+  "ta_form": "きた",
+  "nai_form": "こない",
+  "nakatta_form": "こなかった",
+  "potential": "こられる",
+  "passive": "こられる",
+  "causative": "こさせる",
+  "imperative": "こい",
+  "volitional": "こよう",
+  "conditional_ba": "来れば",
+  "conditional_tara": "きたら"
+ }
+}

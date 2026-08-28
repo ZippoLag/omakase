@@ -1,0 +1,43 @@
+{
+ "id": "1358490",
+ "dictionary_form": "食事",
+ "reading": "しょくじ",
+ "class": "vs",
+ "provenance": "[G] hand-derived per conjugation-engine.md §4.7 (suru noun). Not in japanese-language-data.",
+ "forms": {
+  "dictionary": "しょくじする",
+  "polite_nonpast": "しょくじします",
+  "polite_past": "しょくじしました",
+  "polite_negative": "しょくじしません",
+  "polite_past_negative": "しょくじしませんでした",
+  "te_form": "しょくじして",
+  "ta_form": "しょくじした",
+  "nai_form": "しょくじしない",
+  "nakatta_form": "しょくじしなかった",
+  "potential": "しょくじできる",
+  "passive": "しょくじされる",
+  "causative": "しょくじさせる",
+  "imperative": "しょくじしろ",
+  "volitional": "しょくじしよう",
+  "conditional_ba": "しょくじすれば",
+  "conditional_tara": "しょくじしたら"
+ },
+ "display_forms": {
+  "dictionary": "食事する",
+  "polite_nonpast": "食事します",
+  "polite_past": "食事しました",
+  "polite_negative": "食事しません",
+  "polite_past_negative": "食事しませんでした",
+  "te_form": "食事して",
+  "ta_form": "食事した",
+  "nai_form": "食事しない",
+  "nakatta_form": "食事しなかった",
+  "potential": "食事できる",
+  "passive": "食事される",
+  "causative": "食事させる",
+  "imperative": "食事しろ",
+  "volitional": "食事しよう",
+  "conditional_ba": "食事すれば",
+  "conditional_tara": "食事したら"
+ }
+}

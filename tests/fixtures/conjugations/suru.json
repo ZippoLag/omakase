@@ -1,0 +1,42 @@
+{
+ "id": "1157170",
+ "dictionary_form": "為る",
+ "reading": "する",
+ "class": "vs-i",
+ "forms": {
+  "dictionary": "する",
+  "polite_nonpast": "します",
+  "polite_past": "しました",
+  "polite_negative": "しません",
+  "polite_past_negative": "しませんでした",
+  "te_form": "して",
+  "ta_form": "した",
+  "nai_form": "しない",
+  "nakatta_form": "しなかった",
+  "potential": "できる",
+  "passive": "される",
+  "causative": "させる",
+  "imperative": "しろ",
+  "volitional": "しよう",
+  "conditional_ba": "すれば",
+  "conditional_tara": "したら"
+ },
+ "display_forms": {
+  "dictionary": "為る",
+  "polite_nonpast": "します",
+  "polite_past": "しました",
+  "polite_negative": "しません",
+  "polite_past_negative": "しませんでした",
+  "te_form": "して",
+  "ta_form": "した",
+  "nai_form": "しない",
+  "nakatta_form": "しなかった",
+  "potential": "できる",
+  "passive": "される",
+  "causative": "させる",
+  "imperative": "しろ",
+  "volitional": "しよう",
+  "conditional_ba": "為れば",
+  "conditional_tara": "したら"
+ }
+}

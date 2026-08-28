@@ -1,0 +1,292 @@
+{
+  "id": "1605820",
+  "kanji": [
+    {
+      "common": true,
+      "text": "良い",
+      "tags": []
+    },
+    {
+      "common": false,
+      "text": "好い",
+      "tags": []
+    },
+    {
+      "common": false,
+      "text": "善い",
+      "tags": []
+    },
+    {
+      "common": false,
+      "text": "佳い",
+      "tags": [
+        "rK"
+      ]
+    },
+    {
+      "common": false,
+      "text": "吉い",
+      "tags": [
+        "rK"
+      ]
+    },
+    {
+      "common": false,
+      "text": "宜い",
+      "tags": [
+        "rK"
+      ]
+    }
+  ],
+  "kana": [
+    {
+      "common": true,
+      "text": "よい",
+      "tags": [],
+      "appliesToKanji": [
+        "*"
+      ]
+    },
+    {
+      "common": false,
+      "text": "えい",
+      "tags": [
+        "ok"
+      ],
+      "appliesToKanji": [
+        "*"
+      ]
+    }
+  ],
+  "sense": [
+    {
+      "partOfSpeech": [
+        "adj-i"
+      ],
+      "appliesToKanji": [
+        "*"
+      ],
+      "appliesToKana": [
+        "*"
+      ],
+      "related": [
+        [
+          "いい",
+          1
+        ]
+      ],
+      "antonym": [],
+      "field": [],
+      "dialect": [],
+      "misc": [],
+      "info": [
+        "also いい (all senses)"
+      ],
+      "languageSource": [],
+      "gloss": [
+        {
+          "lang": "eng",
+          "gender": null,
+          "type": null,
+          "text": "good"
+        },
+        {
+          "lang": "eng",
+          "gender": null,
+          "type": null,
+          "text": "excellent"
+        },
+        {
+          "lang": "eng",
+          "gender": null,
+          "type": null,
+          "text": "fine"
+        },
+        {
+          "lang": "eng",
+          "gender": null,
+          "type": null,
+          "text": "nice"
+        },
+        {
+          "lang": "eng",
+          "gender": null,
+          "type": null,
+          "text": "pleasant"
+        },
+        {
+          "lang": "eng",
+          "gender": null,
+          "type": null,
+          "text": "agreeable"
+        }
+      ]
+    },
+    {
+      "partOfSpeech": [
+        "adj-i"
+      ],
+      "appliesToKanji": [
+        "*"
+      ],
+      "appliesToKana": [
+        "*"
+      ],
+      "related": [
+        [
+          "いい",
+          2
+        ]
+      ],
+      "antonym": [],
+      "field": [],
+      "dialect": [],
+      "misc": [],
+      "info": [],
+      "languageSource": [],
+      "gloss": [
+        {
+          "lang": "eng",
+          "gender": null,
+          "type": null,
+          "text": "sufficient"
+        },
+        {
+          "lang": "eng",
+          "gender": null,
+          "type": null,
+          "text": "enough"
+        },
+        {
+          "lang": "eng",
+          "gender": null,
+          "type": null,
+          "text": "ready"
+        },
+        {
+          "lang": "eng",
+          "gender": null,
+          "type": null,
+          "text": "prepared"
+        }
+      ]
+    },
+    {
+      "partOfSpeech": [
+        "adj-i"
+      ],
+      "appliesToKanji": [
+        "*"
+      ],
+      "appliesToKana": [
+        "*"
+      ],
+      "related": [
+        [
+          "いい",
+          3
+        ]
+      ],
+      "antonym": [],
+      "field": [],
+      "dialect": [],
+      "misc": [],
+      "info": [],
+      "languageSource": [],
+      "gloss": [
+        {
+          "lang": "eng",
+          "gender": null,
+          "type": null,
+          "text": "profitable (deal, business offer, etc.)"
+        },
+        {
+          "lang": "eng",
+          "gender": null,
+          "type": null,
+          "text": "beneficial"
+        }
+      ]
+    },
+    {
+      "partOfSpeech": [
+        "adj-i"
+      ],
+      "appliesToKanji": [
+        "*"
+      ],
+      "appliesToKana": [
+        "*"
+      ],
+      "related": [
+        [
+          "いい",
+          4
+        ]
+      ],
+      "antonym": [],
+      "field": [],
+      "dialect": [],
+      "misc": [],
+      "info": [
+        "as て(も)良い, と(も)良い, etc.; indicates permission or compromise"
+      ],
+      "languageSource": [],
+      "gloss": [
+        {
+          "lang": "eng",
+          "gender": null,
+          "type": null,
+          "text": "OK"
+        },
+        {
+          "lang": "eng",
+          "gender": null,
+          "type": null,
+          "text": "all right"
+        },
+        {
+          "lang": "eng",
+          "gender": null,
+          "type": null,
+          "text": "fine"
+        },
+        {
+          "lang": "eng",
+          "gender": null,
+          "type": null,
+          "text": "no problem"
+        }
+      ]
+    },
+    {
+      "partOfSpeech": [
+        "suf",
+        "adj-i"
+      ],
+      "appliesToKanji": [
+        "*"
+      ],
+      "appliesToKana": [
+        "*"
+      ],
+      "related": [],
+      "antonym": [],
+      "field": [],
+      "dialect": [],
+      "misc": [],
+      "info": [
+        "after the -masu stem of a verb"
+      ],
+      "languageSource": [],
+      "gloss": [
+        {
+          "lang": "eng",
+          "gender": null,
+          "type": null,
+          "text": "easy to ..."
+        }
+      ]
+    }
+  ]
+}

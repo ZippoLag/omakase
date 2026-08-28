@@ -1,0 +1,43 @@
+{
+ "id": "1609650",
+ "dictionary_form": "感ずる",
+ "reading": "かんずる",
+ "class": "vz",
+ "provenance": "[G] hand-derived per conjugation-engine.md §4.7 (vz). Not in japanese-language-data.",
+ "forms": {
+  "dictionary": "かんずる",
+  "polite_nonpast": "かんじます",
+  "polite_past": "かんじました",
+  "polite_negative": "かんじません",
+  "polite_past_negative": "かんじませんでした",
+  "te_form": "かんじて",
+  "ta_form": "かんじた",
+  "nai_form": "かんじない",
+  "nakatta_form": "かんじなかった",
+  "potential": "かんじられる",
+  "passive": "かんじられる",
+  "causative": "かんじさせる",
+  "imperative": "かんじろ",
+  "volitional": "かんじよう",
+  "conditional_ba": "かんじれば",
+  "conditional_tara": "かんじたら"
+ },
+ "display_forms": {
+  "dictionary": "感ずる",
+  "polite_nonpast": "感じます",
+  "polite_past": "感じました",
+  "polite_negative": "感じません",
+  "polite_past_negative": "感じませんでした",
+  "te_form": "感じて",
+  "ta_form": "感じた",
+  "nai_form": "感じない",
+  "nakatta_form": "感じなかった",
+  "potential": "感じられる",
+  "passive": "感じられる",
+  "causative": "感じさせる",
+  "imperative": "感じろ",
+  "volitional": "感じよう",
+  "conditional_ba": "感じれば",
+  "conditional_tara": "感じたら"
+ }
+}

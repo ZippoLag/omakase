@@ -1,0 +1,28 @@
+{
+ "source": "jkindrix/japanese-language-data",
+ "file": "data/grammar/conjugations.json",
+ "fetched_at": "2026-08-28",
+ "metadata": {
+  "metadata": {
+   "source": "Auto-generated from JMdict verb and adjective entries",
+   "license": "CC-BY-SA 4.0",
+   "generated": "2026-04-14",
+   "count": 3511,
+   "conjugation_rules_reference": "Conjugation rules encoded directly in build/transform/conjugations.py. They follow the standard ichidan/godan conjugation rules taught in any introductory Japanese grammar reference. Any incorrectness is a bug in the rule implementation, not in the data.",
+   "attribution": "Conjugation tables auto-generated from JMdict verb and adjective entries (EDRDG License, CC-BY-SA 4.0). Rules are formally defined and deterministic; no native-speaker review is required for the conjugation logic itself.",
+   "field_notes": {
+    "id": "JMdict entry ID (from words.json).",
+    "dictionary_form": "The kanji writing of the lemma, or kana if kana-only.",
+    "reading": "The kana reading used as the conjugation stem.",
+    "class": "JMdict POS tag indicating the word class used for conjugation.",
+    "forms": "Map from form name to conjugated kana form. Specific forms available depend on the word class.",
+    "v1": "Ichidan verbs: 食べる, 見る, 起きる, etc.",
+    "v5u-v5m": "Godan verbs grouped by the kana ending of the dictionary form.",
+    "adj-i": "い-adjectives: 高い, 新しい, 小さい, etc.",
+    "adj-ix": "Irregular い-adjectives: いい, かっこいい, etc. All inflected forms use よ- stem instead of い-.",
+    "adj-na": "な-adjectives: 静か, 元気, etc. (conjugate via the copula).",
+    "potential_ichidan_note": "Modern colloquial Japanese often drops the ら in ichidan potential forms (ら抜き言葉), e.g., 食べられる → 食べれる. We generate the traditional form; the ら-less form is grammatically nonstandard but widely used."
+   }
+  }
+ }
+}

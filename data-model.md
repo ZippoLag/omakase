@@ -177,11 +177,14 @@ CREATE INDEX idx_kanji_words_word  ON kanji_words(word_id);
 CREATE TABLE conjugations (
   word_id TEXT NOT NULL REFERENCES words(id),
   reading TEXT NOT NULL,               -- kana reading the table applies to
+  class   TEXT NOT NULL,               -- JMdict POS class (conjugation-engine.md §2)
   form    TEXT NOT NULL,               -- e.g. 'te', 'negative', 'past', 'volitional', ...
-  value   TEXT NOT NULL                -- conjugated surface
+  value   TEXT NOT NULL,               -- conjugated surface in kana (deconjugation index target)
+  display TEXT                         -- kanji-rendered form (NULL when = value)
 );
-CREATE INDEX idx_conjugations_value ON conjugations(value);  -- deconjugation search (食べて -> 食べる)
-CREATE INDEX idx_conjugations_word  ON conjugations(word_id);
+CREATE INDEX idx_conjugations_value   ON conjugations(value);   -- deconjugation search (食べて -> 食べる)
+CREATE INDEX idx_conjugations_display ON conjugations(display) WHERE display IS NOT NULL;
+CREATE INDEX idx_conjugations_word    ON conjugations(word_id);
 
 -- ============ Enrichment: furigana ============
 CREATE TABLE furigana (
@@ -239,7 +242,7 @@ CREATE VIRTUAL TABLE glosses_fts USING fts5(
 | Kanji detail (readings, meanings, strokes, grade, JLPT, radical) | `SELECT ... FROM kanji WHERE literal = ?` + joins | PK on `kanji.literal` |
 | Kanji lookup by reading (kana or romaji) | `kanji_readings.value` / prefix | `idx_kanji_readings_value` |
 | Word lookup by spelling | `writings.text = ?` / prefix | `idx_writings_text` |
-| Partial / compound search | `writings_fts MATCH '食'` | FTS5 trigram |
+| Partial / compound search | `writings_fts MATCH '食べる'` (≥3 chars); `writings.text LIKE '%食%'` (1–2 chars) | FTS5 trigram has a 3-char minimum — the search layer must fall back to a LIKE scan for shorter queries (54k rows, still fast) |
 | English meaning search | `glosses_fts MATCH 'eat'` | FTS5 unicode61 |
 | Words containing a kanji ("composed use") | `kanji_words WHERE kanji = ?` | `idx_kanji_words_kanji` |
 | Kanji by radical(s) (multi-radical) | `kanji_radicals` intersection | PK + `idx_kanji_radicals_radical` |
@@ -257,4 +260,4 @@ CREATE VIRTUAL TABLE glosses_fts USING fts5(
 - **Import pipeline** (per release): stream each jmdict-simplified JSON → `INSERT` inside one transaction per dictionary → build `kanji_words`, `conjugations`, `furigana`, `word_sentences` → rebuild FTS (`INSERT INTO writings_fts(writings_fts) VALUES('rebuild')`) → `PRAGMA optimize` → write `meta` (release tag, dates, licenses).
 - **Weekly refresh**: the DB is fully regenerable from the latest jmdict-simplified release (1.44 MB download, measured) + KanjiVG + curated Tatoeba; bump `meta.schema_version` only when the DDL changes.
 - **Browser target**: use `wa-sqlite` (any modern SQLite, incl. trigram FTS5) or `sql.js`; ship the `.db` as an asset, open it read-only, `PRAGMA query_only = ON`.
-- **Expected size on disk**: DB ~15–20 MB (eng-common + enrichments + FTS) + strokes ~9–10 MB + kuromoji 41 MB → matches the §9 bundle estimate of ~65–77 MB.
+- **Measured size on disk (2026-08-28)**: DB **46.5 MB** (eng-common + 111k conjugation rows + FTS) + strokes ~9–10 MB + kuromoji 41 MB → ~95–100 MB total. The trigram FTS index (~3× text) and the conjugation table are the main cost; the earlier ~65–77 MB estimate predates both.

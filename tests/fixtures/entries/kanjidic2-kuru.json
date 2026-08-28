@@ -1,0 +1,329 @@
+{
+  "literal": "来",
+  "codepoints": [
+    {
+      "type": "ucs",
+      "value": "6765"
+    },
+    {
+      "type": "jis208",
+      "value": "1-45-72"
+    }
+  ],
+  "radicals": [
+    {
+      "type": "classical",
+      "value": 75
+    },
+    {
+      "type": "nelson_c",
+      "value": 4
+    }
+  ],
+  "misc": {
+    "grade": 2,
+    "strokeCounts": [
+      7
+    ],
+    "variants": [
+      {
+        "type": "jis208",
+        "value": "1-48-52"
+      }
+    ],
+    "frequency": 102,
+    "radicalNames": [],
+    "jlptLevel": 4
+  },
+  "dictionaryReferences": [
+    {
+      "type": "nelson_c",
+      "morohashi": null,
+      "value": "202"
+    },
+    {
+      "type": "nelson_n",
+      "morohashi": null,
+      "value": "2565"
+    },
+    {
+      "type": "halpern_njecd",
+      "morohashi": null,
+      "value": "3551"
+    },
+    {
+      "type": "halpern_kkd",
+      "morohashi": null,
+      "value": "4366"
+    },
+    {
+      "type": "halpern_kkld",
+      "morohashi": null,
+      "value": "2211"
+    },
+    {
+      "type": "halpern_kkld_2ed",
+      "morohashi": null,
+      "value": "2975"
+    },
+    {
+      "type": "heisig",
+      "morohashi": null,
+      "value": "1884"
+    },
+    {
+      "type": "heisig6",
+      "morohashi": null,
+      "value": "2029"
+    },
+    {
+      "type": "gakken",
+      "morohashi": null,
+      "value": "113"
+    },
+    {
+      "type": "oneill_names",
+      "morohashi": null,
+      "value": "538"
+    },
+    {
+      "type": "oneill_kk",
+      "morohashi": null,
+      "value": "25"
+    },
+    {
+      "type": "moro",
+      "morohashi": {
+        "volume": 6,
+        "page": 168
+      },
+      "value": "14489"
+    },
+    {
+      "type": "henshall",
+      "morohashi": null,
+      "value": "217"
+    },
+    {
+      "type": "sh_kk",
+      "morohashi": null,
+      "value": "69"
+    },
+    {
+      "type": "sh_kk2",
+      "morohashi": null,
+      "value": "69"
+    },
+    {
+      "type": "sakade",
+      "morohashi": null,
+      "value": "147"
+    },
+    {
+      "type": "jf_cards",
+      "morohashi": null,
+      "value": "62"
+    },
+    {
+      "type": "henshall3",
+      "morohashi": null,
+      "value": "237"
+    },
+    {
+      "type": "tutt_cards",
+      "morohashi": null,
+      "value": "153"
+    },
+    {
+      "type": "crowley",
+      "morohashi": null,
+      "value": "27"
+    },
+    {
+      "type": "kanji_in_context",
+      "morohashi": null,
+      "value": "133"
+    },
+    {
+      "type": "busy_people",
+      "morohashi": null,
+      "value": "2.5"
+    },
+    {
+      "type": "kodansha_compact",
+      "morohashi": null,
+      "value": "36"
+    },
+    {
+      "type": "maniette",
+      "morohashi": null,
+      "value": "1902"
+    }
+  ],
+  "queryCodes": [
+    {
+      "type": "skip",
+      "skipMisclassification": null,
+      "value": "4-7-3"
+    },
+    {
+      "type": "sh_desc",
+      "skipMisclassification": null,
+      "value": "0a7.6"
+    },
+    {
+      "type": "four_corner",
+      "skipMisclassification": null,
+      "value": "5090.0"
+    },
+    {
+      "type": "deroo",
+      "skipMisclassification": null,
+      "value": "1464"
+    }
+  ],
+  "readingMeaning": {
+    "groups": [
+      {
+        "readings": [
+          {
+            "type": "pinyin",
+            "onType": null,
+            "status": null,
+            "value": "lai2"
+          },
+          {
+            "type": "korean_r",
+            "onType": null,
+            "status": null,
+            "value": "rae"
+          },
+          {
+            "type": "korean_h",
+            "onType": null,
+            "status": null,
+            "value": "래"
+          },
+          {
+            "type": "vietnam",
+            "onType": null,
+            "status": null,
+            "value": "Lai"
+          },
+          {
+            "type": "vietnam",
+            "onType": null,
+            "status": null,
+            "value": "Lãi"
+          },
+          {
+            "type": "vietnam",
+            "onType": null,
+            "status": null,
+            "value": "Lay"
+          },
+          {
+            "type": "vietnam",
+            "onType": null,
+            "status": null,
+            "value": "Lơi"
+          },
+          {
+            "type": "vietnam",
+            "onType": null,
+            "status": null,
+            "value": "Ray"
+          },
+          {
+            "type": "vietnam",
+            "onType": null,
+            "status": null,
+            "value": "Rơi"
+          },
+          {
+            "type": "ja_on",
+            "onType": null,
+            "status": null,
+            "value": "ライ"
+          },
+          {
+            "type": "ja_on",
+            "onType": null,
+            "status": null,
+            "value": "タイ"
+          },
+          {
+            "type": "ja_kun",
+            "onType": null,
+            "status": null,
+            "value": "く.る"
+          },
+          {
+            "type": "ja_kun",
+            "onType": null,
+            "status": null,
+            "value": "きた.る"
+          },
+          {
+            "type": "ja_kun",
+            "onType": null,
+            "status": null,
+            "value": "きた.す"
+          },
+          {
+            "type": "ja_kun",
+            "onType": null,
+            "status": null,
+            "value": "き.たす"
+          },
+          {
+            "type": "ja_kun",
+            "onType": null,
+            "status": null,
+            "value": "き.たる"
+          },
+          {
+            "type": "ja_kun",
+            "onType": null,
+            "status": null,
+            "value": "き"
+          },
+          {
+            "type": "ja_kun",
+            "onType": null,
+            "status": null,
+            "value": "こ"
+          }
+        ],
+        "meanings": [
+          {
+            "lang": "en",
+            "value": "come"
+          },
+          {
+            "lang": "en",
+            "value": "due"
+          },
+          {
+            "lang": "en",
+            "value": "next"
+          },
+          {
+            "lang": "en",
+            "value": "cause"
+          },
+          {
+            "lang": "en",
+            "value": "become"
+          }
+        ]
+      }
+    ],
+    "nanori": [
+      "くり",
+      "くる",
+      "ごろ",
+      "さ"
+    ]
+  }
+}

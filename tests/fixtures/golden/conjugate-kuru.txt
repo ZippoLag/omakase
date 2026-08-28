@@ -1,0 +1,18 @@
+Conjugations of 来る [くる]
+
+  dictionary             来る
+  polite nonpast         きます
+  polite past            きました
+  polite negative        きません
+  polite past negative   きませんでした
+  te-form                きて
+  ta-form (past)         きた
+  nai-form (negative)    こない
+  nakatta (neg. past)    こなかった
+  potential              こられる
+  passive                こられる
+  causative              こさせる
+  imperative             こい
+  volitional             こよう
+  conditional -ba        来れば
+  conditional -tara      きたら
