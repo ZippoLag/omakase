@@ -298,8 +298,12 @@ pinned tables byte-for-byte [V]):
    engine change; a new mismatch triages into: (a) engine bug → fix,
    (b) upstream quirk → documented divergence, (c) unsupported form → extend
    taxonomy.
-3. **Gap coverage (our own goldens, marked [G]):** ある, a suru noun (食事), a vz
-   verb (感ずる), a v5uru verb (覆う) — since the validation dataset omits these.
+3. **Gap coverage (marked [G]):** `npm run validate:conjugations` also diffs the
+   [G] gap fixtures in `tests/fixtures/conjugations/` through the same engine
+   path — bare ある (v5r-i, id 1296400), suru noun 食事 (vs, 1358490), and vz
+   感ずる (1609650), plus a v5uru verb (覆う — still to pin). **Result
+   (2026-08-28): 8/8 fixtures pass, 0 mismatches.** Combined with the 3,511
+   upstream tables: **3,519/3,519 pass (100.00%)**.
 4. **Deconjugate check:** every generated `value` must deconjugate back to its
    entry via `idx_conjugations_value` (round-trip test).
 
