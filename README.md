@@ -20,11 +20,15 @@ corepack enable && corepack use   # installs the pnpm version from package.json
 pnpm install
 
 # Expose the `omakase` command on your PATH (optional but recommended):
-pnpm link --global
+pnpm link . --global
+
+# Equivalent shortcut that only symlinks the command (does not re-run pnpm
+# install / re-link dependencies the way `pnpm link` does):
+pnpm run link:global
 ```
 
-If you don't want to `pnpm link --global`, you can always call the CLI through
-the run script or `tsx`:
+If you don't want to link `omakase`, you can always call the CLI through the
+run script or `tsx`:
 
 ```bash
 pnpm run cli -- word 食べる

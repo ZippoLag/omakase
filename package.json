@@ -16,6 +16,7 @@
     "typecheck": "tsc --noEmit",
     "test": "tsx --test tests/*.test.ts",
     "cli": "tsx src/cli.ts",
+    "link:global": "node scripts/link-global.mjs",
     "validate:conjugations": "tsx data/validate/conjugations.ts"
   },
   "devDependencies": {

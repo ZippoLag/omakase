@@ -1,0 +1,12 @@
+#!/usr/bin/env sh
+# Wrapper installed into the pnpm global bin by `scripts/link-global.mjs`.
+# Invokes the CLI through the repo's own local tsx so it works offline without
+# pnpm touching the global store or reinstalling node_modules.
+set -e
+
+# Resolve this script's real location (the global-bin entry is a symlink that
+# points here), then walk up to the repo root.
+self=$(readlink "$0" 2>/dev/null || printf '%s' "$0")
+root=$(CDPATH= cd -- "$(dirname -- "$self")/.." && pwd)
+
+exec "$root/node_modules/.bin/tsx" "$root/src/cli.ts" "$@"
