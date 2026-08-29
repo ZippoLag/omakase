@@ -52,9 +52,9 @@ test("word --help: detailed usage with --limit, exits 0", () => {
   }
 });
 
-test("kanji --help: detailed usage with <literal>, exits 0", () => {
+test("kanji --help: detailed usage with <query> (literal or reading), exits 0", () => {
   const { code, stdout } = run(["kanji", "--help"]);
-  assert.equal(code, 0);    assert.ok(stdout.includes("omakase kanji <literal>"));
+  assert.equal(code, 0);    assert.ok(stdout.includes("omakase kanji <query>"));
   assert.ok(stdout.includes("stroke count"));
 });
 

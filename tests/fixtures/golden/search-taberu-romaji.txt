@@ -1,3 +1,6 @@
 taberu
 
   食べる  [たべる]  to eat
+
+Kanji:
+  食  [た.べる]  eat; food

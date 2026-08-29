@@ -10,9 +10,11 @@ import { DB_PATH } from "../data/build/config.js";
 import {
   exampleSentences,
   findWordByWriting,
+  isKanaInput,
   loadKanji,
   radicalChar,
   searchGloss,
+  searchKanjiByReading,
   searchReadingPrefix,
 } from "./lookup.js";
 import type { SearchHit } from "./lookup.js";
@@ -21,6 +23,7 @@ import {
   renderSearch,
   renderWordBody,
   renderKanji,
+  renderKanjiReadingSearch,
 } from "./format.js";
 
 type DB = InstanceType<typeof Database>;
@@ -50,15 +53,22 @@ export function cmdWord(
   return examples ? body + "\n" + examples : body;
 }
 
-/** `kanji <literal>` — kanji page with readings, meanings, compounds. */
-export function cmdKanji(db: DB, literal: string): string | null {
-  const kanji = loadKanji(db, literal);
-  if (!kanji) return null;
-  let radicalDisplay: string | null = null;
-  if (kanji.classicalRadical != null) {
-    radicalDisplay = `${radicalChar(db, kanji.classicalRadical) ?? "?"} (${kanji.classicalRadical})`;
+/**
+ * `kanji <query>` — kanji page when the query is a literal, otherwise a
+ * kanji-by-reading search (kana or romaji prefix on on/kun/nanori readings).
+ */
+export function cmdKanji(db: DB, query: string): string | null {
+  const kanji = loadKanji(db, query);
+  if (kanji) {
+    let radicalDisplay: string | null = null;
+    if (kanji.classicalRadical != null) {
+      radicalDisplay = `${radicalChar(db, kanji.classicalRadical) ?? "?"} (${kanji.classicalRadical})`;
+    }
+    return renderKanji(kanji, radicalDisplay);
   }
-  return renderKanji(kanji, radicalDisplay);
+  const hits = searchKanjiByReading(db, query);
+  if (hits.length === 0) return null;
+  return renderKanjiReadingSearch(query, hits);
 }
 
 /**
@@ -130,17 +140,20 @@ Examples:
   omakase word 為る --limit 3
 `,
   kanji: `Usage:
-  omakase kanji <literal>
+  omakase kanji <query>
 
-Render a kanji page: stroke count, grade/JLPT/frequency, classical radical,
-on/kun/nanori readings, meanings, and compounds that contain the character.
+Render a kanji page (stroke count, grade/JLPT/frequency, classical radical,
+on/kun/nanori readings, meanings, compounds) when <query> is a kanji
+literal. Otherwise <query> is a reading: kanji whose on/kun/nanori readings
+start with it are listed (kana or romaji, dot separators ignored).
 
 Arguments:
-  <literal>      a single kanji character (e.g. 食)
+  <query>        a kanji literal (e.g. 食), kana, or romaji reading
 
 Examples:
   omakase kanji 食
-  omakase kanji 水
+  omakase kanji まか
+  omakase kanji makase
 `,
   search: `Usage:
   omakase search <query>
@@ -150,6 +163,8 @@ Search the dictionary. How the query is interpreted depends on its form:
   - ASCII input → romaji reading-prefix match (e.g. taberu); an exact
                   reading wins, otherwise an English gloss token search
                   is preferred when present (e.g. "eat")
+  - kanji whose readings start with the query are appended in a
+    "Kanji:" section (e.g. まか → 任)
 
 Arguments:
   <query>        kana, romaji, or an English gloss
@@ -239,7 +254,13 @@ export function runCommand(
         stderr("error: search requires a query\n");
         return "";
       }
-      return renderSearch(query, cmdSearch(db, query));
+      const trimmed = query.trim();
+      const hits = cmdSearch(db, trimmed);
+      // Surface kanji whose readings start with the query too (Tangorin-style).
+      const kanjiHits = isKanaInput(trimmed) || isAscii(trimmed)
+        ? searchKanjiByReading(db, trimmed)
+        : [];
+      return renderSearch(query, hits, kanjiHits);
     }
     default:
       stderr(USAGE);

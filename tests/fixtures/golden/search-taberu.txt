@@ -2,3 +2,6 @@
 
   食べる  [たべる]  to eat
   食べ物  [たべもの]  food
+
+Kanji:
+  食  [た.べる]  eat; food

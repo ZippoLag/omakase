@@ -15,7 +15,7 @@ import { transform } from "../data/build/transform.js";
 import { buildDb } from "../data/build/buildDb.js";
 import { cmdWord, cmdKanji, cmdSearch, loadTags } from "../src/cli.js";
 import { renderSearch } from "../src/format.js";
-import { searchReadingPrefix } from "../src/lookup.js";
+import { searchKanjiByReading, searchReadingPrefix } from "../src/lookup.js";
 import type { JmdictWord, Kanjidic2Character, KradfileFile, RadkfileFile } from "../data/build/parse.js";
 
 type DB = InstanceType<typeof Database>;
@@ -135,13 +135,43 @@ test("search goldens (English / kana / romaji, byte-for-byte)", () => {
   const db = buildFixtureDb();
   try {
     for (const [file, query] of SEARCH_GOLDENS) {
-      const out = renderSearch(query, cmdSearch(db, query));
+      const out = renderSearch(query, cmdSearch(db, query), searchKanjiByReading(db, query));
       assert.equal(out, golden(file), file);
     }
   } finally {
     db.close();
   }
-});test("no-match paths return null / empty result set", () => {
+});
+
+test("kanji reading search: kana prefix, dot separators ignored", () => {
+  const db = buildFixtureDb();
+  try {
+    // 食's kun た.べる normalizes to たべる, matching the たべ prefix.
+    assert.deepEqual(searchKanjiByReading(db, "たべ"), [
+      { literal: "食", readings: ["た.べる"], meanings: ["eat", "food"] },
+    ]);
+    assert.deepEqual(searchKanjiByReading(db, "taberu"), [
+      { literal: "食", readings: ["た.べる"], meanings: ["eat", "food"] },
+    ]);
+  } finally {
+    db.close();
+  }
+});
+
+test("kanji reading search: romaji prefix across on/kun readings", () => {
+  const db = buildFixtureDb();
+  try {
+    // 水 (みず), 見 (みる) via kun, plus 行 via its nanori みち; ordered by literal.
+    assert.deepEqual(searchKanjiByReading(db, "mi").map((h) => h.literal), ["水", "行", "見"]);
+    // on reading: 食's ショク → "shoku".
+    assert.deepEqual(searchKanjiByReading(db, "shoku").map((h) => h.literal), ["食"]);
+    assert.equal(searchKanjiByReading(db, "zzz").length, 0);
+  } finally {
+    db.close();
+  }
+});
+
+test("no-match paths return null / empty result set", () => {
   const db = buildFixtureDb();
   try {
     const tags = loadTags(db);

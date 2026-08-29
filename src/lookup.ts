@@ -9,6 +9,7 @@
 import type Database from "better-sqlite3";
 import { furiganaFor } from "./furigana.js";
 import { kangxiChar } from "./kangxi.js";
+import { katakanaToHiragana, toRomaji } from "./kana.js";
 
 type DB = InstanceType<typeof Database>;
 
@@ -199,7 +200,7 @@ function isKana(ch: string): boolean {
   return (c >= 0x3041 && c <= 0x3096) || (c >= 0x30a1 && c <= 0x30f6);
 }
 
-function isKanaInput(input: string): boolean {
+export function isKanaInput(input: string): boolean {
   return [...input].some(isKana);
 }
 
@@ -247,6 +248,64 @@ export function searchReadingPrefix(db: DB, prefix: string): SearchHit[] {
     const word = loadWord(db, r.word_id);
     if (!word) continue;
     out.push({ word, reading: r.text, gloss: firstGloss(word) });
+  }
+  return out;
+}
+
+// ---- kanji reading search --------------------------------------------------
+
+export interface KanjiReadingHit {
+  literal: string;
+  /** the on/kun/nanori readings that matched the prefix (stored form). */
+  readings: string[];
+  /** English meanings. */
+  meanings: string[];
+}
+
+const stripDots = (s: string): string => s.replace(/\./g, "");
+
+/** kana→hiragana with reading dots removed, so た.べる normalizes to たべる. */
+function normalizeReading(s: string): string {
+  return katakanaToHiragana(stripDots(s));
+}
+
+/**
+ * Kanji whose on/kun/nanori reading starts with the query, ordered by literal.
+ * Kana input matches kana (katakana readings normalized to hiragana; kun dot
+ * separators ignored); ASCII input matches the Hepburn-ish romaji of each
+ * reading (src/kana.ts). One entry per kanji, listing only the matched
+ * readings, mirroring how the word search shows the matched reading.
+ */
+export function searchKanjiByReading(db: DB, query: string): KanjiReadingHit[] {
+  const isKana = isKanaInput(query);
+  const needle = isKana ? normalizeReading(query) : query.toLowerCase();
+  const matches = (value: string): boolean => {
+    const norm = normalizeReading(value);
+    return isKana ? norm.startsWith(needle) : toRomaji(norm).startsWith(needle);
+  };
+
+  const matched = new Set<string>();
+  const readings = db.prepare("SELECT kanji, value FROM kanji_readings ORDER BY kanji").all() as { kanji: string; value: string }[];
+  for (const r of readings) {
+    if (matches(r.value)) matched.add(r.kanji);
+  }
+  const nanori = db.prepare("SELECT kanji, value FROM kanji_nanori ORDER BY kanji").all() as { kanji: string; value: string }[];
+  for (const n of nanori) {
+    if (matches(n.value)) matched.add(n.kanji);
+  }
+
+  if (matched.size === 0) return [];
+  const out: KanjiReadingHit[] = [];
+  for (const literal of [...matched].sort()) {
+    const hitReadings = (db.prepare("SELECT type, value FROM kanji_readings WHERE kanji = ? ORDER BY rowid").all(literal) as { type: string; value: string }[])
+      .filter((r) => matches(r.value))
+      .map((r) => r.value);
+    const hitNanori = (db.prepare("SELECT value FROM kanji_nanori WHERE kanji = ? ORDER BY rowid").all(literal) as { value: string }[])
+      .filter((n) => matches(n.value))
+      .map((n) => n.value);
+    const meanings = (db.prepare("SELECT value FROM kanji_meanings WHERE kanji = ? AND lang = 'en' ORDER BY rowid").all(literal) as { value: string }[])
+      .map((m) => m.value);
+    out.push({ literal, readings: [...hitReadings, ...hitNanori], meanings });
   }
   return out;
 }

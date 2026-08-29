@@ -55,6 +55,12 @@ ROMAJI = {
     "しょくじ": "shokuji", "くる": "kuru", "クる": "kuru", "きれい": "kirei",
     "キレイ": "kirei", "きれーい": "kireei", "くう": "kuu", "よい": "yoi",
     "えい": "ei", "かんずる": "kanzuru", "いい": "ii", "する": "suru",
+    # kanji on/kun readings used by the reading-search goldens (src/kana.ts toRomaji)
+    "しょく": "shoku", "じき": "jiki", "くらう": "kurau", "はむ": "hamu",
+    "みず": "mizu", "みる": "miru", "いく": "iku", "ゆく": "yuku",
+    "おこなう": "okonau", "すい": "sui", "いん": "in", "けん": "ken",
+    "こう": "kou", "ぎょう": "gyou", "あん": "an", "らい": "rai",
+    "りょう": "ryou", "しょう": "shou", "き": "ki", "ぐい": "gui",
 }
 
 def romaji(text):
@@ -205,13 +211,18 @@ def render_kanji(lit, kanji_data, word_entries):
             lines.append("  %s  [%s]  %s" % (writing, fg, gloss))
     return "\n".join(lines) + "\n"
 
-def render_search(query, rows):
-    lines = []
-    lines.append(query)
-    lines.append("")
+def render_search(query, rows, kanji_rows=None):
+    """Word hit rows, then a Kanji: section (kanji-by-reading matches)."""
+    kanji_rows = kanji_rows or []
+    lines = [query, ""]
     for writing, reading, gloss in rows:
         lines.append("  %s  [%s]  %s" % (writing, reading, gloss))
-    if not rows:
+    if kanji_rows:
+        lines.append("")
+        lines.append("Kanji:")
+        for lit, readings, meanings in kanji_rows:
+            lines.append("  %s  [%s]  %s" % (lit, "  ".join(readings), "; ".join(meanings)))
+    if not rows and not kanji_rows:
         lines.append("  (no results)")
     return "\n".join(lines) + "\n"
 
@@ -285,6 +296,42 @@ def main():
         data = load(os.path.join(E, "kanjidic2-%s.json" % {"食": "shoku", "水": "mizu", "喰": "kuu"}[lit]))
         write(name + ".txt", render_kanji(lit, data, entries))
 
+    # --- kanji-by-reading search (mirrors src/lookup.ts searchKanjiByReading) ---
+    KANJI = {}
+    for name in sorted(os.listdir(E)):
+        if name.startswith("kanjidic2-"):
+            k = load(os.path.join(E, name))
+            KANJI[k["literal"]] = k
+
+    def kanji_readings(lit):
+        k = KANJI[lit]
+        rm = k["readingMeaning"]
+        on = [r["value"] for g in rm["groups"] for r in g["readings"] if r["type"] == "ja_on"]
+        kun = [r["value"] for g in rm["groups"] for r in g["readings"] if r["type"] == "ja_kun"]
+        nanori = rm["nanori"]
+        meanings = [x["value"] for g in rm["groups"] for x in g["meanings"] if x["lang"] == "en"]
+        return on, kun, nanori, meanings
+
+    def normalize_reading(v):
+        # strip kun dot separators, katakana -> hiragana (same as src/kana.ts)
+        s = v.replace(".", "")
+        return "".join(chr(ord(c) - 0x60) if "\u30a1" <= c <= "\u30f6" else c for c in s)
+
+    def kanji_reading_hits(query, is_kana):
+        needle = normalize_reading(query) if is_kana else query.lower()
+        hits = []
+        for lit in sorted(KANJI):
+            on, kun, nanori, meanings = kanji_readings(lit)
+            matched = []
+            for r in on + kun + nanori:
+                norm = normalize_reading(r)
+                ok = norm.startswith(needle) if is_kana else romaji(norm).startswith(needle)
+                if ok and r not in matched:
+                    matched.append(r)
+            if matched:
+                hits.append((lit, matched, meanings))
+        return hits
+
     # --- search (exact word-token match on glosses; kana/romaji prefix on readings) ---
     def gloss_tokens(w_):
         toks = set()
@@ -294,7 +341,7 @@ def main():
         return toks
 
     eat = sorted([w(i) for i in entries if "eat" in gloss_tokens(w(i))], key=lambda x: int(x["id"]))
-    write("search-eat.txt", render_search("eat", [(display_header(x)[0], display_header(x)[1], first_gloss(x)) for x in eat]))
+    write("search-eat.txt", render_search("eat", [(display_header(x)[0], display_header(x)[1], first_gloss(x)) for x in eat], kanji_reading_hits("eat", False)))
 
     def prefix_rows(prefix, col="kana"):
         rows = []
@@ -307,8 +354,8 @@ def main():
                     break
         return rows
 
-    write("search-taberu.txt", render_search("たべ", prefix_rows("たべ")))
-    write("search-taberu-romaji.txt", render_search("taberu", prefix_rows("taberu", "romaji")))
+    write("search-taberu.txt", render_search("たべ", prefix_rows("たべ"), kanji_reading_hits("たべ", True)))
+    write("search-taberu-romaji.txt", render_search("taberu", prefix_rows("taberu", "romaji"), kanji_reading_hits("taberu", False)))
 
     # --- radical ---
     write("radical-mizu.txt", render_radical("水", load(os.path.join(E, "radk-水.json"))))

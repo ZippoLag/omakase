@@ -146,15 +146,27 @@ Ichidan verb; transitive verb
   2. to live on (e.g. a salary); to live off; to subsist on
 ```
 
-### `kanji` — kanji pages
+### `kanji` — kanji pages and reading search
 
 ```bash
-omakase kanji 食
-omakase kanji 水
+omakase kanji 食        # page for a literal
+omakase kanji まか      # kanji whose readings start with まか
+omakase kanji makase    # same, by romaji reading
 ```
 
-Shows stroke count, grade/JLPT/frequency, classical radical, on/kun/nanori
-readings, meanings, and compounds containing the character.
+A single kanji literal renders the full page (stroke count, grade/JLPT/
+frequency, classical radical, on/kun/nanori readings, meanings, and compounds
+containing the character). Any other query is treated as a **reading**: kanji
+whose on/kun/nanori readings start with it are listed — kana or romaji, with
+the dot separators in kun readings (e.g. まか.せる) ignored:
+
+```
+$ omakase kanji makase
+makase
+
+  任  [まか.せる]  responsibility; duty; term; entrust to; appoint
+  委  [まかせ]  committee; entrust to; leave to; devote; discard
+```
 
 ### `search` — gloss / kana / romaji search
 
@@ -164,6 +176,21 @@ How the query is interpreted depends on its form:
 - **ASCII input** → romaji reading-prefix match, e.g. `omakase search taberu`;
   an exact reading wins; otherwise an English gloss token search is preferred
   when it matches, e.g. `omakase search eat`
+
+Word hits are followed by a **Kanji:** section listing kanji whose
+on/kun/nanori readings start with the query (the same reading search as the
+`kanji` command):
+
+```
+$ omakase search makase
+makase
+
+  任せる  [まかせる]  to leave (a matter, decision, etc. to someone)
+  …
+
+Kanji:
+  任  [まか.せる]  responsibility; duty; term; entrust to; appoint
+```
 
 ```bash
 $ omakase search taberu

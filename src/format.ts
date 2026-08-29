@@ -8,6 +8,7 @@ import type {
   LoadedKanji,
   LoadedSentence,
   SearchHit,
+  KanjiReadingHit,
 } from "./lookup.js";
 import { displayHeader as lookupHeader, rubyFor } from "./lookup.js";
 
@@ -198,13 +199,33 @@ export function renderKanji(kanji: LoadedKanji, radicalDisplay: string | null): 
   return lines.join("\n") + "\n";
 }
 
-/** `search <query>` result list (render-goldens render_search). */
-export function renderSearch(query: string, hits: SearchHit[]): string {
+function kanjiHitRow(k: KanjiReadingHit): string {
+  return `  ${k.literal}  [${k.readings.join("  ")}]  ${k.meanings.join("; ")}`;
+}
+
+/**
+ * `search <query>` result list (render-goldens render_search). When `kanjiHits`
+ * is non-empty, a "Kanji:" section is appended, mirroring how Tangorin shows
+ * word and kanji results side by side.
+ */
+export function renderSearch(query: string, hits: SearchHit[], kanjiHits: KanjiReadingHit[] = []): string {
   const lines: string[] = [query, ""];
   for (const hit of hits) {
     const { text } = lookupHeader(hit.word);
     lines.push(`  ${text}  [${hit.reading}]  ${hit.gloss}`);
   }
+  if (kanjiHits.length > 0) {
+    lines.push("", "Kanji:");
+    for (const k of kanjiHits) lines.push(kanjiHitRow(k));
+  }
+  if (hits.length === 0 && kanjiHits.length === 0) lines.push("  (no results)");
+  return lines.join("\n") + "\n";
+}
+
+/** `kanji <reading>` result list — same rows as the search Kanji section. */
+export function renderKanjiReadingSearch(query: string, hits: KanjiReadingHit[]): string {
+  const lines: string[] = [query, ""];
+  for (const k of hits) lines.push(kanjiHitRow(k));
   if (hits.length === 0) lines.push("  (no results)");
   return lines.join("\n") + "\n";
 }
