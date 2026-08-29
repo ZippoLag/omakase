@@ -64,14 +64,24 @@ export function cmdKanji(db: DB, literal: string): string | null {
 /**
  * `search <query>`:
  *   - kana input  → reading-prefix (kana text)
- *   - ASCII input → reading-prefix over the romaji column; if nothing matches,
- *                   fall back to an English gloss-token search.
+ *   - ASCII input → romaji reading-prefix over the romaji column; a hit whose
+ *                   romaji *equals* the whole query counts as reading intent
+ *                   (e.g. `taberu` → 食べる). Otherwise an English gloss-token
+ *                   match is preferred when present (e.g. `eat` → “to eat”
+ *                   words, not エアターミナル “eataminaru”), with partial
+ *                   romaji prefixes as the last resort.
  */
 export function cmdSearch(db: DB, query: string): SearchHit[] {
   const trimmed = query.trim();
   const hits = searchReadingPrefix(db, trimmed);
-  if (hits.length > 0) return hits;
-  return isAscii(trimmed) ? searchGloss(db, trimmed) : hits;
+  if (hits.length === 0) return isAscii(trimmed) ? searchGloss(db, trimmed) : hits;
+  if (!isAscii(trimmed)) return hits; // kana input: reading prefix wins
+  const exact = db.prepare(
+    "SELECT 1 FROM writings WHERE kind = 'kana' AND romaji = ? LIMIT 1",
+  ).get(trimmed.toLowerCase());
+  if (exact) return hits;
+  const gloss = searchGloss(db, trimmed);
+  return gloss.length > 0 ? gloss : hits;
 }
 
 function isAscii(s: string): boolean {
@@ -137,9 +147,9 @@ Examples:
 
 Search the dictionary. How the query is interpreted depends on its form:
   - kana input  → reading-prefix match (e.g. たべ)
-  - ASCII input → romaji reading-prefix match (e.g. taberu);
-                  if no reading matches, falls back to an English
-                  gloss token search (e.g. "eat")
+  - ASCII input → romaji reading-prefix match (e.g. taberu); an exact
+                  reading wins, otherwise an English gloss token search
+                  is preferred when present (e.g. "eat")
 
 Arguments:
   <query>        kana, romaji, or an English gloss

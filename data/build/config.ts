@@ -15,8 +15,12 @@ export interface Asset {
 
 export const ASSETS: Asset[] = [
   {
-    name: `jmdict-eng-common-${RELEASE}.json.tgz`,
-    sha256: "3f2063c08fdac7209918be3495f4a447a01c97ff3add857f61d0bcfd9ed31e5b",
+    // Full English-gloss JMdict (218,577 words), not the eng-common subset:
+    // eng-common drops entries whose headword/reading are all marked
+    // non-common (e.g. お任せ/おまかせ "omakase"), so the full variant is
+    // required for complete coverage.
+    name: `jmdict-eng-${RELEASE}.json.tgz`,
+    sha256: "d9b74539bce7df82491a57ad96a0634a988129db6ca4a362f7221bc5e736871f",
   },
   {
     // -all (13,108 kanji) rather than -en (10,384): kradfile covers the full

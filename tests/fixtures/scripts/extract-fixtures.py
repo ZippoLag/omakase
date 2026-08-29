@@ -54,7 +54,7 @@ def main():
         blobs[asset] = data
     print("downloads verified against manifest:", ", ".join(manifest["files"]))
 
-    jmdict = load_json_tgz(blobs["jmdict-eng-common-%s.json.tgz" % tag])
+    jmdict = load_json_tgz(blobs["jmdict-eng-%s.json.tgz" % tag])
     kanjidic2 = load_json_tgz(blobs["kanjidic2-en-%s.json.tgz" % tag])
     krad = load_json_tgz(blobs["kradfile-%s.json.tgz" % tag])
     radk = load_json_tgz(blobs["radkfile-%s.json.tgz" % tag])

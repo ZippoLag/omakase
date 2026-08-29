@@ -3,13 +3,13 @@
   "release": "3.6.2+20260824122934",
   "fetched_at": "2026-08-28",
   "files": {
-    "jmdict-eng-common-3.6.2+20260824122934.json.tgz": "3f2063c08fdac7209918be3495f4a447a01c97ff3add857f61d0bcfd9ed31e5b",
+    "jmdict-eng-3.6.2+20260824122934.json.tgz": "d9b74539bce7df82491a57ad96a0634a988129db6ca4a362f7221bc5e736871f",
     "kanjidic2-en-3.6.2+20260824122934.json.tgz": "fee9dcd7cddbb563aaef07dc35088021221f36442e7c38636c8db084a7f1ff2c",
     "kradfile-3.6.2+20260824122934.json.tgz": "535d6ac0d8aef49eba309c1f85c77836af735d3b178b6ce7a1218e6ba1c1dec1",
     "radkfile-3.6.2+20260824122934.json.tgz": "d69f9c7227612059229a824e06eea39c75edfe87777a4ca1236d820ca86c369b"
   },
   "entry_counts": {
-    "jmdict_words_total": 22636
+    "jmdict_words_total": 218577
   },
   "note": "Fixture entries are exact snapshots from the release above."
 }

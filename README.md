@@ -89,8 +89,9 @@ sha256-verified sources (downloaded once and cached in `data/raw/`):
 pnpm run build:db
 ```
 
-This writes `dist/kanji.db` (~47 MB) with ~22k words, ~13k kanji, and ~111k
-conjugation forms. Re-run it whenever you pull updated source data.
+This writes `dist/kanji.db` (~290 MB) with ~219k words, ~13k kanji, and
+~506k conjugation forms (built from the full `jmdict-eng` release, not the
+common-only subset). Re-run it whenever you pull updated source data.
 
 ## Usage
 
@@ -161,8 +162,8 @@ How the query is interpreted depends on its form:
 
 - **kana input** → reading-prefix match, e.g. `omakase search たべ`
 - **ASCII input** → romaji reading-prefix match, e.g. `omakase search taberu`;
-  if nothing matches, falls back to an English gloss token search, e.g.
-  `omakase search eat`
+  an exact reading wins; otherwise an English gloss token search is preferred
+  when it matches, e.g. `omakase search eat`
 
 ```bash
 $ omakase search taberu

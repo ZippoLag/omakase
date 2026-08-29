@@ -59,8 +59,9 @@ async function main(): Promise<void> {
   console.log("  kanji=%d readings=%d meanings=%d nanori=%d", summary.kanji, summary.kanjiReadings, summary.kanjiMeanings, summary.kanjiNanori);
   console.log("  radicals=%d kanji_radicals=%d kanji_words=%d conjugations=%d",
     summary.radicals, summary.kanjiRadicals, summary.kanjiWords, summary.conjugations);
-  console.log("  (conjugation tables generated for %d words)", rows.conjugations.length > 0 ? rows.words.filter((w) =>
-    rows.conjugations.some((c) => c.word_id === w.id)).length : 0);
+  const conjugatedWordIds = new Set(rows.conjugations.map((c) => c.word_id));
+  console.log("  (conjugation tables generated for %d words)",
+    rows.words.filter((w) => conjugatedWordIds.has(w.id)).length);
 }
 
 main().catch((err) => {

@@ -203,43 +203,34 @@ function isKanaInput(input: string): boolean {
   return [...input].some(isKana);
 }
 
-/** Lowercased whitespace tokens, stripping ( ) ; , — mirrors render-goldens. */
-export function glossTokens(gloss: string): Set<string> {
-  const cleaned = gloss.toLowerCase().replace(/\(/g, " ").replace(/\)/g, " ").replace(/;/g, " ").replace(/,/g, " ");
-  return new Set(cleaned.split(/\s+/).filter(Boolean));
-}
-
-function allWordIds(db: DB): string[] {
-  return (db.prepare("SELECT id FROM words ORDER BY id").all() as { id: string }[]).map((w) => w.id);
-}
-
 /**
- * English-gloss token search (exact token membership), ordered by word id.
- * Mirrors render-goldens `eat` example. Tokenized in JS for exact parity;
- * a bm25/FTS relevance ranking is a documented later enhancement.
+ * English-gloss token search via the FTS5 `glosses_fts` index (unicode61),
+ * ordered by word id. One hit per word; gloss shown is the first gloss.
+ * The quoted token is matched literally, so FTS operators (`*`, `-`, …) in
+ * the query are inert. Mirrors render-goldens `eat` example.
  */
 export function searchGloss(db: DB, token: string): SearchHit[] {
   const needle = token.toLowerCase();
-  const hits: SearchHit[] = [];
-  for (const id of allWordIds(db)) {
-    const word = loadWord(db, id);
+  const quoted = '"' + needle.replace(/"/g, '""') + '"';
+  // FTS rowid = gloss id (glosses_fts is contentless, populated in buildDb),
+  // so join through glosses → senses (ids are per-table sequences, so a bare
+  // senses.id = f.rowid join would mispair whenever the ids coincide).
+  const rows = db.prepare(`
+    SELECT DISTINCT s.word_id
+    FROM glosses_fts f
+    JOIN glosses g ON g.id = f.rowid
+    JOIN senses s ON s.id = g.sense_id
+    WHERE glosses_fts MATCH ?
+    ORDER BY s.word_id
+  `).all(quoted) as { word_id: string }[];
+  const out: SearchHit[] = [];
+  for (const r of rows) {
+    const word = loadWord(db, r.word_id);
     if (!word) continue;
-    let matched = false;
-    for (const s of word.senses) {
-      for (const g of s.glosses) {
-        if (glossTokens(g).has(needle)) {
-          matched = true;
-          break;
-        }
-      }
-      if (matched) break;
-    }
-    if (matched) {
-      const { reading } = displayHeader(word);
-      hits.push({ word, reading: reading ?? "", gloss: firstGloss(word) });
-    }
+    const { reading } = displayHeader(word);
+    out.push({ word, reading: reading ?? "", gloss: firstGloss(word) });
   }
-  return hits;
+  return out;
 }
 
 /** Reading-prefix search (kana text or romaji column), ordered by word id. */

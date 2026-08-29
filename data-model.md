@@ -231,7 +231,7 @@ CREATE VIRTUAL TABLE glosses_fts USING fts5(
 );
 ```
 
-**Row counts (eng-common build):** words ~30k, writings ~55k, senses ~45k, glosses ~60k, kanji 13,108, kanji_readings ~30k, kanji_radicals ~55k, kanji_words ~180k, conjugations ~100k (3,511 tables × ~28 forms), sentences 25,980, word_sentences ~45k. All trivially within SQLite's comfort zone.
+**Row counts (full jmdict-eng build, 2026-08-29):** words 218,577, writings 498,621, senses 253,299, glosses 442,536, kanji 13,108, kanji_readings 37,048, kanji_meanings 48,088, kanji_nanori 3,454, kanji_radicals 54,321, kanji_words 584,238, conjugations 506,348 (34,609 words), sentences 25,980, word_sentences ~45k. All trivially within SQLite's comfort zone.
 
 ---
 
@@ -260,4 +260,4 @@ CREATE VIRTUAL TABLE glosses_fts USING fts5(
 - **Import pipeline** (per release): stream each jmdict-simplified JSON → `INSERT` inside one transaction per dictionary → build `kanji_words`, `conjugations`, `furigana`, `word_sentences` → rebuild FTS (`INSERT INTO writings_fts(writings_fts) VALUES('rebuild')`) → `PRAGMA optimize` → write `meta` (release tag, dates, licenses).
 - **Weekly refresh**: the DB is fully regenerable from the latest jmdict-simplified release (1.44 MB download, measured) + KanjiVG + curated Tatoeba; bump `meta.schema_version` only when the DDL changes.
 - **Browser target**: use `wa-sqlite` (any modern SQLite, incl. trigram FTS5) or `sql.js`; ship the `.db` as an asset, open it read-only, `PRAGMA query_only = ON`.
-- **Measured size on disk (2026-08-28)**: DB **46.5 MB** (eng-common + 111k conjugation rows + FTS) + strokes ~9–10 MB + kuromoji 41 MB → ~95–100 MB total. The trigram FTS index (~3× text) and the conjugation table are the main cost; the earlier ~65–77 MB estimate predates both.
+- **Measured size on disk (2026-08-29)**: DB **289.6 MB** (full jmdict-eng, 218,577 words + 506k conjugation rows + FTS) + strokes ~9–10 MB + kuromoji 41 MB → ~340 MB total. The trigram FTS index (~3× text) and the conjugation table are the main cost. The build takes ~18 s on a laptop (transform 2 s + inserts 14 s); the full-dictionary build previously hit an O(words × conjugations) summary computation in `data/build/index.ts`, now replaced with a Set lookup.

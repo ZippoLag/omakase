@@ -200,11 +200,11 @@ Reasons:
 
 All numbers below were measured from live sources on the research date (release assets, npm registry, and the committed files in jkindrix/japanese-language-data), not guessed.
 
-### Standard build: eng-common JMdict + Jōyō KanjiVG + curated Tatoeba + kuromoji
+### Standard build: full eng JMdict + Jōyō KanjiVG + curated Tatoeba + kuromoji
 
 | Component | Download (compressed) | On disk (uncompressed) | Source of number |
 |---|---|---|---|
-| **eng-common JMdict** (jmdict-simplified 3.6.2+20260824) | 1.44 MB (tgz asset) | **16.5 MB** JSON (16,482,605 B measured by streaming the release tgz) | jmdict-simplified release asset |
+| **Full eng JMdict** (jmdict-simplified 3.6.2+20260824, 218,577 words) | **11.5 MB** (tgz asset) | **117.8 MB** JSON (117,772,950 B measured by streaming the release tgz) | jmdict-simplified release asset |
 | **Jōyō KanjiVG SVGs** (2,136 kanji) | ~3–4 MB (zipped) | **~9.4 MB** (6,416 SVGs = 28.09 MB in japanese-language-data → avg 4.4 KB/file; Jōyō = 2,136 files) | measured via GitHub tree API |
 | **Curated Tatoeba JA–EN** (25,980 pairs) | ~2–3 MB | **9.9 MB** (sentences.json exact) | measured via GitHub tree API |
 | **kuromoji.js + ipadic** | ~12–15 MB (npm tarball) | **41.3 MB** (npm unpackedSize exact) | npm registry |
@@ -221,7 +221,7 @@ With JSON converted to a compact store (SQLite or binary) the on-disk figure typ
 | **Full** (+ full 218k JMdict, JMnedict names, pitch accent, full corpora) | **200 MB+** | full JMdict alone adds ~120 MB uncompressed (23.9 MB compressed asset); JMnedict ~50 MB; pitch-accent.json 17.8 MB; full Tatoeba JP–EN ~50 MB+ |
 
 ### Notes
-- **eng-common** covers the ~30k words marked common in JMdict — plenty for quick reference lookups; the long tail (archaic/rare/specialized) lives in the full JMdict, which you can add later without restructuring.
+- The build pins the **full `jmdict-eng`** release (218,577 words), not the eng-common subset — eng-common silently drops entries whose headword/reading are all marked non-common (e.g. お任せ/おまかせ "omakase"), which tangorin's word search surfaces. The full build produces a ~290 MB SQLite DB (built in ~18 s).
 - The **Jōyō SVG** figure is the lean choice; the official KanjiVG **main zip** (all ~13k kanji, no variants) is 12.65 MB compressed if you want full coverage instead.
 - kuromoji's 41.3 MB is the stock ipadic bundle; browser apps can lazy-load it or ship a trimmed build.
 - Everything above is permissive to redistribute offline under CC BY-SA 4.0 (data) / Apache-2.0 (kuromoji).

@@ -135,7 +135,7 @@ All data is local; there is **no runtime network access** by design.
 
 | Milestone | Scope | Exit criteria |
 |---|---|---|
-| **M0 — Bootstrap** | Repo, tsconfig, build pipeline skeleton, fetch + parse jmdict-simplified eng-common, build DB | `dist/kanji.db` builds; opens read-only |
+| **M0 — Bootstrap** | Repo, tsconfig, build pipeline skeleton, fetch + parse jmdict-simplified (full `eng` variant), build DB | `dist/kanji.db` builds; opens read-only |
 | **M1 — Core lookups** | `word`, `search`, `kanji`, `info` commands; WanaKana romaji input | Golden tests pass; <100 ms lookups |
 | **M2 — Enrichment** | `kanji --words` (compounds), `conjugate`, `deconjugate`, `sentence`, `radical`, multi-radical search, furigana rendering, stroke export | All commands working offline against Jōyō set |
 | **M3 — Polish** | `--json` everywhere, limits/paging, error handling, packaging (npm + optional single binary), README with attribution | Releaseable v1.0 |
@@ -144,7 +144,7 @@ All data is local; there is **no runtime network access** by design.
 
 ## 9. Open questions / future
 
-- **Full dictionary toggle:** add `--full` flag shipping the full 218k JMdict (adds ~120 MB) once eng-common proves out.
+- **Full dictionary is the default build:** the pipeline pins jmdict-simplified's full `eng` release (218,577 words, ~290 MB DB), not the common-only subset — the common-only variant silently drops entries whose headword/reading are all marked non-common (e.g. お任せ/おまかせ).
 - **Pitch accent:** Kanjium data (17.8 MB) can be added to the `writings` table later.
 - **GUI wrapper:** service layer is framework-agnostic, so a web/Tauri shell could reuse it unchanged.
 - **Stroke animation in terminal:** out of scope for v1 (SVG export only); could render ASCII/Unicode block animation as a stretch goal.
