@@ -9,6 +9,7 @@ import type {
   LoadedSentence,
   SearchHit,
   KanjiReadingHit,
+  ThesaurusHit,
 } from "./lookup.js";
 import { displayHeader as lookupHeader, rubyFor } from "./lookup.js";
 
@@ -156,6 +157,27 @@ export function renderWordBody(word: LoadedWord, tags: Record<string, string>, l
     lines.push(`  … and ${word.senses.length - limit} more senses`);
   }
   return lines.join("\n") + "\n";
+}
+
+/**
+ * Thesaurus sections (render-goldens render_thesaurus): up to 5 synonyms and
+ * up to 5 antonyms as `text [reading] gloss` rows. Returns "" when empty.
+ */
+export function renderThesaurus(synonyms: ThesaurusHit[], antonyms: ThesaurusHit[]): string {
+  const sections: string[] = [];
+  if (synonyms.length > 0) {
+    sections.push("Synonyms:", ...synonyms.map((s) => thesaurusRow(s)));
+  }
+  if (antonyms.length > 0) {
+    if (sections.length > 0) sections.push("");
+    sections.push("Antonyms:", ...antonyms.map((a) => thesaurusRow(a)));
+  }
+  return sections.length === 0 ? "" : sections.join("\n") + "\n";
+}
+
+function thesaurusRow(hit: ThesaurusHit): string {
+  const { text, reading } = lookupHeader(hit.word);
+  return `  ${text}  [${reading ?? ""}]  ${hit.gloss}`;
 }
 
 /** Examples section (render-goldens render_examples), or "" when none. */

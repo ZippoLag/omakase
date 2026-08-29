@@ -310,6 +310,112 @@ export function searchKanjiByReading(db: DB, query: string): KanjiReadingHit[] {
   return out;
 }
 
+// ---- thesaurus -------------------------------------------------------------
+
+export interface ThesaurusHit {
+  word: LoadedWord;
+  /** gloss of the referenced sense (or the first gloss when no sense is given). */
+  gloss: string;
+}
+
+/** A JMdict xref tuple: [text], [text, sense], [text, reading], [text, reading, sense]. */
+interface Xref {
+  text: string;
+  reading: string | null;
+  sense: number | null;
+}
+
+/** Parse a stored `related`/`antonym` JSON array of xref tuples. */
+function parseXrefs(raw: string | null): Xref[] {
+  if (!raw) return [];
+  let arr: unknown[];
+  try {
+    arr = JSON.parse(raw) as unknown[];
+  } catch {
+    return [];
+  }
+  const out: Xref[] = [];
+  for (const item of arr) {
+    if (!Array.isArray(item) || typeof item[0] !== "string") continue;
+    const text = item[0];
+    let reading: string | null = null;
+    let sense: number | null = null;
+    if (typeof item[1] === "number") {
+      sense = item[1];
+    } else if (typeof item[1] === "string") {
+      // The reading may carry a "・N" sense disambiguator, e.g. "いる・1".
+      const m = /・(\d+)$/.exec(item[1]);
+      reading = m ? item[1].slice(0, m.index) : item[1];
+      if (m) sense = Number(m[1]);
+      if (typeof item[2] === "number") sense = item[2];
+    }
+    out.push({ text, reading, sense });
+  }
+  return out;
+}
+
+/** Resolve an xref tuple to the referenced word entry (null when missing). */
+function resolveXref(db: DB, x: Xref): LoadedWord | null {
+  if (x.reading) {
+    const row = db.prepare(`
+      SELECT w.word_id
+      FROM writings w
+      JOIN writings k ON k.word_id = w.word_id AND k.kind = 'kanji' AND k.text = ?
+      WHERE w.kind = 'kana' AND w.text = ?
+      ORDER BY w.word_id
+      LIMIT 1
+    `).get(x.text, x.reading) as { word_id: string } | undefined;
+    return row ? loadWord(db, row.word_id) : null;
+  }
+  return findWordByWriting(db, x.text);
+}
+
+/** Glosses of the referenced sense (or the first gloss when no sense given). */
+function xrefGloss(word: LoadedWord, sense: number | null): string {
+  if (sense != null) {
+    const s = word.senses[sense - 1];
+    if (s && s.glosses.length > 0) return s.glosses.join("; ");
+  }
+  return firstGloss(word);
+}
+
+const THESAURUS_LIMIT = 5;
+
+/**
+ * Thesaurus for a word: synonyms from the senses' `related` xrefs and antonyms
+ * from their `antonym` xrefs (JMdict cross-references). Xrefs that don't
+ * resolve to an entry are skipped, and repeated targets are de-duplicated.
+ * "Top" = common words first, then by word id; each list is capped at `limit`
+ * (default 5).
+ */
+export function wordThesaurus(
+  db: DB,
+  word: LoadedWord,
+  limit: number = THESAURUS_LIMIT,
+): { synonyms: ThesaurusHit[]; antonyms: ThesaurusHit[] } {
+  const collect = (column: "related" | "antonym"): ThesaurusHit[] => {
+    const rows = db.prepare(
+      `SELECT ${column} FROM senses WHERE word_id = ? ORDER BY position`,
+    ).all(word.id) as { [key: string]: string | null }[];
+    const hits: ThesaurusHit[] = [];
+    const seen = new Set<string>();
+    for (const row of rows) {
+      for (const x of parseXrefs(row[column] ?? null)) {
+        const target = resolveXref(db, x);
+        if (!target || seen.has(target.id)) continue;
+        seen.add(target.id);
+        hits.push({ word: target, gloss: xrefGloss(target, x.sense) });
+      }
+    }
+    hits.sort((a, b) =>
+      Number(b.word.common) - Number(a.word.common) ||
+      a.word.id.localeCompare(b.word.id, undefined, { numeric: true }),
+    );
+    return hits.slice(0, limit);
+  };
+  return { synonyms: collect("related"), antonyms: collect("antonym") };
+}
+
 // ---- example sentences ----------------------------------------------------
 
 export interface LoadedSentence {

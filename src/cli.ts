@@ -16,11 +16,13 @@ import {
   searchGloss,
   searchKanjiByReading,
   searchReadingPrefix,
+  wordThesaurus,
 } from "./lookup.js";
 import type { SearchHit } from "./lookup.js";
 import {
   renderExamples,
   renderSearch,
+  renderThesaurus,
   renderWordBody,
   renderKanji,
   renderKanjiReadingSearch,
@@ -39,7 +41,11 @@ export function loadTags(db: DB): Record<string, string> {
   }
 }
 
-/** `word <query> [--limit N]` — exact match on a writing, with examples. */
+/**
+ * `word <query> [--limit N]` — exact match on a writing. Renders the entry
+ * body, then the thesaurus (top 5 synonyms/antonyms, when present), then
+ * example sentences.
+ */
 export function cmdWord(
   db: DB,
   query: string,
@@ -49,8 +55,10 @@ export function cmdWord(
   const word = findWordByWriting(db, query);
   if (!word) return null;
   const body = renderWordBody(word, tags, limit);
+  const { synonyms, antonyms } = wordThesaurus(db, word);
+  const thesaurus = renderThesaurus(synonyms, antonyms);
   const examples = renderExamples(exampleSentences(db, word));
-  return examples ? body + "\n" + examples : body;
+  return [body, thesaurus, examples].filter(Boolean).join("\n");
 }
 
 /**
@@ -114,7 +122,7 @@ Usage:
   omakase <command> --help    show help for a specific command
 
 Commands:
-  word    dictionary entry + example sentences
+  word    dictionary entry + thesaurus (synonyms/antonyms) + example sentences
   kanji   kanji page (readings, meanings, compounds)
   search  English gloss / kana / romaji search
 
@@ -126,7 +134,9 @@ const COMMAND_HELP: Record<Command, string> = {
   word: `Usage:
   omakase word <writing> [--limit N]
 
-Look up a dictionary entry for a word, matching on its kanji or kana spelling.
+Look up a dictionary entry for a word, matching on its kanji or kana spelling,
+with a thesaurus: up to 5 related words (synonyms) and up to 5 antonyms,
+taken from the entry's JMdict cross-references.
 
 Arguments:
   <writing>      the word to look up (kanji or kana, e.g. 食べる)

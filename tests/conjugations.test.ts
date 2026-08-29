@@ -126,8 +126,8 @@ test("conjugations table populated for all conjugatable fixture words", () => {
     const count = db.prepare("SELECT COUNT(*) AS n FROM conjugations").get() as { n: number };
     const wordCount = db.prepare("SELECT COUNT(DISTINCT word_id) AS n FROM conjugations").get() as { n: number };
     // fixture words with conjugatable POS: taberu, kuru, suru, yoi, ii, aru,
-    // shokuji, kanzuru, nomu, kuu, atsui, kirei
-    assert.equal(wordCount.n, 12);
+    // shokuji, kanzuru, nomu, kuu, atsui, kirei, samui, iru
+    assert.equal(wordCount.n, 14);
     assert.ok(count.n > 12 * 8, `expected >96 rows, got ${count.n}`);
   } finally {
     db.close();

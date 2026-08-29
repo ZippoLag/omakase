@@ -90,6 +90,9 @@ const WORD_GOLDENS: [string, string, string?, number?][] = [
   ["word-yoi.txt", "良い"],
   ["word-ii.txt", "いい"],
   ["word-suru-limit3.txt", "為る", undefined, 3],
+  // thesaurus: 暑い has an antonym (寒い), 有る a related word (居る).
+  ["word-atsui.txt", "暑い"],
+  ["word-aru.txt", "有る"],
 ];
 
 const KANJI_GOLDENS: [string, string][] = [
@@ -166,6 +169,42 @@ test("kanji reading search: romaji prefix across on/kun readings", () => {
     // on reading: 食's ショク → "shoku".
     assert.deepEqual(searchKanjiByReading(db, "shoku").map((h) => h.literal), ["食"]);
     assert.equal(searchKanjiByReading(db, "zzz").length, 0);
+  } finally {
+    db.close();
+  }
+});
+
+test("thesaurus caps synonyms and antonyms at 5 each", () => {
+  const db = buildFixtureDb();
+  try {
+    const tags = loadTags(db);
+    // Give 暑い a 4th sense with 6 related xrefs to existing fixture words.
+    // All six targets are common, so the top-5 by word id are kept and 綺麗
+    // (1591900, the largest id) is dropped.
+    const senseId = (db.prepare("SELECT MAX(id) AS id FROM senses").get() as { id: number }).id + 1;
+    const glossId = (db.prepare("SELECT MAX(id) AS id FROM glosses").get() as { id: number }).id + 1;
+    db.prepare(
+      "INSERT INTO senses (id, word_id, position, part_of_speech, applies_to_kanji, applies_to_kana, field, dialect, misc, info, language_source, related, antonym) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
+    ).run(
+      senseId, "1343460", 4, '["adj-i"]', '["*"]', '["*"]', "[]", "[]", "[]", "[]", "[]",
+      JSON.stringify([["飲む", 1], ["寒い", 1], ["有る", 1], ["食べる", 1], ["食事", 1], ["綺麗", 1]]),
+      "[]",
+    );
+    db.prepare(
+      "INSERT INTO glosses (id, sense_id, lang, type, gender, text) VALUES (?, ?, 'eng', NULL, NULL, 'synthetic')",
+    ).run(glossId, senseId);
+
+    const out = cmdWord(db, "暑い", tags);
+    assert.ok(out != null);
+    const lines = out.split("\n");
+    const start = lines.indexOf("Synonyms:") + 1;
+    const end = lines.indexOf("Antonyms:", start);
+    assert.ok(start > 0 && end > start, "has Synonyms and Antonyms sections");
+    const rows = lines.slice(start, end).filter((l) => l.trim() !== "");
+    assert.equal(rows.length, 5);
+    assert.match(rows[0]!, /^  飲む  \[のむ\]/);
+    assert.match(rows[4]!, /^  食事  \[しょくじ\]/);
+    assert.ok(!rows.some((l) => l.includes("綺麗")), "6th synonym is capped off");
   } finally {
     db.close();
   }

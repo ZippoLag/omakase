@@ -18,6 +18,7 @@ Sources of fixture data (see README.md):
 """
 import json
 import os
+import re
 
 BASE = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 E = os.path.join(BASE, "entries")
@@ -173,6 +174,67 @@ def render_examples(word):
         out.append("     %s" % s["english"])
     return "\n".join(out) + "\n"
 
+def render_thesaurus(word, entries):
+    """Thesaurus: up to 5 synonyms (related xrefs) and 5 antonyms (antonym xrefs).
+    Mirrors src/lookup.ts wordThesaurus: resolve each xref tuple to an entry
+    (kanji+reading, or any writing), common words first, capped at 5."""
+    def resolve(text, reading):
+        if reading:
+            cands = [w for w in entries.values()
+                     if any(k["text"] == text for k in w.get("kanji", []))
+                     and any(r["text"] == reading for r in w.get("kana", []))]
+        else:
+            cands = [w for w in entries.values()
+                     if text in [k["text"] for k in w.get("kanji", [])]
+                     or text in [k["text"] for k in w.get("kana", [])]]
+        if not cands:
+            return None
+        return min(cands, key=lambda w: (not w.get("common", False), int(w["id"])))
+
+    def gloss_at(target, sense):
+        if sense is not None and 1 <= sense <= len(target["sense"]):
+            glosses = [g["text"] for g in target["sense"][sense - 1]["gloss"]]
+            if glosses:
+                return "; ".join(glosses)
+        return first_gloss(target)
+
+    def collect(field):
+        hits = []
+        seen = set()
+        for s in word["sense"]:
+            for x in s.get(field, []):
+                if not x or not isinstance(x[0], str):
+                    continue
+                text = x[0]
+                reading = x[1] if len(x) > 1 and isinstance(x[1], str) else None
+                sense = x[1] if len(x) > 1 and isinstance(x[1], int) else None
+                if reading:
+                    m = re.search(r"・(\d+)$", reading)
+                    if m:
+                        reading = reading[:m.start()]
+                        sense = int(m.group(1))
+                    if len(x) > 2 and isinstance(x[2], int):
+                        sense = x[2]
+                target = resolve(text, reading)
+                if target is None or target["id"] in seen:
+                    continue
+                seen.add(target["id"])
+                hits.append((target, gloss_at(target, sense)))
+        hits.sort(key=lambda h: (not h[0].get("common", False), int(h[0]["id"])))
+        return hits[:5]
+
+    sections = []
+    for field, header in [("related", "Synonyms:"), ("antonym", "Antonyms:")]:
+        hits = collect(field)
+        if hits:
+            if sections:
+                sections.append("")
+            sections.append(header)
+            for target, gloss in hits:
+                text, reading, _ = display_header(target)
+                sections.append("  %s  [%s]  %s" % (text, reading, gloss))
+    return "\n".join(sections) + "\n" if sections else ""
+
 def render_kanji(lit, kanji_data, word_entries):
     m = kanji_data["misc"]
     rm = kanji_data["readingMeaning"]
@@ -283,13 +345,21 @@ def main():
             f.write(text)
         print("wrote golden/%s" % name)
 
+    def word_out(eid, limit=None):
+        """Word body + thesaurus section (when the word has synonyms/antonyms)."""
+        body = render_word(w(eid), limit=limit)
+        thes = render_thesaurus(w(eid), entries)
+        return body + "\n" + thes if thes else body
+
     # --- word ---
-    write("word-taberu.txt", render_word(w("1358280")) + "\n" + render_examples(w("1358280")))
-    write("word-shokuji.txt", render_word(w("1358490")) + "\n" + render_examples(w("1358490")))
-    write("word-kirei.txt", render_word(w("1591900")))
-    write("word-yoi.txt", render_word(w("1605820")))
-    write("word-ii.txt", render_word(w("2820690")))
-    write("word-suru-limit3.txt", render_word(w("1157170"), limit=3))
+    write("word-taberu.txt", word_out("1358280") + "\n" + render_examples(w("1358280")))
+    write("word-shokuji.txt", word_out("1358490") + "\n" + render_examples(w("1358490")))
+    write("word-kirei.txt", word_out("1591900"))
+    write("word-yoi.txt", word_out("1605820"))
+    write("word-ii.txt", word_out("2820690"))
+    write("word-suru-limit3.txt", word_out("1157170", limit=3))
+    write("word-atsui.txt", word_out("1343460"))
+    write("word-aru.txt", word_out("1296400"))
 
     # --- kanji ---
     for lit, name in [("食", "kanji-shoku"), ("水", "kanji-mizu"), ("喰", "kanji-kuu")]:

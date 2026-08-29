@@ -1,0 +1,111 @@
+{
+  "id": "1210360",
+  "kanji": [
+    {
+      "common": true,
+      "text": "寒い",
+      "tags": []
+    }
+  ],
+  "kana": [
+    {
+      "common": true,
+      "text": "さむい",
+      "tags": [],
+      "appliesToKanji": [
+        "*"
+      ]
+    },
+    {
+      "common": false,
+      "text": "さぶい",
+      "tags": [],
+      "appliesToKanji": [
+        "*"
+      ]
+    }
+  ],
+  "sense": [
+    {
+      "partOfSpeech": [
+        "adj-i"
+      ],
+      "appliesToKanji": [
+        "*"
+      ],
+      "appliesToKana": [
+        "*"
+      ],
+      "related": [],
+      "antonym": [
+        [
+          "暑い",
+          1
+        ]
+      ],
+      "field": [],
+      "dialect": [],
+      "misc": [],
+      "info": [],
+      "languageSource": [],
+      "gloss": [
+        {
+          "lang": "eng",
+          "gender": null,
+          "type": null,
+          "text": "cold (e.g. weather)"
+        }
+      ]
+    },
+    {
+      "partOfSpeech": [
+        "adj-i"
+      ],
+      "appliesToKanji": [
+        "*"
+      ],
+      "appliesToKana": [
+        "*"
+      ],
+      "related": [],
+      "antonym": [],
+      "field": [],
+      "dialect": [],
+      "misc": [],
+      "info": [],
+      "languageSource": [],
+      "gloss": [
+        {
+          "lang": "eng",
+          "gender": null,
+          "type": null,
+          "text": "uninteresting (esp. joke)"
+        },
+        {
+          "lang": "eng",
+          "gender": null,
+          "type": null,
+          "text": "lame"
+        },
+        {
+          "lang": "eng",
+          "gender": null,
+          "type": null,
+          "text": "dull"
+        },
+        {
+          "lang": "eng",
+          "gender": null,
+          "type": null,
+          "text": "weak"
+        },
+        {
+          "lang": "eng",
+          "gender": null,
+          "type": null,
+          "text": "corny"
+        }
+      ]
+    }
+  ]
+}

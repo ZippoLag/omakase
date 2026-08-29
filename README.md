@@ -1,9 +1,9 @@
 # omakase
 
-A 100% offline Japanese quick-reference CLI. Look up dictionary entries
-(`word`), kanji pages (`kanji`), and search the dictionary by kana, romaji, or
-English gloss (`search`), all against a local SQLite database — no network
-access at query time.
+A 100% offline Japanese quick-reference CLI. Look up dictionary entries with
+a thesaurus — synonyms and antonyms — via `word`, kanji pages via `kanji`,
+and search the dictionary by kana, romaji, or English gloss via `search`, all
+against a local SQLite database — no network access at query time.
 
 ## Requirements
 
@@ -118,19 +118,23 @@ Usage:
   omakase <command> --help    show help for a specific command
 
 Commands:
-  word    dictionary entry + example sentences
+  word    dictionary entry + thesaurus (synonyms/antonyms) + example sentences
   kanji   kanji page (readings, meanings, compounds)
   search  English gloss / kana / romaji search
 
 Run "omakase <command> --help" for details on a command.
 ```
 
-### `word` — dictionary entries
+### `word` — dictionary entries + thesaurus
 
 ```bash
 omakase word 食べる
 omakase word 為る --limit 3          # first 3 senses only (also --limit=3)
 ```
+
+Each entry also works as a thesaurus: the top **synonyms** (up to 5) and
+**antonyms** (up to 5) are taken from the entry's JMdict cross-references and
+shown after the senses, when present — common words first.
 
 ```
 $ omakase word 食べる
@@ -144,6 +148,20 @@ Ichidan verb; transitive verb
 
   1. to eat
   2. to live on (e.g. a salary); to live off; to subsist on
+
+$ omakase word 暑い
+暑い [あつい] (common)
+
+Writings: 暑い
+Readings: あつい
+Furigana: 暑[あつ]い
+
+Adjective (keiyoushi)
+
+  1. hot; warm; sultry; heated
+
+Antonyms:
+  寒い  [さむい]  cold (e.g. weather)
 ```
 
 ### `kanji` — kanji pages and reading search
