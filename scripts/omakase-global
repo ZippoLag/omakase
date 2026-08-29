@@ -1,12 +1,31 @@
-#!/usr/bin/env sh
+#!/usr/bin/env bash
 # Wrapper installed into the pnpm global bin by `scripts/link-global.mjs`.
 # Invokes the CLI through the repo's own local tsx so it works offline without
 # pnpm touching the global store or reinstalling node_modules.
+#
+# It first makes sure the shell here is running the Node pinned in .nvmrc:
+# the native better-sqlite3 binding only supports Node 20–22, so running under
+# a newer Node (24+) crashes on a module-version mismatch. It source's nvm and
+# selects the pinned version in-process, so `omakase` works no matter which
+# Node your terminal defaults to.
 set -e
 
 # Resolve this script's real location (the global-bin entry is a symlink that
 # points here), then walk up to the repo root.
 self=$(readlink "$0" 2>/dev/null || printf '%s' "$0")
 root=$(CDPATH= cd -- "$(dirname -- "$self")/.." && pwd)
+
+# Select the pinned Node for this invocation (nvm switches PATH within this
+# process only, so it doesn't affect your shell).
+pinned=$(cat "$root/.nvmrc" 2>/dev/null || true)
+nvm_sh="${NVM_DIR:-$HOME/.nvm}/nvm.sh"
+if [[ -n "$pinned" && -s "$nvm_sh" ]]; then
+  # shellcheck disable=SC1090
+  . "$nvm_sh"
+  nvm use "$pinned" --silent >/dev/null 2>&1 || {
+    # Fall back to whatever node is present if the pinned one isn't installed.
+    echo "omakase: warning: Node $pinned (from .nvmrc) not installed via nvm; using $(node -v)" >&2
+  }
+fi
 
 exec "$root/node_modules/.bin/tsx" "$root/src/cli.ts" "$@"

@@ -10,7 +10,52 @@ access at query time.
 - **Node.js 20–22** (see [Node version note](#node-version-note)). CI runs Node
   22 (pinned in [`.nvmrc`](.nvmrc)).
 
-## Install
+## Install (one command)
+
+The repo ships a single installer that handles everything — building,
+installing from scratch, and updating:
+
+```bash
+git clone <this-repo>
+cd omakase
+./install.sh
+```
+
+It picks the pinned Node (20–22), sets it as the nvm default, installs pnpm via
+corepack, installs dependencies, builds the offline database, links the
+`omakase` command onto your PATH, and verifies the toolchain
+(typecheck + conjugation validation + the test suite). Re-run it any time to
+refresh / update the whole setup — it fetches latest sources, rebuilds the DB,
+and re-links.
+
+Useful flags (see `./install.sh --help`):
+
+```bash
+./install.sh --force-db   # re-download dictionary sources and rebuild the DB
+./install.sh --no-db      # skip the database build
+./install.sh --no-pull    # skip `git pull` (fresh checkout or offline)
+./install.sh --no-verify  # skip typecheck / validate / test
+./install.sh --help       # show all options
+```
+
+## Uninstall
+
+To cleanly revert everything the installer creates (the global `omakase`
+command, `node_modules/`, and the `dist/` build), run:
+
+```bash
+./uninstall.sh              # remove global command, node_modules/, dist/
+./uninstall.sh --purge      # also delete the downloaded dictionary sources
+./uninstall.sh --help       # show all options
+```
+
+Run `./uninstall.sh` followed by `./install.sh` any time you want a clean,
+from-scratch build (for example, to rebuild the native `better-sqlite3`
+binding for a different Node version).
+
+### Manual install
+
+If you prefer to run each step yourself instead of using `./install.sh`:
 
 ```bash
 git clone <this-repo>
@@ -159,10 +204,8 @@ format byte-for-byte).
 Queries run through the [`better-sqlite3`](https://www.npmjs.com/package/better-sqlite3)
 **native** binding (`^11`), which supports Node 20–22 but not Node 24+ (its
 binary crashes on GC there). `package.json` therefore declares
-`"engines": ">=20 <24"`, and [`.nvmrc`](.nvmrc) pins **22**. Make sure your
-shell is on the pinned Node (e.g. `nvm use`) before running pnpm, and use
-[corepack](https://corepack.nodejs.org/) (enabled via `corepack enable`) so the
-pnpm version pinned in `package.json` (`packageManager`) — and committed
-`pnpm-lock.yaml` — are used consistently. If you switch to a different Node
-version, rebuild the native binding to match it
+`"engines": ">=20 <24"`, and [`.nvmrc`](.nvmrc) pins **22**. `./install.sh`
+switches to this pinned version (via nvm) and sets it as your nvm default, so
+the `omakase` command and all pnpm dev commands work in any shell. If you
+switch Node versions after installing, rebuild the native binding to match
 (`pnpm rebuild better-sqlite3`).

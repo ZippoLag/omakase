@@ -17,7 +17,9 @@
     "test": "tsx --test tests/*.test.ts",
     "cli": "tsx src/cli.ts",
     "link:global": "node scripts/link-global.mjs",
-    "validate:conjugations": "tsx data/validate/conjugations.ts"
+    "validate:conjugations": "tsx data/validate/conjugations.ts",
+    "setup": "bash ./install.sh",
+    "uninstall": "bash ./uninstall.sh"
   },
   "devDependencies": {
     "@types/better-sqlite3": "^7.6.11",
@@ -25,5 +27,8 @@
     "better-sqlite3": "^11.0.0",
     "tsx": "^4.19.0",
     "typescript": "^5.5.0"
+  },
+  "dependencies": {
+    "omakase": "link:"
   }
 }

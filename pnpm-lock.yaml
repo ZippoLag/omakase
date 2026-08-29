@@ -4,9 +4,16 @@ settings:
   autoInstallPeers: true
   excludeLinksFromLockfile: false
 
+overrides:
+  omakase: 'link:'
+
 importers:
 
   .:
+    dependencies:
+      omakase:
+        specifier: 'link:'
+        version: 'link:'
     devDependencies:
       '@types/better-sqlite3':
         specifier: ^7.6.11
