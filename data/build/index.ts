@@ -59,6 +59,7 @@ async function main(): Promise<void> {
   console.log("  kanji=%d readings=%d meanings=%d nanori=%d", summary.kanji, summary.kanjiReadings, summary.kanjiMeanings, summary.kanjiNanori);
   console.log("  radicals=%d kanji_radicals=%d kanji_words=%d conjugations=%d",
     summary.radicals, summary.kanjiRadicals, summary.kanjiWords, summary.conjugations);
+  console.log("  thesaurus_links=%d (forward + reverse + 2-hop)", summary.thesaurusLinks);
   const conjugatedWordIds = new Set(rows.conjugations.map((c) => c.word_id));
   console.log("  (conjugation tables generated for %d words)",
     rows.words.filter((w) => conjugatedWordIds.has(w.id)).length);

@@ -2,7 +2,7 @@
  * SQLite schema for the offline dictionary DB.
  * Mirrors data-model.md §3. Schema version must bump on any DDL change.
  */
-export const SCHEMA_VERSION = 1;
+export const SCHEMA_VERSION = 2;
 
 export const DDL = `
 PRAGMA foreign_keys = ON;
@@ -152,6 +152,22 @@ CREATE TABLE word_sentences (
   sentence_id INTEGER NOT NULL REFERENCES sentences(id),
   PRIMARY KEY (word_id, sentence_id)
 );
+
+-- ============ Enrichment: thesaurus links (derived at build time) ============
+-- Resolved cross-reference graph from senses.related/antonym: one row per
+-- forward link, its reverse (relatedness and antonymy are symmetric), and
+-- 2-hop closure rows (related→related gives synonyms-of-synonyms;
+-- related→antonym gives indirect antonyms). Materialized offline so the
+-- runtime thesaurus is a single indexed query instead of per-xref lookups.
+CREATE TABLE thesaurus_links (
+  kind      TEXT    NOT NULL CHECK (kind IN ('related','antonym')),
+  from_word TEXT    NOT NULL REFERENCES words(id),
+  to_word   TEXT    NOT NULL REFERENCES words(id),
+  to_sense  INTEGER,              -- referenced sense number (1-based); NULL when unspecified / reverse / 2-hop
+  hops      INTEGER NOT NULL DEFAULT 1 CHECK (hops IN (1,2))
+);
+CREATE INDEX idx_thesaurus_from ON thesaurus_links(kind, from_word);
+CREATE INDEX idx_thesaurus_to   ON thesaurus_links(kind, to_word);
 
 CREATE TABLE stroke_order (
   kanji    TEXT PRIMARY KEY REFERENCES kanji(literal),

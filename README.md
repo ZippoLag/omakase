@@ -133,8 +133,10 @@ omakase word 為る --limit 3          # first 3 senses only (also --limit=3)
 ```
 
 Each entry also works as a thesaurus: the top **synonyms** (up to 5) and
-**antonyms** (up to 5) are taken from the entry's JMdict cross-references and
-shown after the senses, when present — common words first.
+**antonyms** (up to 5) are taken from the entry's JMdict cross-references —
+extended at build time with reverse links and 2-hop closure so referenced
+words and indirect relationships show up too — and shown after the senses,
+when present — common words first.
 
 ```
 $ omakase word 食べる

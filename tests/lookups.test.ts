@@ -15,7 +15,7 @@ import { transform } from "../data/build/transform.js";
 import { buildDb } from "../data/build/buildDb.js";
 import { cmdWord, cmdKanji, cmdSearch, loadTags } from "../src/cli.js";
 import { renderSearch } from "../src/format.js";
-import { searchKanjiByReading, searchReadingPrefix } from "../src/lookup.js";
+import { loadWord, searchKanjiByReading, searchReadingPrefix, wordThesaurus } from "../src/lookup.js";
 import type { JmdictWord, Kanjidic2Character, KradfileFile, RadkfileFile } from "../data/build/parse.js";
 
 type DB = InstanceType<typeof Database>;
@@ -178,33 +178,117 @@ test("thesaurus caps synonyms and antonyms at 5 each", () => {
   const db = buildFixtureDb();
   try {
     const tags = loadTags(db);
-    // Give 暑い a 4th sense with 6 related xrefs to existing fixture words.
-    // All six targets are common, so the top-5 by word id are kept and 綺麗
-    // (1591900, the largest id) is dropped.
-    const senseId = (db.prepare("SELECT MAX(id) AS id FROM senses").get() as { id: number }).id + 1;
-    const glossId = (db.prepare("SELECT MAX(id) AS id FROM glosses").get() as { id: number }).id + 1;
-    db.prepare(
-      "INSERT INTO senses (id, word_id, position, part_of_speech, applies_to_kanji, applies_to_kana, field, dialect, misc, info, language_source, related, antonym) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
-    ).run(
-      senseId, "1343460", 4, '["adj-i"]', '["*"]', '["*"]', "[]", "[]", "[]", "[]", "[]",
-      JSON.stringify([["飲む", 1], ["寒い", 1], ["有る", 1], ["食べる", 1], ["食事", 1], ["綺麗", 1]]),
-      "[]",
+    // Give 暑い 6 related links to existing fixture words, as the build would
+    // materialize into thesaurus_links. All six targets are common, so the
+    // top-5 by word id are kept and 綺麗 (1591900, the largest id) is dropped.
+    const link = db.prepare(
+      "INSERT INTO thesaurus_links (kind, from_word, to_word, to_sense, hops) VALUES ('related', '1343460', ?, 1, 1)",
     );
-    db.prepare(
-      "INSERT INTO glosses (id, sense_id, lang, type, gender, text) VALUES (?, ?, 'eng', NULL, NULL, 'synthetic')",
-    ).run(glossId, senseId);
+    for (const target of ["1169870", "1210360", "1296400", "1358280", "1358490", "1591900"]) link.run(target);
+    // And 6 antonym links for 良い (1605820), which has no built-in antonyms.
+    const antLink = db.prepare(
+      "INSERT INTO thesaurus_links (kind, from_word, to_word, to_sense, hops) VALUES ('antonym', '1605820', ?, null, 1)",
+    );
+    for (const target of ["1169870", "1210360", "1296400", "1358280", "1358490", "1591900"]) antLink.run(target);
+
+    const section = (out: string, header: string, next?: string): string[] => {
+      const lines = out.split("\n");
+      const start = lines.indexOf(header) + 1;
+      const end = next ? lines.indexOf(next, start) : lines.length;
+      return end < 0 ? [] : lines.slice(start, end).filter((l) => l.trim() !== "");
+    };
 
     const out = cmdWord(db, "暑い", tags);
     assert.ok(out != null);
-    const lines = out.split("\n");
-    const start = lines.indexOf("Synonyms:") + 1;
-    const end = lines.indexOf("Antonyms:", start);
-    assert.ok(start > 0 && end > start, "has Synonyms and Antonyms sections");
-    const rows = lines.slice(start, end).filter((l) => l.trim() !== "");
-    assert.equal(rows.length, 5);
-    assert.match(rows[0]!, /^  飲む  \[のむ\]/);
-    assert.match(rows[4]!, /^  食事  \[しょくじ\]/);
-    assert.ok(!rows.some((l) => l.includes("綺麗")), "6th synonym is capped off");
+    const synRows = section(out, "Synonyms:", "Antonyms:");
+    assert.equal(synRows.length, 5);
+    assert.match(synRows[0]!, /^  飲む  \[のむ\]/);
+    assert.match(synRows[4]!, /^  食事  \[しょくじ\]/);
+    assert.ok(!synRows.some((l) => l.includes("綺麗")), "6th synonym is capped off");
+
+    const antOut = cmdWord(db, "良い", tags);
+    assert.ok(antOut != null);
+    const antRows = section(antOut, "Antonyms:");
+    assert.equal(antRows.length, 5);
+    assert.match(antRows[0]!, /^  飲む  \[のむ\]/);
+    assert.match(antRows[4]!, /^  食事  \[しょくじ\]/);
+    assert.ok(!antRows.some((l) => l.includes("綺麗")), "6th antonym is capped off");
+  } finally {
+    db.close();
+  }
+});
+
+test("thesaurus_links: forward, reverse and 2-hop closure built offline", () => {
+  const mk = (id: string, common: boolean, text: string, extra: { related?: unknown[]; antonym?: unknown[] } = {}): JmdictWord => ({
+    id,
+    kanji: [],
+    kana: [{ common, text, tags: [], appliesToKanji: ["*"] }],
+    sense: [{
+      partOfSpeech: ["n"],
+      appliesToKanji: ["*"],
+      appliesToKana: ["*"],
+      related: extra.related ?? [],
+      antonym: extra.antonym ?? [],
+      field: [],
+      dialect: [],
+      misc: [],
+      info: [],
+      languageSource: [],
+      gloss: [{ lang: "eng", gender: null, type: null, text: "gloss of " + text }],
+    }],
+  });
+  const words: JmdictWord[] = [
+    mk("10", true, "ア", { related: [["ビ", 1]] }),
+    mk("20", true, "ビ", { related: [["シ", 1]], antonym: [["フ", 1]] }),
+    mk("30", true, "シ", { antonym: [["ド", 1]] }),
+    mk("40", false, "ド"),
+    mk("50", true, "フ"),
+  ];
+  // Real pipeline: xrefs are resolved and closed over before anything is queried.
+  const rows = transform(
+    { words } as never,
+    { characters: [] } as never,
+    { version: "", kanji: {} } as KradfileFile,
+    { version: "", radicals: {} } as RadkfileFile,
+  );
+  const db = buildDb(rows, { tags: "{}" }, { dbPath: ":memory:" });
+  try {
+    const links = db.prepare(
+      "SELECT kind, from_word, to_word, to_sense, hops FROM thesaurus_links ORDER BY rowid",
+    ).all() as { kind: string; from_word: string; to_word: string; to_sense: number | null; hops: number }[];
+    assert.deepEqual(links, [
+      // forward links, in word/sense order, keeping the referenced sense
+      { kind: "related", from_word: "10", to_word: "20", to_sense: 1, hops: 1 },
+      { kind: "related", from_word: "20", to_word: "30", to_sense: 1, hops: 1 },
+      { kind: "antonym", from_word: "20", to_word: "50", to_sense: 1, hops: 1 },
+      { kind: "antonym", from_word: "30", to_word: "40", to_sense: 1, hops: 1 },
+      // reverse edges: one-directional references become bidirectional
+      { kind: "related", from_word: "20", to_word: "10", to_sense: null, hops: 1 },
+      { kind: "related", from_word: "30", to_word: "20", to_sense: null, hops: 1 },
+      { kind: "antonym", from_word: "50", to_word: "20", to_sense: null, hops: 1 },
+      { kind: "antonym", from_word: "40", to_word: "30", to_sense: null, hops: 1 },
+      // 2-hop closure per base row (related → related, then related → antonym;
+      // self-references dropped): ア→シ via ビ, ア→フ via ビ, ビ→ド via シ,
+      // シ→ア via ビ, シ→フ via ビ.
+      { kind: "related", from_word: "10", to_word: "30", to_sense: null, hops: 2 },
+      { kind: "antonym", from_word: "10", to_word: "50", to_sense: null, hops: 2 },
+      { kind: "antonym", from_word: "20", to_word: "40", to_sense: null, hops: 2 },
+      { kind: "related", from_word: "30", to_word: "10", to_sense: null, hops: 2 },
+      { kind: "antonym", from_word: "30", to_word: "50", to_sense: null, hops: 2 },
+    ]);
+
+    // Runtime thesaurus reads the materialized table: forward + reverse +
+    // 2-hop, ranked common-first then word id, capped at 5.
+    const thes = (id: string) => wordThesaurus(db, loadWord(db, id)!);
+    assert.deepEqual(thes("10").synonyms.map((h) => h.word.id), ["20", "30"]);
+    assert.deepEqual(thes("10").antonyms.map((h) => h.word.id), ["50"]);
+    assert.equal(thes("10").antonyms[0]!.gloss, "gloss of フ"); // 2-hop rows fall back to the first gloss
+    assert.deepEqual(thes("20").synonyms.map((h) => h.word.id), ["10", "30"]);
+    assert.deepEqual(thes("20").antonyms.map((h) => h.word.id), ["50", "40"]);
+    // reverse antonym edge: ド (40) never declares an antonym of its own
+    assert.deepEqual(thes("40").antonyms.map((h) => h.word.id), ["30"]);
+    assert.deepEqual(thes("40").synonyms, []);
+    assert.equal(wordThesaurus(db, loadWord(db, "10")!, 1).synonyms.length, 1);
   } finally {
     db.close();
   }

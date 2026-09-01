@@ -174,23 +174,101 @@ def render_examples(word):
         out.append("     %s" % s["english"])
     return "\n".join(out) + "\n"
 
-def render_thesaurus(word, entries):
-    """Thesaurus: up to 5 synonyms (related xrefs) and 5 antonyms (antonym xrefs).
-    Mirrors src/lookup.ts wordThesaurus: resolve each xref tuple to an entry
-    (kanji+reading, or any writing), common words first, capped at 5."""
+def build_thesaurus_links(entries):
+    """Resolve every related/antonym xref tuple into links: forward, reverse,
+    and 2-hop closure rows. Mirrors data/build/transform.ts buildThesaurusLinks
+    (common-first, numeric-min id resolution; forward rows first so the first
+    link to a target keeps its sense-specific gloss)."""
+    by_text = {}
+    kanji_by_text = {}
+    kana_by_text = {}
+    for wid, w in entries.items():
+        for k in w.get("kanji", []):
+            by_text.setdefault(k["text"], []).append(wid)
+            kanji_by_text.setdefault(k["text"], []).append(wid)
+        for k in w.get("kana", []):
+            by_text.setdefault(k["text"], []).append(wid)
+            kana_by_text.setdefault(k["text"], []).append(wid)
+
     def resolve(text, reading):
         if reading:
-            cands = [w for w in entries.values()
-                     if any(k["text"] == text for k in w.get("kanji", []))
-                     and any(r["text"] == reading for r in w.get("kana", []))]
+            kanji_ids = kanji_by_text.get(text, [])
+            kana_ids = set(kana_by_text.get(reading, []))
+            cands = [i for i in kanji_ids if i in kana_ids]
         else:
-            cands = [w for w in entries.values()
-                     if text in [k["text"] for k in w.get("kanji", [])]
-                     or text in [k["text"] for k in w.get("kana", [])]]
+            cands = by_text.get(text, [])
         if not cands:
             return None
-        return min(cands, key=lambda w: (not w.get("common", False), int(w["id"])))
+        return min(cands, key=lambda i: (not entries[i].get("common", False), int(i)))
 
+    links = []  # (kind, from_id, to_id, to_sense, hops)
+    seen = set()
+
+    def push(kind, frm, to, sense, hops):
+        if frm == to:
+            return
+        key = (kind, frm, to)
+        if key in seen:
+            return
+        seen.add(key)
+        links.append((kind, frm, to, sense, hops))
+
+    forward = []
+    for wid in sorted(entries):
+        w = entries[wid]
+        for s in w["sense"]:
+            for kind, xrefs in (("related", s.get("related", [])), ("antonym", s.get("antonym", []))):
+                for x in xrefs:
+                    if not x or not isinstance(x[0], str):
+                        continue
+                    text = x[0]
+                    reading = None
+                    sense = None
+                    if len(x) > 1 and isinstance(x[1], int):
+                        sense = x[1]
+                    elif len(x) > 1 and isinstance(x[1], str):
+                        m = re.search(r"・(\d+)$", x[1])
+                        reading = x[1][:m.start()] if m else x[1]
+                        if m:
+                            sense = int(m.group(1))
+                        if len(x) > 2 and isinstance(x[2], int):
+                            sense = x[2]
+                    target = resolve(text, reading)
+                    if target is None:
+                        continue
+                    forward.append((kind, wid, target, sense))
+
+    for kind, frm, to, sense in forward:
+        push(kind, frm, to, sense, 1)
+    for kind, frm, to, _ in forward:
+        push(kind, to, frm, None, 1)
+
+    rel_edges = {}
+    ant_edges = {}
+    for kind, frm, to, _, hops in links:
+        if hops != 1:
+            continue
+        m = rel_edges if kind == "related" else ant_edges
+        m.setdefault(frm, set()).add(to)
+
+    # exactly one extra hop over a snapshot of the 1-hop related rows
+    base = [(k, f, t) for k, f, t, _, h in links if h == 1 and k == "related"]
+    for _k, frm, to in base:
+        for u in rel_edges.get(to, ()):
+            if u != frm:
+                push("related", frm, u, None, 2)
+        for u in ant_edges.get(to, ()):
+            if u != frm:
+                push("antonym", frm, u, None, 2)
+    return links
+
+THESAURUS_LINKS = build_thesaurus_links(word_entries())
+
+def render_thesaurus(word, entries):
+    """Thesaurus: up to 5 synonyms (related links) and 5 antonyms (antonym links)
+    from the materialized link table (forward + reverse + 2-hop closure),
+    mirroring src/lookup.ts wordThesaurus: first link to a target wins, common
+    words first, capped at 5."""
     def gloss_at(target, sense):
         if sense is not None and 1 <= sense <= len(target["sense"]):
             glosses = [g["text"] for g in target["sense"][sense - 1]["gloss"]]
@@ -198,34 +276,21 @@ def render_thesaurus(word, entries):
                 return "; ".join(glosses)
         return first_gloss(target)
 
-    def collect(field):
+    def collect(kind):
         hits = []
         seen = set()
-        for s in word["sense"]:
-            for x in s.get(field, []):
-                if not x or not isinstance(x[0], str):
-                    continue
-                text = x[0]
-                reading = x[1] if len(x) > 1 and isinstance(x[1], str) else None
-                sense = x[1] if len(x) > 1 and isinstance(x[1], int) else None
-                if reading:
-                    m = re.search(r"・(\d+)$", reading)
-                    if m:
-                        reading = reading[:m.start()]
-                        sense = int(m.group(1))
-                    if len(x) > 2 and isinstance(x[2], int):
-                        sense = x[2]
-                target = resolve(text, reading)
-                if target is None or target["id"] in seen:
-                    continue
-                seen.add(target["id"])
-                hits.append((target, gloss_at(target, sense)))
+        for k, frm, to, sense, _hops in THESAURUS_LINKS:
+            if k != kind or frm != word["id"] or to in seen:
+                continue
+            seen.add(to)
+            target = entries[to]
+            hits.append((target, gloss_at(target, sense)))
         hits.sort(key=lambda h: (not h[0].get("common", False), int(h[0]["id"])))
         return hits[:5]
 
     sections = []
-    for field, header in [("related", "Synonyms:"), ("antonym", "Antonyms:")]:
-        hits = collect(field)
+    for kind, header in [("related", "Synonyms:"), ("antonym", "Antonyms:")]:
+        hits = collect(kind)
         if hits:
             if sections:
                 sections.append("")

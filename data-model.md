@@ -210,6 +210,24 @@ CREATE TABLE word_sentences (
   PRIMARY KEY (word_id, sentence_id)
 );
 
+-- ============ Enrichment: thesaurus links (derived at build time) ============
+-- Resolved cross-reference graph from senses.related/antonym: one row per
+-- forward link, its reverse (relatedness and antonymy are symmetric), and
+-- 2-hop closure rows (related→related gives synonyms-of-synonyms;
+-- related→antonym gives indirect antonyms). Self-links, unresolvable xrefs,
+-- and repeated targets are dropped at build time (first occurrence keeps its
+-- sense-specific gloss). Materialized offline so the runtime thesaurus is a
+-- single indexed query instead of per-xref lookups.
+CREATE TABLE thesaurus_links (
+  kind      TEXT    NOT NULL CHECK (kind IN ('related','antonym')),
+  from_word TEXT    NOT NULL REFERENCES words(id),
+  to_word   TEXT    NOT NULL REFERENCES words(id),
+  to_sense  INTEGER,              -- referenced sense number (1-based); NULL when unspecified / reverse / 2-hop
+  hops      INTEGER NOT NULL DEFAULT 1 CHECK (hops IN (1,2))
+);
+CREATE INDEX idx_thesaurus_from ON thesaurus_links(kind, from_word);
+CREATE INDEX idx_thesaurus_to   ON thesaurus_links(kind, to_word);
+
 -- ============ Enrichment: stroke order (KanjiVG) ============
 -- SVGs stored as files in assets/strokes/; this maps kanji -> file.
 CREATE TABLE stroke_order (
@@ -231,7 +249,7 @@ CREATE VIRTUAL TABLE glosses_fts USING fts5(
 );
 ```
 
-**Row counts (full jmdict-eng build, 2026-08-29):** words 218,577, writings 498,621, senses 253,299, glosses 442,536, kanji 13,108, kanji_readings 37,048, kanji_meanings 48,088, kanji_nanori 3,454, kanji_radicals 54,321, kanji_words 584,238, conjugations 506,348 (34,609 words), sentences 25,980, word_sentences ~45k. All trivially within SQLite's comfort zone.
+**Row counts (full jmdict-eng build, 2026-08-29):** words 218,577, writings 498,621, senses 253,299, glosses 442,536, kanji 13,108, kanji_readings 37,048, kanji_meanings 48,088, kanji_nanori 3,454, kanji_radicals 54,321, kanji_words 584,238, conjugations 506,348 (34,609 words), sentences 25,980, word_sentences ~45k, thesaurus_links (schema v2) 129,673 rows. All trivially within SQLite's comfort zone. The thesaurus_links closure lifts coverage from the raw xrefs: 32,014 → 50,917 words with synonym links and 1,054 → 1,546 words with antonym links (445 antonym pairs come from 2-hop closure, 524 from reverse edges).
 
 ---
 
@@ -250,6 +268,7 @@ CREATE VIRTUAL TABLE glosses_fts USING fts5(
 | Conjugation display | `conjugations WHERE word_id = ?` | `idx_conjugations_word` |
 | Deconjugation (食べて → 食べる) | `conjugations WHERE value = ?` | `idx_conjugations_value` |
 | Example sentences for a word | `word_sentences` → `sentences` | PK on `(word_id, sentence_id)` |
+| Thesaurus (synonyms/antonyms) | `thesaurus_links WHERE kind = ? AND from_word = ?` (forward + reverse + 2-hop already materialized) | `idx_thesaurus_from` |
 | Stroke order for a kanji | `stroke_order WHERE kanji = ?` | PK |
 | Romaji input | `writings.romaji` prefix | `idx_writings_romaji` |
 

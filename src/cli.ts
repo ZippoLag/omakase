@@ -136,7 +136,8 @@ const COMMAND_HELP: Record<Command, string> = {
 
 Look up a dictionary entry for a word, matching on its kanji or kana spelling,
 with a thesaurus: up to 5 related words (synonyms) and up to 5 antonyms,
-taken from the entry's JMdict cross-references.
+taken from the entry's JMdict cross-references, extended with reverse links
+and 2-hop closure materialized at build time.
 
 Arguments:
   <writing>      the word to look up (kanji or kana, e.g. 食べる)
