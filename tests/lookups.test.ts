@@ -15,7 +15,7 @@ import { transform } from "../data/build/transform.js";
 import { buildDb } from "../data/build/buildDb.js";
 import { cmdWord, cmdKanji, cmdSearch, loadTags } from "../src/cli.js";
 import { renderSearch } from "../src/format.js";
-import { loadWord, searchKanjiByReading, searchReadingPrefix, wordThesaurus } from "../src/lookup.js";
+import { glossThesaurus, loadWord, searchKanjiByReading, searchReadingPrefix, wordThesaurus } from "../src/lookup.js";
 import type { JmdictWord, Kanjidic2Character, KradfileFile, RadkfileFile } from "../data/build/parse.js";
 
 type DB = InstanceType<typeof Database>;
@@ -289,6 +289,76 @@ test("thesaurus_links: forward, reverse and 2-hop closure built offline", () => 
     assert.deepEqual(thes("40").antonyms.map((h) => h.word.id), ["30"]);
     assert.deepEqual(thes("40").synonyms, []);
     assert.equal(wordThesaurus(db, loadWord(db, "10")!, 1).synonyms.length, 1);
+  } finally {
+    db.close();
+  }
+});
+
+test("gloss fallback fills words with no links; linked words keep explicit thesaurus", () => {
+  const db = buildFixtureDb();
+  try {
+    const tags = loadTags(db);
+    // 食べる has no cross-reference links -> fallback infers synonyms from glosses.
+    const taberu = cmdWord(db, "食べる", tags);
+    assert.ok(taberu != null);
+    assert.ok(taberu.includes("Synonyms:"), "fallback adds a Synonyms section");
+    assert.ok(taberu.includes("食う"), "食う shares the 'eat' gloss token");
+    // 暑い has an explicit antonym -> no gloss fallback (and no synonym list).
+    const atsui = cmdWord(db, "暑い", tags);
+    assert.ok(atsui != null);
+    assert.ok(!atsui.includes("Synonyms:"), "linked word is not given gloss fallback");
+    assert.ok(atsui.includes("Antonyms:"));
+  } finally {
+    db.close();
+  }
+});
+
+test("gloss-thesaurus fallback: shared tokens, POS filter, exclusion, common tie-break", () => {
+  const mk = (id: string, common: boolean, text: string, pos: string[], glosses: string[], extra: { related?: unknown[] } = {}): JmdictWord => ({
+    id,
+    kanji: [],
+    kana: [{ common, text, tags: [], appliesToKanji: ["*"] }],
+    sense: [{
+      partOfSpeech: pos,
+      appliesToKanji: ["*"],
+      appliesToKana: ["*"],
+      related: extra.related ?? [],
+      antonym: [],
+      field: [],
+      dialect: [],
+      misc: [],
+      info: [],
+      languageSource: [],
+      gloss: glosses.map((g) => ({ lang: "eng", gender: null, type: null, text: g })),
+    }],
+  });
+  const words: JmdictWord[] = [
+    mk("10", true, "ア", ["v1"], ["to eat"], { related: [["ド", 1]] }),
+    mk("20", false, "ビ", ["v1"], ["to eat"]),
+    mk("30", true, "シ", ["n"], ["eat well"]),
+    mk("40", true, "エ", ["v1"], ["to eat", "to drink"]),
+    mk("60", true, "ド", ["v1"], ["to eat"]),
+  ];
+  const rows = transform(
+    { words } as never,
+    { characters: [] } as never,
+    { version: "", kanji: {} } as KradfileFile,
+    { version: "", radicals: {} } as RadkfileFile,
+  );
+  const db = buildDb(rows, { tags: "{}" }, { dbPath: ":memory:" });
+  try {
+    const ids = (hits: { word: { id: string } }[]) => hits.map((h) => h.word.id);
+    // ア has a link (→ ド): explicit thesaurus wins, no gloss fallback.
+    assert.deepEqual(ids(wordThesaurus(db, loadWord(db, "10")!).synonyms), ["60"]);
+    // glossThesaurus directly: skips self, the linked target ド, and noun シ;
+    // ties break common-first then by word id.
+    assert.deepEqual(ids(glossThesaurus(db, loadWord(db, "10")!).synonyms), ["40", "20"]);
+    // ビ has no links: all verbs sharing "eat", common first, id tie-break.
+    assert.deepEqual(ids(wordThesaurus(db, loadWord(db, "20")!).synonyms), []);
+    assert.deepEqual(ids(glossThesaurus(db, loadWord(db, "20")!).synonyms), ["10", "40", "60"]);
+    assert.equal(glossThesaurus(db, loadWord(db, "20")!, 1).synonyms.length, 1);
+    // シ is a noun: no candidates share both a token and a POS class.
+    assert.deepEqual(ids(glossThesaurus(db, loadWord(db, "30")!).synonyms), []);
   } finally {
     db.close();
   }

@@ -269,6 +269,7 @@ CREATE VIRTUAL TABLE glosses_fts USING fts5(
 | Deconjugation (食べて → 食べる) | `conjugations WHERE value = ?` | `idx_conjugations_value` |
 | Example sentences for a word | `word_sentences` → `sentences` | PK on `(word_id, sentence_id)` |
 | Thesaurus (synonyms/antonyms) | `thesaurus_links WHERE kind = ? AND from_word = ?` (forward + reverse + 2-hop already materialized) | `idx_thesaurus_from` |
+| Thesaurus fallback (words with no links) | one quoted `glosses_fts MATCH` per distinctive gloss token, scored ln(1 + N/df), same coarse POS preferred | FTS5 unicode61 |
 | Stroke order for a kanji | `stroke_order WHERE kanji = ?` | PK |
 | Romaji input | `writings.romaji` prefix | `idx_writings_romaji` |
 

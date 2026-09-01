@@ -10,6 +10,7 @@ import { DB_PATH } from "../data/build/config.js";
 import {
   exampleSentences,
   findWordByWriting,
+  glossThesaurus,
   isKanaInput,
   loadKanji,
   radicalChar,
@@ -55,7 +56,12 @@ export function cmdWord(
   const word = findWordByWriting(db, query);
   if (!word) return null;
   const body = renderWordBody(word, tags, limit);
-  const { synonyms, antonyms } = wordThesaurus(db, word);
+  let { synonyms, antonyms } = wordThesaurus(db, word);
+  // Fallback for entries with no cross-reference links at all: related words
+  // inferred from shared distinctive English gloss tokens (glosses_fts).
+  if (synonyms.length === 0 && antonyms.length === 0) {
+    synonyms = glossThesaurus(db, word).synonyms;
+  }
   const thesaurus = renderThesaurus(synonyms, antonyms);
   const examples = renderExamples(exampleSentences(db, word));
   return [body, thesaurus, examples].filter(Boolean).join("\n");
@@ -137,7 +143,9 @@ const COMMAND_HELP: Record<Command, string> = {
 Look up a dictionary entry for a word, matching on its kanji or kana spelling,
 with a thesaurus: up to 5 related words (synonyms) and up to 5 antonyms,
 taken from the entry's JMdict cross-references, extended with reverse links
-and 2-hop closure materialized at build time.
+and 2-hop closure materialized at build time. When an entry has no
+cross-references at all, up to 5 related words are inferred from shared
+English gloss tokens instead.
 
 Arguments:
   <writing>      the word to look up (kanji or kana, e.g. 食べる)

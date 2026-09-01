@@ -17,6 +17,7 @@ Sources of fixture data (see README.md):
   - radical numbers: Kangxi numbering (public domain); full map in real impl
 """
 import json
+import math
 import os
 import re
 
@@ -264,6 +265,115 @@ def build_thesaurus_links(entries):
 
 THESAURUS_LINKS = build_thesaurus_links(word_entries())
 
+# ---- gloss-token thesaurus fallback (mirrors src/lookup.ts) ----------------
+
+# Function words / generic tokens ignored by the fallback (kept in sync with
+# src/lookup.ts GLOSS_STOPWORDS).
+GLOSS_STOPWORDS = set([
+    "a", "an", "the", "and", "or", "but", "nor", "so", "if", "then", "else",
+    "not", "no", "of", "to", "in", "on", "at", "for", "with", "by", "from",
+    "as", "is", "are", "was", "were", "be", "been", "being", "am", "do",
+    "does", "did", "done", "have", "has", "had", "it", "its", "this", "that",
+    "these", "those", "i", "you", "he", "she", "we", "they", "me", "him",
+    "her", "us", "them", "my", "your", "our", "their", "e", "g", "etc",
+    "eg", "ie", "sth", "sb", "some", "something", "someone", "somebody",
+    "anything", "anyone", "thing", "things", "way", "ways", "one", "two",
+    "used", "usu", "often", "also", "such", "very", "more", "most", "when",
+    "what", "which", "who", "whom", "whose", "how", "why", "up", "down",
+    "out", "off", "over", "under", "into", "onto", "about", "after", "before",
+    "between", "during", "through", "until", "against", "among", "along",
+    "lit", "arch", "obs", "dated", "rare", "uk", "sl", "coll", "fam",
+    "derog", "hon", "pol", "vulg", "esp", "first", "last", "kind", "sort",
+])
+
+GLOSS_TOKEN_CAP = 30
+
+
+def gloss_tokens(text):
+    toks = re.findall(r"[a-z]+", text.lower())
+    out = []
+    for t in toks:
+        if len(t) > 1 and t not in GLOSS_STOPWORDS and t not in out:
+            out.append(t)
+    return out
+
+
+def word_tokens(word):
+    out = []
+    for s in word["sense"]:
+        for g in s["gloss"]:
+            for t in gloss_tokens(g["text"]):
+                if t not in out:
+                    out.append(t)
+    return out
+
+
+ENTRY_TOKENS = {wid: set(word_tokens(w)) for wid, w in word_entries().items()}
+
+
+def coarse_class(tag):
+    if tag.startswith("v") or tag == "aux-v":
+        return "verb"
+    if tag.startswith("adj"):
+        return "adj"
+    if re.match(r"^n(?:-|$)", tag) or tag in ("pn", "pr", "num"):
+        return "noun"
+    if tag == "adv":
+        return "adv"
+    return None
+
+
+def coarse_classes(word):
+    out = set()
+    for s in word["sense"]:
+        for tag in s["partOfSpeech"]:
+            c = coarse_class(tag)
+            if c:
+                out.add(c)
+    return out
+
+
+def render_gloss_thesaurus(word, entries):
+    """Fallback thesaurus: shared distinctive gloss tokens over `glosses_fts`
+    (mirrored in-memory here), scored by ln(1 + N/df), same-POS preferred,
+    capped at 5. Mirrors src/lookup.ts glossThesaurus."""
+    tokens = word_tokens(word)
+    if not tokens:
+        return ""
+    capped = tokens[:GLOSS_TOKEN_CAP]
+    wid = word["id"]
+    skip = {wid} | {to for k, frm, to, _, _ in THESAURUS_LINKS if frm == wid}
+    total = len(entries)
+
+    df = {}
+    shared = {}
+    for t in capped:
+        ids = [owid for owid, toks in ENTRY_TOKENS.items() if t in toks]
+        df[t] = len(ids)
+        for owid in ids:
+            if owid in skip:
+                continue
+            shared.setdefault(owid, set()).add(t)
+
+    cands = []
+    source_classes = coarse_classes(word)
+    for owid, toks in shared.items():
+        target_classes = coarse_classes(entries[owid])
+        if source_classes and target_classes and not (source_classes & target_classes):
+            continue
+        score = sum(math.log(1 + total / df[t]) for t in toks)
+        cands.append((owid, score, len(toks)))
+    cands.sort(key=lambda c: (-c[1], -c[2], not entries[c[0]].get("common", False), int(c[0])))
+
+    rows = []
+    for owid, _score, _n in cands[:5]:
+        text, reading, _ = display_header(entries[owid])
+        rows.append("  %s  [%s]  %s" % (text, reading, first_gloss(entries[owid])))
+    if not rows:
+        return ""
+    return "Synonyms:\n" + "\n".join(rows) + "\n"
+
+
 def render_thesaurus(word, entries):
     """Thesaurus: up to 5 synonyms (related links) and 5 antonyms (antonym links)
     from the materialized link table (forward + reverse + 2-hop closure),
@@ -298,7 +408,10 @@ def render_thesaurus(word, entries):
             for target, gloss in hits:
                 text, reading, _ = display_header(target)
                 sections.append("  %s  [%s]  %s" % (text, reading, gloss))
-    return "\n".join(sections) + "\n" if sections else ""
+    if sections:
+        return "\n".join(sections) + "\n"
+    # No cross-reference links at all: infer related words from gloss overlap.
+    return render_gloss_thesaurus(word, entries)
 
 def render_kanji(lit, kanji_data, word_entries):
     m = kanji_data["misc"]

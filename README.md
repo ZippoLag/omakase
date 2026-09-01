@@ -136,7 +136,10 @@ Each entry also works as a thesaurus: the top **synonyms** (up to 5) and
 **antonyms** (up to 5) are taken from the entry's JMdict cross-references —
 extended at build time with reverse links and 2-hop closure so referenced
 words and indirect relationships show up too — and shown after the senses,
-when present — common words first.
+when present — common words first. When an entry has no cross-references at
+all, up to 5 related words are inferred from shared, distinctive English
+gloss tokens (same part of speech preferred), so nearly every common word
+gets a thesaurus.
 
 ```
 $ omakase word 食べる
