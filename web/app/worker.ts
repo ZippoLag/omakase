@@ -64,10 +64,12 @@ async function boot(): Promise<void> {
     db = new WasmDb(raw);
     tags = loadTags(db);
     const n = db.prepare("SELECT COUNT(*) AS n FROM words").get() as { n: number } | undefined;
+    const row = db.prepare("SELECT value FROM meta WHERE key = 'version'").get() as { value: string } | undefined;
     send({
       kind: "ready",
       version: engine.version.libVersion,
       words: typeof n?.n === "number" ? n.n : 0,
+      dict: row?.value ?? null,
     });
   } catch (err) {
     send({ kind: "fatal", message: err instanceof Error ? err.message : String(err) });

@@ -110,10 +110,13 @@ omakase <command> --help    show detailed help for a command
 
 ```
 $ omakase --help
+omakase 0.1.0-build.12 (23 commits, 4677205)
+
 Japanese quick-reference CLI (100% offline)
 
 Usage:
   omakase <command> [args...]
+  omakase --version           show the app and dictionary build versions
   omakase --help              show this overview
   omakase <command> --help    show help for a specific command
 
@@ -259,6 +262,40 @@ Meanings (12):
 | `0`  | Success (including help and empty search) |
 | `1`  | Missing command / cannot open the DB      |
 | `2`  | Unknown command                           |
+
+## Versioning
+
+The app version is a **build stamp** shared by the CLI and the web app:
+`<pkg-version>-build.<N>`, e.g. `0.1.0-build.12`, plus the git provenance it
+was built from (commit count, short sha, commit date). It is generated into
+`src/version.ts` by [`scripts/version.mjs`](scripts/version.mjs) and **bumps
+automatically on every build and every commit**:
+
+- **Per build** — `pnpm run build:db` and `pnpm run web:build` re-stamp first
+  and print the new version as the first line of the build. `build:db` also
+  records the stamp in the database (`meta` table) and `dist/meta.json`, so a
+  dictionary can be traced to the exact build that produced it.
+- **Per commit** — a pre-commit git hook (`.githooks/pre-commit`, installed
+  by `./install.sh` via `core.hooksPath`) re-stamps `src/version.ts` and
+  stages it, so every commit carries a fresh version number.
+
+The counter lives in the gitignored `.build-number` file and never goes
+backwards (it is floored at the last committed stamp), so versions stay
+monotonic across clones and machines. To re-stamp by hand (e.g. after a
+manual edit), run `pnpm run stamp`.
+
+Where it shows up:
+
+```bash
+$ omakase --version
+omakase 0.1.0-build.12 (23 commits, 4677205)
+dictionary build: 0.1.0-build.10 (22 commits, 9f3c2b1)
+```
+
+`omakase --version` (also `-V`) needs no database for the app line; the
+`dictionary build:` line appears when the DB carries a stamp. The web app
+shows the same version in its header badge and status bar (the badge's
+hover tooltip adds the dictionary build).
 
 ## Phone web app (fully offline)
 

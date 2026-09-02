@@ -22,6 +22,7 @@ const PRECACHE = [
   // compiled shared query/render layer
   "./src/lookup.js",
   "./src/format.js",
+  "./src/version.js",
   "./src/kana.js",
   "./src/kangxi.js",
   "./src/conjugation.js",

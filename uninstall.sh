@@ -94,7 +94,18 @@ remove_build() {
   fi
 }
 
-# --- 4. Optionally purge downloaded sources --------------------------------
+# --- 4. Unset the version-bump git hook ------------------------------------
+unset_hooks() {
+  local current
+  current=$(git config core.hooksPath 2>/dev/null || true)
+  if [[ "$current" == ".githooks" ]]; then
+    log "removing git hooks config (core.hooksPath)"
+    git config --unset core.hooksPath
+    echo "removed: core.hooksPath (.githooks)"
+  fi
+}
+
+# --- 5. Optionally purge downloaded sources --------------------------------
 purge_sources() {
   if [[ "$PURGE" != true ]]; then
     log "keeping data/raw/ (dictionary sources cache); use --purge to delete it"
@@ -114,6 +125,7 @@ sources_note=$([ "$PURGE" = true ] && echo removed || echo kept)
 unlink_global
 remove_node_modules
 remove_build
+unset_hooks
 purge_sources
 
 cat <<EOF
@@ -123,5 +135,6 @@ omakase has been uninstalled and cleaned up.
   • node_modules/:  removed
   • dist/ (build):  removed
   • data/raw/ (sources): $sources_note
+  • git hooks:     core.hooksPath unset
 Re-run ./install.sh to build, install, and link everything from scratch.
 EOF

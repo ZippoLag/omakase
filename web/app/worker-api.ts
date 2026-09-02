@@ -19,8 +19,9 @@ export type WorkerMessage =
   | { kind: "status"; text: string }
   /** First import of the dictionary into OPFS is underway. */
   | { kind: "progress"; loadedBytes: number; totalBytes: number }
-  /** Engine + dictionary are open and queries can be served. */
-  | { kind: "ready"; version: string; words: number }
+  /** Engine + dictionary are open and queries can be served. `dict` is the
+   * dictionary's own build stamp from DB meta (null for pre-versioning DBs). */
+  | { kind: "ready"; version: string; words: number; dict: string | null }
   /** Lookup completed: `text` renders the result; `error` (mutually
    * exclusive) carries the CLI-style "no entry" message. */
   | { kind: "result"; id: number; text: string | null; error: string | null }

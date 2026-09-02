@@ -51,6 +51,16 @@ h1 {
   letter-spacing: 0.02em;
 }
 
+/* Build version badge (e.g. v0.1.0-build.12) — set by main.ts from the
+   version stamp shared with the CLI; hover for the full stamp + dictionary. */
+#version {
+  font-size: 11px;
+  font-family: ui-monospace, "SF Mono", Menlo, Consolas, monospace;
+  color: var(--muted);
+  white-space: nowrap;
+  align-self: center;
+}
+
 #status {
   font-size: 12px;
   color: var(--muted);

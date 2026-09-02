@@ -7,6 +7,7 @@
 import { pathToFileURL } from "node:url";
 import Database from "better-sqlite3";
 import { DB_PATH } from "../data/build/config.js";
+import { VERSION_FULL } from "./version.js";
 import {
   displayHeader,
   exampleSentences,
@@ -168,10 +169,13 @@ const COMMANDS = ["word", "kanji", "search"] as const;
 type Command = (typeof COMMANDS)[number];
 
 /** Base overview shown by `omakase --help` (also used for unknown/missing commands). */
-const USAGE = `Japanese quick-reference CLI (100% offline)
+const USAGE = `omakase ${VERSION_FULL}
+
+Japanese quick-reference CLI (100% offline)
 
 Usage:
   omakase <command> [args...]
+  omakase --version           show the app and dictionary build versions
   omakase --help              show this overview
   omakase <command> --help    show help for a specific command
 
@@ -308,6 +312,27 @@ function parseArgs(argv: string[]): { args: string[]; flags: Map<string, string 
 }
 
 /**
+ * `omakase --version`: the app stamp always; the dictionary's own build stamp
+ * from the DB meta when the database exists (readonly, best-effort).
+ */
+function versionLine(dbPath: string): string {
+  const app = `omakase ${VERSION_FULL}`;
+  let dict: string | null = null;
+  try {
+    const db = new Database(dbPath, { readonly: true });
+    try {
+      const row = db.prepare("SELECT value FROM meta WHERE key = 'version'").get() as { value: string } | undefined;
+      if (row) dict = row.value;
+    } finally {
+      db.close();
+    }
+  } catch {
+    /* no database (or unreadable) — app version only */
+  }
+  return dict ? `${app}\ndictionary build: ${dict}` : app;
+}
+
+/**
  * `--max` cap for search sections: a positive integer, defaulting to
  * SEARCH_MAX_DEFAULT. Prints an error (and returns null) when invalid.
  */
@@ -407,6 +432,10 @@ export function main(
   }
   if (command === "--help" || command === "-h") {
     stdout(USAGE);
+    return 0;
+  }
+  if (command === "--version" || command === "-V") {
+    stdout(versionLine(dbPath) + "\n");
     return 0;
   }
   if (!(COMMANDS as readonly string[]).includes(command)) {

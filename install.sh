@@ -194,7 +194,22 @@ link_global() {
   pnpm run link:global
 }
 
-# --- 7. Smoke test -------------------------------------------------------
+# --- 7. Install the version-bump git hook ---------------------------------
+# The pre-commit hook re-stamps src/version.ts so the version number bumps on
+# every commit (scripts/version.mjs). core.hooksPath keeps the hook under
+# version control instead of the non-shared .git/hooks/ directory.
+install_hooks() {
+  log "installing git hooks (core.hooksPath → .githooks)"
+  if git rev-parse --is-inside-work-tree >/dev/null 2>&1; then
+    git config core.hooksPath .githooks
+    chmod +x .githooks/pre-commit 2>/dev/null || true
+    echo "installed: .githooks/pre-commit (bumps the version on every commit)"
+  else
+    echo "not a git checkout — skipping hooks"
+  fi
+}
+
+# --- 8. Smoke test -------------------------------------------------------
 smoke_test() {
   log "verifying install"
   if command -v omakase >/dev/null 2>&1; then
@@ -228,6 +243,7 @@ update_tree
 install_deps
 build_db
 link_global
+install_hooks
 pinned_node=$(cat .nvmrc)
 
 smoke_test
@@ -236,9 +252,10 @@ verify_dev
 cat <<EOF
 
 omakase is installed and up to date.
-  • command:        omakase --help
+  • command:        omakase --help / omakase --version
   • database:       dist/kanji.db
   • nvm default:    $pinned_node
+  • git hooks:      core.hooksPath → .githooks (version bumps per commit)
   • dev checks:     typecheck / validate / test all passed
 Re-run ./install.sh any time to refresh (git pull → install → rebuild DB →
 verify). To cleanly reset first, run ./uninstall.sh (add --purge to also drop

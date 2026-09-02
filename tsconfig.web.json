@@ -20,6 +20,7 @@
     "src/kangxi.ts",
     "src/conjugation.ts",
     "src/format.ts",
-    "src/lookup.ts"
+    "src/lookup.ts",
+    "src/version.ts"
   ]
 }

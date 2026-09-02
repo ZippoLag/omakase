@@ -1,0 +1,15 @@
+#!/usr/bin/env bash
+# omakase pre-commit hook: re-stamp the build version so the version number
+# bumps on every commit (see scripts/version.mjs). Installed by ./install.sh
+# via `git config core.hooksPath .githooks`; the stamped src/version.ts is
+# staged so it travels with the commit.
+set -euo pipefail
+
+ROOT=$(git rev-parse --show-toplevel 2>/dev/null) || exit 0
+cd "$ROOT"
+
+command -v node >/dev/null 2>&1 || exit 0
+[[ -f scripts/version.mjs ]] || exit 0
+
+node scripts/version.mjs >/dev/null
+git add src/version.ts

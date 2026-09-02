@@ -5,6 +5,7 @@
  * (newest-first history).
  */
 import type { Command, WorkerMessage, WorkerRequest } from "./worker-api.js";
+import { VERSION, VERSION_FULL } from "../../src/version.js";
 
 const worker = new Worker(new URL("./worker.js", import.meta.url), { type: "module" });
 
@@ -14,7 +15,12 @@ const input = document.querySelector<HTMLInputElement>("#query")!;
 const maxInput = document.querySelector<HTMLInputElement>("#max")!;
 const buttons = document.querySelectorAll<HTMLButtonElement>("button[data-cmd]");
 const status = document.querySelector<HTMLDivElement>("#status")!;
+const versionBadge = document.querySelector<HTMLSpanElement>("#version")!;
 const panes = document.querySelector<HTMLDivElement>("#panes")!;
+
+// Version badge — the app stamp at boot; the full stamp + dictionary build
+// (from DB meta) once the worker reports ready.
+versionBadge.textContent = `v${VERSION}`;
 
 // ---- state -----------------------------------------------------------------
 /** Queue of lookups waiting for the worker (single in-flight at a time). */
@@ -59,7 +65,8 @@ worker.onmessage = (ev: MessageEvent<WorkerMessage>) => {
     case "ready":
       ready = true;
       document.documentElement.style.setProperty("--progress", "100%");
-      setStatus(`ready — ${msg.words.toLocaleString()} words · SQLite ${msg.version} (100% offline)`);
+      versionBadge.title = `omakase ${VERSION_FULL}${msg.dict ? ` · dictionary build: ${msg.dict}` : ""}`;
+      setStatus(`ready — ${msg.words.toLocaleString()} words · v${VERSION_FULL} · SQLite ${msg.version} (100% offline)`);
       setControlsDisabled(false);
       input.focus();
       drain();

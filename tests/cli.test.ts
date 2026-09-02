@@ -69,7 +69,11 @@ function buildFixtureDbFile(): { dbPath: string; dir: string } {
     .flatMap((f) => loadJson<unknown[]>(join(FIXTURES, "entries", f)));
   const rows = transform({ words } as never, { characters } as never, krad, radk, furigana as never);
   const tags = loadJson<Record<string, string>>(join(FIXTURES, "meta", "tags.json"));
-  const db = buildDb(rows, { tags: JSON.stringify(tags) }, { dbPath });
+  const db = buildDb(rows, {
+    tags: JSON.stringify(tags),
+    // A dictionary build stamp, as build:db writes it — exercised by --version.
+    version: "0.1.0-build.999 (999 commits, abcdef0)",
+  }, { dbPath });
   try {
     // Seed sentences in sorted-filename order (ids 1..n), like lookups.test.ts.
     const insert = db.prepare("INSERT INTO sentences (id, japanese, english) VALUES (?, ?, ?)");
@@ -159,6 +163,30 @@ test("help wins over a missing database", () => {
   const { code, stdout } = run(["word", "--help"]);
   assert.equal(code, 0);
   assert.ok(stdout.includes("omakase word"));
+});
+
+test("--version / -V: prints the app version without opening the DB", () => {
+  for (const flag of ["--version", "-V"]) {
+    const { code, stdout, stderr } = run([flag]); // bogus DB path — must not be opened
+    assert.equal(code, 0, `${flag} exit code`);
+    assert.equal(stderr, "", `${flag} writes no error`);
+    assert.match(stdout, /^omakase \d+\.\d+\.\d+-build\.\d+ \(/, `${flag} stamp line`);
+    assert.ok(stdout.includes("commits"), `${flag} shows git provenance`);
+    assert.equal(stdout.trim().split("\n").length, 1, `${flag} app line only (no DB)`);
+  }
+});
+
+test("--version with a database: app line plus the dictionary build stamp", () => {
+  const { dbPath, dir } = buildFixtureDbFile();
+  try {
+    const { code, stdout, stderr } = runOnDb(["--version"], dbPath);
+    assert.equal(code, 0);
+    assert.equal(stderr, "");
+    assert.match(stdout, /^omakase \d+\.\d+\.\d+-build\.\d+/);
+    assert.ok(stdout.includes("dictionary build: 0.1.0-build.999 (999 commits, abcdef0)"));
+  } finally {
+    rmSync(dir, { recursive: true, force: true });
+  }
 });
 
 // ---- end-to-end: real commands against an on-disk fixture DB ---------------

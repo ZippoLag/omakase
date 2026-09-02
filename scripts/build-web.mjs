@@ -19,6 +19,18 @@ import { fileURLToPath } from "node:url";
 const root = resolve(dirname(fileURLToPath(import.meta.url)), "..");
 const require = createRequire(import.meta.url);
 
+// Stamp this build first (bump the version counter, regenerate src/version.ts)
+// so the emitted app bundle carries the new version — its output is printed
+// straight through (the version is the first line of the build).
+const stamp = spawnSync(process.execPath, [join(root, "scripts", "version.mjs")], {
+  cwd: root,
+  stdio: "inherit",
+});
+if (stamp.status !== 0) {
+  console.error("version stamping failed");
+  process.exit(stamp.status ?? 1);
+}
+
 const tscBin = require.resolve("typescript/bin/tsc");
 const run = spawnSync(process.execPath, [tscBin, "-p", join(root, "tsconfig.web.json")], {
   cwd: root,

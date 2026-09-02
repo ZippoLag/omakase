@@ -9,6 +9,9 @@
  */
 import { mkdirSync, writeFileSync } from "node:fs";
 import { statSync } from "node:fs";
+import { spawnSync } from "node:child_process";
+import { dirname, join, resolve } from "node:path";
+import { fileURLToPath } from "node:url";
 import { fetchAll } from "./fetch.js";
 import { loadFurigana, loadJmdict, loadKanjidic2, loadKradfile, loadRadkfile, RELEASE_TAG } from "./parse.js";
 import { transform } from "./transform.js";
@@ -23,9 +26,34 @@ import {
   FURIGANA_SOURCE,
 } from "./config.js";
 
+const ROOT = resolve(dirname(fileURLToPath(import.meta.url)), "../..");
+
+/**
+ * Stamp this build: bump the version counter (scripts/version.mjs) and report
+ * the new version before anything else, so the DB records this build's stamp.
+ * Degrades gracefully (version "unknown") if stamping fails — the dictionary
+ * itself is still built.
+ */
+function stampBuild(): Record<string, string | number> {
+  const r = spawnSync(process.execPath, [join(ROOT, "scripts", "version.mjs"), "--json"], {
+    cwd: ROOT,
+    encoding: "utf8",
+  });
+  if (r.status === 0 && r.stdout) {
+    try {
+      const v = JSON.parse(r.stdout) as Record<string, string | number>;
+      console.log("building %s", v.line as string);
+      return v;
+    } catch { /* fall through */ }
+  }
+  console.log("building omakase (unknown version — stamping failed)");
+  return {};
+}
+
 const force = process.argv.includes("--force");
 
 async function main(): Promise<void> {
+  const v = stampBuild();
   console.log("fetching sources (release %s)%s", RELEASE_TAG, force ? " [force]" : "");
   const blobs = await fetchAll(force);
 
@@ -48,6 +76,13 @@ async function main(): Promise<void> {
     dict_date: jmdict.dictDate,
     kanjidic_db: kanjidic2.databaseVersion,
     tags: JSON.stringify(jmdict.tags), // POS tag -> description map (CLI display)
+    // Version stamp of this build (`omakase --version` and the web ready
+    // status read the `version` key; the rest is structured provenance).
+    version: String(v.versionFull ?? "unknown"),
+    app_version: String(v.version ?? ""),
+    build: String(v.build ?? ""),
+    commits: String(v.commits ?? ""),
+    commit: String(v.commit ?? ""),
   });
   db.close();
   const summary = summarize(rows, statSync(DB_PATH).size);
@@ -59,6 +94,9 @@ async function main(): Promise<void> {
     dictDate: jmdict.dictDate,
     kanjidicDatabaseVersion: kanjidic2.databaseVersion,
     furigana: { source: FURIGANA_SOURCE, release: FURIGANA_RELEASE },
+    version: v.versionFull ?? null,
+    build: v.build ?? null,
+    commit: v.commit ?? null,
     builtAt: new Date().toISOString(),
     counts: summary,
     assets: ASSETS.map((a) => ({ name: a.name, sha256: a.sha256 })),

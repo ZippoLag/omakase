@@ -132,6 +132,20 @@ async function main() {
     );
     check("engine ready, dictionary in OPFS", statusText.includes("ready"), statusText);
     check("word count reported", /ready — \d/.test(statusText), statusText.split("ready")[1]?.trim());
+    check(
+      "status reports the app version (v<ver>-build.<n>)",
+      /v\d+\.\d+\.\d+-build\.\d+/.test(statusText),
+      statusText.split("ready")[1]?.trim(),
+    );
+    const badge = await page.evaluate(() => {
+      const el = document.querySelector("#version");
+      return { text: el?.textContent ?? "", title: el?.getAttribute("title") ?? "" };
+    });
+    check(
+      "header badge shows the app version and (on ready) the dictionary stamp",
+      /^v\d+\.\d+\.\d+-build\.\d+/.test(badge.text) && badge.title.includes("dictionary build:"),
+      JSON.stringify(badge),
+    );
 
     // default command highlight is search (before anything is clicked)
     const hl = await page.evaluate(() => {
