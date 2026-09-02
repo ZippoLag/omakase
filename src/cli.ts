@@ -13,6 +13,7 @@ import {
   findWordByWriting,
   glossThesaurus,
   isKanaInput,
+  kanjiLiterals,
   loadKanji,
   radicalChar,
   searchKanjiByReading,
@@ -20,6 +21,7 @@ import {
   searchReadingPrefix,
   suggestReading,
   wordThesaurus,
+  wordsContainingKanji,
 } from "./lookup.js";
 import type { SearchHit } from "./lookup.js";
 import {
@@ -29,6 +31,8 @@ import {
   renderWordBody,
   renderKanji,
   renderKanjiReadingSearch,
+  renderKanjiWords,
+  KANJI_MAX_DEFAULT,
   SEARCH_MAX_DEFAULT,
 } from "./format.js";
 
@@ -71,21 +75,40 @@ export function cmdWord(
 }
 
 /**
- * `kanji <query>` — kanji page when the query is a literal, otherwise a
- * kanji-by-reading search (kana or romaji prefix on on/kun/nanori readings).
+ * `kanji <query> [-max N]` — when the query is one or more kanji literals:
+ *   - a multi-kanji query first lists words containing the characters
+ *     (all before subsets, ranked), capped at `max`;
+ *   - then renders one page per character (`kanji 制作者` ≡ `kanji 制` `kanji 作`
+ *     `kanji 者`), each page's compounds capped at `max`;
+ * otherwise fall back to the kanji-by-reading search (kana or romaji prefix
+ * on on/kun/nanori readings), also capped at `max`.
  */
-export function cmdKanji(db: DB, query: string): string | null {
-  const kanji = loadKanji(db, query);
-  if (kanji) {
-    let radicalDisplay: string | null = null;
-    if (kanji.classicalRadical != null) {
-      radicalDisplay = `${radicalChar(db, kanji.classicalRadical) ?? "?"} (${kanji.classicalRadical})`;
+export function cmdKanji(db: DB, query: string, max: number = KANJI_MAX_DEFAULT): string | null {
+  const literals = kanjiLiterals(db, query);
+  if (literals) {
+    const parts: string[] = [];
+    if (literals.length > 1) {
+      const words = wordsContainingKanji(db, literals, max);
+      const wordsText = renderKanjiWords(words.hits, words.total, max);
+      if (wordsText !== "") parts.push(wordsText);
     }
-    return renderKanji(kanji, radicalDisplay);
+    for (const literal of literals) {
+      const kanji = loadKanji(db, literal, max);
+      if (!kanji) return null; // every literal passed kanjiLiterals, so unreachable
+      let radicalDisplay: string | null = null;
+      if (kanji.classicalRadical != null) {
+        radicalDisplay = `${radicalChar(db, kanji.classicalRadical) ?? "?"} (${kanji.classicalRadical})`;
+      }
+      parts.push(renderKanji(kanji, radicalDisplay));
+    }
+    // No separator: every part ends with a newline, so the pages are
+    // byte-identical to running `kanji 制` + `kanji 作` + `kanji 者` back to
+    // back, with the ranked Words section slotted in front.
+    return parts.join("");
   }
   const hits = searchKanjiByReading(db, query);
   if (hits.length === 0) return null;
-  return renderKanjiReadingSearch(query, hits);
+  return renderKanjiReadingSearch(query, hits, max);
 }
 
 /**
@@ -184,18 +207,29 @@ Examples:
   omakase word 為る --limit 3
 `,
   kanji: `Usage:
-  omakase kanji <query>
+  omakase kanji <query> [-max N]
 
-Render a kanji page (stroke count, grade/JLPT/frequency, classical radical,
-on/kun/nanori readings, meanings, compounds) when <query> is a kanji
-literal. Otherwise <query> is a reading: kanji whose on/kun/nanori readings
-start with it are listed (kana or romaji, dot separators ignored).
+When <query> is one or more kanji literals, render a kanji page per character
+(stroke count, grade/JLPT/frequency, classical radical, on/kun/nanori
+readings, meanings, compounds — the compounds capped at N). A multi-kanji
+query ("kanji 制作者" ≡ "kanji 制" "kanji 作" "kanji 者") first lists the
+words containing the characters — all of them before subsets, ranked by how
+many are matched — capped at N, before the per-kanji pages. Otherwise
+<query> is a reading: kanji whose on/kun/nanori readings start with it are
+listed (kana or romaji, dot separators ignored), capped at N.
 
 Arguments:
-  <query>        a kanji literal (e.g. 食), kana, or romaji reading
+  <query>        kanji literal(s) (e.g. 食, 制作者), kana, or romaji reading
+
+Options:
+  -max N / --max N   cap words / compounds / reading results at N rows
+                     (default ${KANJI_MAX_DEFAULT}; also accepts --max=N or
+                     -max N)
 
 Examples:
   omakase kanji 食
+  omakase kanji 制作者
+  omakase kanji 制作者 --max 5
   omakase kanji まか
   omakase kanji makase
 `,
@@ -317,7 +351,9 @@ export function runCommand(
         stderr("error: kanji requires a literal\n");
         return "";
       }
-      const out = cmdKanji(db, query);
+      const max = searchMax(flags, stderr);
+      if (max === null) return "";
+      const out = cmdKanji(db, query, max);
       if (!out) {
         stderr(`no kanji "${query}"\n`);
         return "";

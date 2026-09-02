@@ -88,9 +88,15 @@ h1 {
   transition: width 0.3s ease;
 }
 
+#inputrow {
+  display: flex;
+  gap: 8px;
+  align-items: stretch;
+}
+
 #query {
-  display: block;
-  width: 100%;
+  flex: 1 1 auto;
+  min-width: 0; /* let the max box keep its 10% without pushing the row */
   font: inherit;
   font-size: 18px;
   padding: 12px 14px;
@@ -103,8 +109,33 @@ h1 {
   appearance: none;
 }
 
-#query:focus { border-color: var(--accent); }
-#query:disabled { opacity: 0.55; }
+/* The max box: a small integer stepper on the same line as the query input. */
+#max {
+  flex: 0 0 10%;
+  width: 10%;
+  min-width: 52px;
+  font: inherit;
+  font-size: 16px;
+  text-align: center;
+  padding: 12px 4px;
+  border: 1px solid var(--line);
+  border-radius: 10px;
+  background: var(--bg-pane);
+  color: var(--ink);
+  outline: none;
+  -webkit-appearance: none;
+  appearance: none;
+  -moz-appearance: textfield;
+}
+
+#max::-webkit-outer-spin-button,
+#max::-webkit-inner-spin-button {
+  -webkit-appearance: inner-spin-button;
+  opacity: 1;
+}
+
+#query:focus, #max:focus { border-color: var(--accent); }
+#query:disabled, #max:disabled { opacity: 0.55; }
 
 #buttons {
   display: grid;

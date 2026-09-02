@@ -172,14 +172,22 @@ Antonyms:
 ### `kanji` — kanji pages and reading search
 
 ```bash
-omakase kanji 食        # page for a literal
-omakase kanji まか      # kanji whose readings start with まか
-omakase kanji makase    # same, by romaji reading
+omakase kanji 食              # page for a literal
+omakase kanji 制作者          # words containing 制・作・者, then a page each
+omakase kanji 制作者 --max 5 # smaller word / compound lists
+omakase kanji まか            # kanji whose readings start with まか
+omakase kanji makase          # same, by romaji reading
 ```
 
-A single kanji literal renders the full page (stroke count, grade/JLPT/
-frequency, classical radical, on/kun/nanori readings, meanings, and compounds
-containing the character). Any other query is treated as a **reading**: kanji
+Every list in `kanji` output is capped at **30 rows** by default; raise or
+lower it with `-max N` (also `--max N` / `--max=N`, like `search`). One or
+more kanji literals render a full page per character: stroke count,
+grade/JLPT/frequency, classical radical, on/kun/nanori readings, meanings,
+and compounds containing the character (capped at N). A multi-kanji query
+first lists **words containing the characters** — those with all of them
+first, then subsets ranked by how many they match, common words first (also
+capped at N) — followed by one page per character (`kanji 制作者` ≡ `kanji 制`
+`kanji 作` `kanji 者`). Any other query is treated as a **reading**: kanji
 whose on/kun/nanori readings start with it are listed — kana or romaji, with
 the dot separators in kun readings (e.g. まか.せる) ignored:
 
@@ -264,8 +272,10 @@ below the buttons, pushing older results down.
 
 The lookups reuse the exact query + rendering code as the CLI
 (`src/lookup.ts` / `src/format.ts`), so panes show the same output the CLI
-prints. Nothing is published anywhere: you serve the app from your own
-computer over your home Wi-Fi, once, to install it.
+prints. The row-cap input next to the search box (a small integer box,
+default 30) plays the role of the CLI's `-max`. Nothing is published
+anywhere: you serve the app from your own computer over your home Wi-Fi,
+once, to install it.
 
 ### Build & run once on your computer
 

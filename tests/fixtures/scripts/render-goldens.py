@@ -127,6 +127,34 @@ def compound_rows(entries):
 
 COMPOUNDS = compound_rows(word_entries())
 
+def render_kanji_words(lits, entries, max_n=30):
+    """Words containing any of `lits`, ranked: most distinct matched kanji
+    first, then common, then entry id — mirrors src/lookup.ts
+    wordsContainingKanji + src/format.ts renderKanjiWords."""
+    cand = {}
+    for wid in sorted(entries, key=lambda i: int(i)):
+        w = entries[wid]
+        best = None
+        for k in w.get("kanji", []):
+            matched = len({ch for ch in k["text"] if ch in lits})
+            if matched and (best is None or matched > best[2]):
+                best = (wid, k["text"], matched, furigana(k["text"]), first_gloss(w))
+        if best:
+            cand[wid] = best
+    ranked = sorted(
+        cand.values(),
+        key=lambda r: (-r[2], not entries[r[0]].get("common", False), int(r[0])),
+    )
+    shown = ranked[:max_n]
+    if not shown:
+        return ""
+    lines = ["Words (%d):" % len(cand)]
+    for _wid, writing, _matched, fg, gloss in shown:
+        lines.append("  %s  [%s]  %s" % (writing, fg, gloss))
+    if len(cand) > len(shown):
+        lines.append("  … and %d more" % (len(cand) - len(shown)))
+    return "\n".join(lines) + "\n"
+
 # ---- renderers --------------------------------------------------------------
 
 def render_word(word, limit=None):
@@ -413,7 +441,7 @@ def render_thesaurus(word, entries):
     # No cross-reference links at all: infer related words from gloss overlap.
     return render_gloss_thesaurus(word, entries)
 
-def render_kanji(lit, kanji_data, word_entries):
+def render_kanji(lit, kanji_data, word_entries, max_compounds=30):
     m = kanji_data["misc"]
     rm = kanji_data["readingMeaning"]
     on = [r["value"] for g in rm["groups"] for r in g["readings"] if r["type"] == "ja_on"]
@@ -447,8 +475,10 @@ def render_kanji(lit, kanji_data, word_entries):
     comps = COMPOUNDS.get(lit, [])
     if comps:
         lines.append("Compounds:")
-        for wid, writing, fg, gloss in comps:
+        for wid, writing, fg, gloss in comps[:max_compounds]:
             lines.append("  %s  [%s]  %s" % (writing, fg, gloss))
+        if len(comps) > max_compounds:
+            lines.append("  … and %d more" % (len(comps) - max_compounds))
     return "\n".join(lines) + "\n"
 
 # Default per-section row cap for `search` (mirrors format.ts SEARCH_MAX_DEFAULT).
@@ -553,6 +583,14 @@ def main():
     for lit, name in [("食", "kanji-shoku"), ("水", "kanji-mizu"), ("喰", "kanji-kuu")]:
         data = load(os.path.join(E, "kanjidic2-%s.json" % {"食": "shoku", "水": "mizu", "喰": "kuu"}[lit]))
         write(name + ".txt", render_kanji(lit, data, entries))
+    # Multi-kanji: a ranked Words section, then one page per character
+    # back-to-back (each page ends with a newline). Mirrors cmdKanji /
+    # runKanji for `kanji 飲食`.
+    inshoku = render_kanji_words(["飲", "食"], entries) + "".join(
+        render_kanji(lit, load(os.path.join(E, "kanjidic2-%s.json" % name)), entries)
+        for lit, name in [("飲", "nomu"), ("食", "shoku")]
+    )
+    write("kanji-inshoku.txt", inshoku)
 
     # --- kanji-by-reading search (mirrors src/lookup.ts searchKanjiByReading) ---
     KANJI = {}

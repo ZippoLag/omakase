@@ -19,9 +19,14 @@
   </header>
 
   <form id="lookup" autocomplete="off">
-    <input id="query" type="search" placeholder="e.g. 食べる, 食, eat, taberu"
-           autocapitalize="none" autocorrect="off" spellcheck="false"
-           enterkeyhint="go" aria-label="Look up">
+    <div id="inputrow">
+      <input id="query" type="search" placeholder="e.g. 食べる, 食, eat, taberu"
+             autocapitalize="none" autocorrect="off" spellcheck="false"
+             enterkeyhint="go" aria-label="Look up">
+      <input id="max" type="number" inputmode="numeric" min="1" step="1" value="30"
+             aria-label="Max results" title="Max results per list"
+             enterkeyhint="go">
+    </div>
     <div id="buttons">
       <button type="button" data-cmd="kanji">kanji</button>
       <button type="button" data-cmd="word">word</button>

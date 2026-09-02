@@ -11,18 +11,22 @@ import {
   findWordByWriting,
   glossThesaurus,
   isKanaInput,
+  kanjiLiterals,
   loadKanji,
   radicalChar,
   searchKanjiByReading,
+  wordsContainingKanji,
   searchMeanings,
   searchReadingPrefix,
   suggestReading,
   wordThesaurus,
 } from "../../src/lookup.js";
 import {
+  KANJI_MAX_DEFAULT,
   renderExamples,
   renderKanji,
   renderKanjiReadingSearch,
+  renderKanjiWords,
   renderSearch,
   renderThesaurus,
   renderWordBody,
@@ -58,23 +62,40 @@ export function runWord(db: DbLike, query: string, tags: Record<string, string>)
   return [body, thesaurus, examples].filter(Boolean).join("\n");
 }
 
-/** `kanji <query>` — kanji page for a literal, else a kanji-by-reading search. */
-export function runKanji(db: DbLike, query: string): string | null {
-  const kanji = loadKanji(db, query);
-  if (kanji) {
-    let radicalDisplay: string | null = null;
-    if (kanji.classicalRadical != null) {
-      radicalDisplay = `${radicalChar(db, kanji.classicalRadical) ?? "?"} (${kanji.classicalRadical})`;
+/**
+ * `kanji <query> [-max N]` — mirrors cli.ts's cmdKanji: a multi-kanji query
+ * first lists words containing the characters (ranked, capped at `max`),
+ * then one page per kanji literal with compounds capped at `max`; kana /
+ * romaji queries go through the kanji-by-reading search, capped at `max`.
+ */
+export function runKanji(db: DbLike, query: string, max: number = KANJI_MAX_DEFAULT): string | null {
+  const literals = kanjiLiterals(db, query);
+  if (literals) {
+    const parts: string[] = [];
+    if (literals.length > 1) {
+      const words = wordsContainingKanji(db, literals, max);
+      const wordsText = renderKanjiWords(words.hits, words.total, max);
+      if (wordsText !== "") parts.push(wordsText);
     }
-    return renderKanji(kanji, radicalDisplay);
+    for (const literal of literals) {
+      const kanji = loadKanji(db, literal, max);
+      if (!kanji) return null; // every literal passed kanjiLiterals, so unreachable
+      let radicalDisplay: string | null = null;
+      if (kanji.classicalRadical != null) {
+        radicalDisplay = `${radicalChar(db, kanji.classicalRadical) ?? "?"} (${kanji.classicalRadical})`;
+      }
+      parts.push(renderKanji(kanji, radicalDisplay));
+    }
+    // No separator: every part ends with a newline (see cli.ts cmdKanji).
+    return parts.join("");
   }
   const hits = searchKanjiByReading(db, query);
   if (hits.length === 0) return null;
-  return renderKanjiReadingSearch(query, hits);
+  return renderKanjiReadingSearch(query, hits, max);
 }
 
 /** `search <query>` — ranked readings/meanings/kanji sections + did-you-mean hint. */
-export function runSearch(db: DbLike, query: string): string {
+export function runSearch(db: DbLike, query: string, max: number = 30): string {
   const trimmed = query.trim();
   const readings = searchReadingPrefix(db, trimmed);
   const meanings = isAscii(trimmed) ? searchMeanings(db, trimmed) : [];
@@ -85,7 +106,7 @@ export function runSearch(db: DbLike, query: string): string {
   const kanjiHits = isKanaInput(trimmed) || isAscii(trimmed)
     ? searchKanjiByReading(db, trimmed)
     : [];
-  const out = renderSearch(trimmed, shownReadings, meanings, kanjiHits, { color: false });
+  const out = renderSearch(trimmed, shownReadings, meanings, kanjiHits, { max, color: false });
   if (shownReadings.length === 0 && meanings.length === 0 && kanjiHits.length === 0 && isAscii(trimmed)) {
     return out + webSearchHint(db, trimmed);
   }

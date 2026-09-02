@@ -119,6 +119,22 @@ export function rubyFor(word: LoadedWord, writing: string): string {
 
 // ---- kanji ----------------------------------------------------------------
 
+/**
+ * When every character of `query` is a kanji with an entry in the kanji
+ * table, return those characters in order; otherwise return null. Lets
+ * `kanji 制作者` behave like `kanji 制` + `kanji 作` + `kanji 者` — one page
+ * per character — while leaving kana/romaji (reading-search) queries alone.
+ */
+export function kanjiLiterals(db: DB, query: string): string[] | null {
+  const chars = [...query];
+  if (chars.length === 0) return null;
+  const rows = db.prepare(
+    `SELECT literal FROM kanji WHERE literal IN (${chars.map(() => "?").join(",")})`,
+  ).all(...chars) as { literal: string }[];
+  const found = new Set(rows.map((r) => r.literal));
+  return chars.every((c) => found.has(c)) ? chars : null;
+}
+
 export interface LoadedKanji {
   literal: string;
   strokeCount: number | null;
@@ -131,6 +147,8 @@ export interface LoadedKanji {
   nanori: string[];
   meanings: string[];
   compounds: { wordId: string; writing: string; ruby: string; gloss: string }[];
+  /** Distinct words containing this kanji, before the compounds cap. */
+  compoundTotal: number;
 }
 
 function firstGlossById(db: DB, id: string): string {
@@ -142,8 +160,12 @@ function firstGlossById(db: DB, id: string): string {
   return "";
 }
 
-/** Load a kanji page (readings, meanings, nanori, compounds) by literal. */
-export function loadKanji(db: DB, literal: string): LoadedKanji | null {
+/**
+ * Load a kanji page (readings, meanings, nanori, compounds) by literal.
+ * `maxCompounds` caps the compounds list (the page still reports how many
+ * compounds exist via LoadedKanji.compoundTotal).
+ */
+export function loadKanji(db: DB, literal: string, maxCompounds?: number): LoadedKanji | null {
   const k = db.prepare(
     "SELECT literal, stroke_count, grade, frequency, jlpt_level, classical_radical FROM kanji WHERE literal = ?",
   ).get(literal) as LoadedKanjiRow | undefined;
@@ -162,7 +184,11 @@ export function loadKanji(db: DB, literal: string): LoadedKanji | null {
     ORDER BY kw.word_id, kw.writing_id
   `).all(literal) as { word_id: string; writing_id: number; writing: string }[];
 
-  const compounds = rows.map((r) => {
+  // Rows are in word-id order; cap the list before loading words (each load
+  // is a handful of queries) and report the uncapped total for the note.
+  const compoundTotal = rows.length;
+  const shown = maxCompounds === undefined ? rows : rows.slice(0, maxCompounds);
+  const compounds = shown.map((r) => {
     const word = loadWord(db, r.word_id);
     return {
       wordId: r.word_id,
@@ -184,7 +210,86 @@ export function loadKanji(db: DB, literal: string): LoadedKanji | null {
     nanori,
     meanings,
     compounds,
+    compoundTotal,
   };
+}
+
+// ---- words containing a set of kanji ----------------------------------------
+
+export interface KanjiWordHit {
+  word: LoadedWord;
+  /** the writing that carries the matched kanji (with the most of them). */
+  writing: string;
+  /** ruby-marked form of `writing` (furigana table, falling back to bare). */
+  ruby: string;
+  /** first English gloss across all senses. */
+  gloss: string;
+  /** how many of the requested kanji appear in this word (1..n). */
+  matched: number;
+}
+
+/**
+ * Words whose writings contain any of `literals`, ranked most-likely-first:
+ * the most distinct requested kanji first (all before subsets), then common
+ * words, then entry id — capped at `max` shown, with the total reported.
+ * One hit per word, showing the writing that carries the most requested
+ * kanji, with furigana and first gloss (compounds-style row).
+ */
+export function wordsContainingKanji(db: DB, literals: string[], max: number): { hits: KanjiWordHit[]; total: number } {
+  const ph = literals.map(() => "?").join(",");
+  const totalRow = db.prepare(
+    `SELECT COUNT(DISTINCT word_id) AS n FROM kanji_words WHERE kanji IN (${ph})`,
+  ).get(...literals) as { n: number } | undefined;
+  const total = typeof totalRow?.n === "number" ? totalRow.n : 0;
+  if (total === 0) return { hits: [], total: 0 };
+
+  const raw = db.prepare(`
+    SELECT kw.word_id, w.text AS writing, COUNT(DISTINCT kw.kanji) AS matched
+    FROM kanji_words kw
+    JOIN writings w ON w.id = kw.writing_id
+    WHERE kw.kanji IN (${ph})
+    GROUP BY kw.word_id, kw.writing_id
+  `).all(...literals) as { word_id: string; writing: string; matched: number }[];
+
+  // One hit per word: keep the writing that carries the most requested kanji.
+  const best = new Map<string, { writing: string; matched: number }>();
+  for (const r of raw) {
+    const cur = best.get(r.word_id);
+    if (!cur || r.matched > cur.matched) best.set(r.word_id, { writing: r.writing, matched: r.matched });
+  }
+
+  const ids = [...best.keys()];
+  // common flag for the tie-break, fetched in chunks under SQLite's variable limit.
+  const commonById = new Map<string, boolean>();
+  for (let i = 0; i < ids.length; i += 900) {
+    const batch = ids.slice(i, i + 900);
+    const rows = db.prepare(
+      `SELECT id, common FROM words WHERE id IN (${batch.map(() => "?").join(",")})`,
+    ).all(...batch) as { id: string; common: number }[];
+    for (const r of rows) commonById.set(r.id, r.common === 1);
+  }
+
+  const ranked = ids
+    .map((id) => ({ id, writing: best.get(id)!.writing, matched: best.get(id)!.matched }))
+    .sort((a, b) =>
+      b.matched - a.matched ||
+      Number(commonById.get(b.id)) - Number(commonById.get(a.id)) ||
+      a.id.localeCompare(b.id, undefined, { numeric: true }),
+    );
+
+  const hits: KanjiWordHit[] = [];
+  for (const c of ranked.slice(0, max)) {
+    const word = loadWord(db, c.id);
+    if (!word) continue;
+    hits.push({
+      word,
+      writing: c.writing,
+      ruby: word.furigana.get(c.writing) ?? c.writing,
+      gloss: firstGloss(word),
+      matched: c.matched,
+    });
+  }
+  return { hits, total };
 }
 
 interface LoadedKanjiRow {

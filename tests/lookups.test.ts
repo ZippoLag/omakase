@@ -14,8 +14,16 @@ import Database from "better-sqlite3";
 import { transform } from "../data/build/transform.js";
 import { buildDb } from "../data/build/buildDb.js";
 import { cmdWord, cmdKanji, cmdSearch, loadTags } from "../src/cli.js";
-import { renderSearch } from "../src/format.js";
-import { exampleSentences, glossThesaurus, loadWord, searchKanjiByReading, searchReadingPrefix, wordThesaurus } from "../src/lookup.js";
+import { renderKanjiWords, renderSearch } from "../src/format.js";
+import {
+  exampleSentences,
+  glossThesaurus,
+  loadWord,
+  searchKanjiByReading,
+  searchReadingPrefix,
+  wordThesaurus,
+  wordsContainingKanji,
+} from "../src/lookup.js";
 import type { LoadedWord } from "../src/lookup.js";
 import type { JmdictWord, Kanjidic2Character, KradfileFile, RadkfileFile } from "../data/build/parse.js";
 
@@ -100,6 +108,8 @@ const KANJI_GOLDENS: [string, string][] = [
   ["kanji-shoku.txt", "食"],
   ["kanji-mizu.txt", "水"],
   ["kanji-kuu.txt", "喰"],
+  // Multi-kanji: one page per character, blank line between pages.
+  ["kanji-inshoku.txt", "飲食"],
 ];
 
 const SEARCH_GOLDENS: [string, string][] = [
@@ -361,6 +371,61 @@ test("gloss-thesaurus fallback: shared tokens, POS filter, exclusion, common tie
     assert.equal(glossThesaurus(db, loadWord(db, "20")!, 1).synonyms.length, 1);
     // シ is a noun: no candidates share both a token and a POS class.
     assert.deepEqual(ids(glossThesaurus(db, loadWord(db, "30")!).synonyms), []);
+  } finally {
+    db.close();
+  }
+});
+
+test("kanji compound ≡ one call per character, with a ranked Words section", () => {
+  const db = buildFixtureDb();
+  try {
+    const single = (lit: string): string => cmdKanji(db, lit)!;
+    // 飲食: a ranked Words section (words containing 飲 or 食, most matched
+    // first) precedes the two pages; the pages are byte-identical to calling
+    // kanji once per character.
+    const words = wordsContainingKanji(db, ["飲", "食"], 30);
+    const wordsText = renderKanjiWords(words.hits, words.total, 30);
+    assert.equal(cmdKanji(db, "飲食"), wordsText + single("飲") + single("食"));
+    // Fixture ranking: every candidate matches exactly one kanji, so common
+    // words first, then entry id — 飲む is the lowest id.
+    assert.match(wordsText, /^Words \(5\):/);
+    assert.ok(wordsText.split("\n")[1]!.startsWith("  飲む  [飲[の]む]"), wordsText);
+    // A query mixing kanji and kana is not a literal sequence: it falls back
+    // to the reading search (which finds nothing for 食べ) rather than pages.
+    assert.equal(cmdKanji(db, "食べ"), null);
+    // Kana / romaji queries still take the reading-search path (matched
+    // reading rows, not per-character pages).
+    const hits = cmdKanji(db, "shoku");
+    assert.ok(hits != null && hits.includes("食  "));
+    const kana = cmdKanji(db, "たべ");
+    assert.ok(kana != null && kana.includes("食  [た.べる]"), "kana query goes via reading search");
+  } finally {
+    db.close();
+  }
+});
+
+test("kanji -max caps compounds, words and reading results", () => {
+  const db = buildFixtureDb();
+  try {
+    const rows = (out: string): string[] =>
+      out.split("\n").filter((l) => l.startsWith("  ") && !l.startsWith("  …"));
+    // Compounds capped: 食 has 5 compound words in the fixtures.
+    const capped = cmdKanji(db, "食", 2)!;
+    assert.equal(rows(capped).length, 2);
+    assert.ok(capped.includes("… and 3 more"), capped);
+    // A generous cap shows everything, with no truncation note.
+    const full = cmdKanji(db, "食", 30)!;
+    assert.equal(rows(full).length, 5);
+    assert.ok(!full.includes("… and "));
+    // Multi-kanji Words section capped (5 candidates, 2 shown).
+    const multi = cmdKanji(db, "飲食", 2)!;
+    assert.match(multi, /^Words \(5\):/);
+    assert.ok(multi.includes("… and 3 more"), multi);
+    // Reading-search results capped: "mi" matches 水・行・見 in the fixtures.
+    const mi = cmdKanji(db, "mi", 2)!;
+    assert.equal(rows(mi).length, 2);
+    assert.ok(mi.includes("… and 1 more"), mi);
+    assert.ok(!cmdKanji(db, "mi", 30)!.includes("… and "));
   } finally {
     db.close();
   }

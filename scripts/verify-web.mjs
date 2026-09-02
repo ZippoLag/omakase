@@ -137,6 +137,14 @@ async function main() {
     });
     check("default highlight is search", hl.search && !hl.word && !hl.kanji, JSON.stringify(hl));
 
+    // the "max" box: a small number input on the same line as the query,
+    // defaulting to 30
+    const maxBox = await page.evaluate(() => {
+      const el = document.querySelector("#max");
+      return { exists: !!el, type: el?.type, value: el?.value };
+    });
+    check("max box: number input, default 30", maxBox.exists && maxBox.type === "number" && maxBox.value === "30", JSON.stringify(maxBox));
+
     // busy state while a query is in flight: pressed button shows a spinner
     // and is disabled; other buttons and the input are disabled too.
     const busy = await page.evaluate(() => {
@@ -214,6 +222,20 @@ async function main() {
     // kanji (reading search)
     p = await runLookup(page, "kanji", "makase");
     check("kanji reading search hits", p.text.includes("任") || p.text.includes("委"), p.text.slice(0, 60));
+    // multi-kanji: 制作者 = ranked Words section (all three kanji first),
+    // then one page per character identical to looking each up alone
+    const kanjiParts = [];
+    for (const ch of ["制", "作", "者"]) {
+      kanjiParts.push((await runLookup(page, "kanji", ch)).text);
+    }
+    p = await runLookup(page, "kanji", "制作者");
+    const wordsFirst = /^Words \(\d+\):\n  制作者  \[/.test(p.text);
+    check(
+      "multi-kanji: ranked Words section first, then one page per character",
+      wordsFirst && p.text.includes("制作者  [") && kanjiParts.every((t) => p.text.includes(t))
+        && p.text.endsWith(kanjiParts[2]),
+      `${p.text.length}B singles=${kanjiParts.map((t) => t.length).join(",")}B`,
+    );
     // search romaji readings
     p = await runLookup(page, "search", "taberu");
     check("search taberu → Readings", p.text.includes("Readings") && p.text.includes("食べる"), "search taberu");
@@ -226,8 +248,18 @@ async function main() {
     // error path (no entry)
     p = await runLookup(page, "word", "zzzznotaword");
     check("unknown word shows error pane", p.isError && p.text.includes("no entry"), p.text);
-    await waitFor(page, () => page.$$eval("#panes .pane", (els) => els.length).then((n) => n >= 9), 15000, "9 panes");
-    check("panes newest-first (9 panes)", (await page.$$eval("#panes .pane", (els) => els.length)) === 9, "history growing");
+
+    // the max box drives the caps end-to-end
+    await page.evaluate(() => { document.querySelector("#max").value = "3"; });
+    p = await runLookup(page, "kanji", "食");
+    check("max=3 caps kanji compounds", p.text.includes("… and "), p.text.slice(0, 80));
+    await page.evaluate(() => { document.querySelector("#max").value = "5"; });
+    p = await runLookup(page, "search", "eat");
+    check("max=5 caps search sections", p.text.includes("… and "), p.text.slice(0, 80));
+    await page.evaluate(() => { document.querySelector("#max").value = "30"; });
+
+    await waitFor(page, () => page.$$eval("#panes .pane", (els) => els.length).then((n) => n >= 15), 15000, "15 panes");
+    check("panes newest-first (15 panes)", (await page.$$eval("#panes .pane", (els) => els.length)) === 15, "history growing");
 
     // offline: reload with network disabled — shell comes from the service
     // worker, the dictionary from OPFS.

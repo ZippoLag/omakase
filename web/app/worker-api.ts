@@ -8,6 +8,8 @@ export interface RunRequest {
   id: number;
   command: Command;
   query: string;
+  /** per-list row cap for kanji/search (the UI "max" input). */
+  max: number;
 }
 
 export type WorkerRequest = RunRequest;

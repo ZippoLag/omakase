@@ -11,18 +11,28 @@ const worker = new Worker(new URL("./worker.js", import.meta.url), { type: "modu
 // ---- DOM -------------------------------------------------------------------
 const form = document.querySelector<HTMLFormElement>("#lookup")!;
 const input = document.querySelector<HTMLInputElement>("#query")!;
+const maxInput = document.querySelector<HTMLInputElement>("#max")!;
 const buttons = document.querySelectorAll<HTMLButtonElement>("button[data-cmd]");
 const status = document.querySelector<HTMLDivElement>("#status")!;
 const panes = document.querySelector<HTMLDivElement>("#panes")!;
 
 // ---- state -----------------------------------------------------------------
 /** Queue of lookups waiting for the worker (single in-flight at a time). */
-const queue: { id: number; command: Command; query: string }[] = [];
+const queue: { id: number; command: Command; query: string; max: number }[] = [];
 let busy = false;
 let nextId = 1;
 /** Command run by the last button click — Enter repeats it. Default: search. */
 let lastCommand: Command = "search";
 let ready = false;
+
+/**
+ * Per-list row cap from the "max" input: a positive integer, else the
+ * default (30). Non-integer / empty / out-of-range values fall back.
+ */
+function parseMax(): number {
+  const v = Number(maxInput.value);
+  return Number.isInteger(v) && v >= 1 ? v : 30;
+}
 
 function setStatus(text: string, extraClass = ""): void {
   status.textContent = text;
@@ -85,7 +95,7 @@ function drain(): void {
   const item = queue[0];
   if (!item) return;
   busy = true;
-  const req: WorkerRequest = { kind: "run", id: item.id, command: item.command, query: item.query };
+  const req: WorkerRequest = { kind: "run", id: item.id, command: item.command, query: item.query, max: item.max };
   worker.postMessage(req);
 }
 
@@ -97,7 +107,7 @@ function submit(command: Command): void {
     return;
   }
   lastCommand = command;
-  queue.push({ id: nextId++, command, query });
+  queue.push({ id: nextId++, command, query, max: parseMax() });
   beginBusy(command);
   input.select();
   drain();
@@ -178,6 +188,7 @@ function addPane(command: string, query: string, text: string, isError: boolean)
 
 function setControlsDisabled(v: boolean): void {
   input.disabled = v;
+  maxInput.disabled = v;
   for (const b of buttons) b.disabled = v;
 }
 

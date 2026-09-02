@@ -91,7 +91,7 @@ function handleRun(req: WorkerRequest & { kind: "run" }): WorkerMessage {
         };
       }
       case "kanji": {
-        const out = runKanji(db, q);
+        const out = runKanji(db, q, req.max);
         return {
           kind: "result",
           id: req.id,
@@ -100,7 +100,7 @@ function handleRun(req: WorkerRequest & { kind: "run" }): WorkerMessage {
         };
       }
       case "search":
-        return { kind: "result", id: req.id, text: runSearch(db, q), error: null };
+        return { kind: "result", id: req.id, text: runSearch(db, q, req.max), error: null };
     }
   } catch (err) {
     return {

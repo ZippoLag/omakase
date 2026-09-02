@@ -1,0 +1,33 @@
+Words (5):
+  飲む  [飲[の]む]  to drink
+  食べる  [食[たべ]る]  to eat
+  食べ物  [食[たべ]物[もの]]  food
+  食事  [食[しょく]事[じ]]  meal (e.g. lunch, dinner)
+  食う  [食[く]う]  to eat
+飲  [12 strokes]
+
+grade 3 · JLPT 4 · frequency 969 · radical 食 (184)
+
+On:   イン  オン
+Kun:  の.む  -の.み
+
+Meanings: drink; smoke; take
+
+Compounds:
+  飲む  [飲[の]む]  to drink
+食  [9 strokes]
+
+grade 2 · JLPT 4 · frequency 328 · radical 食 (184)
+
+On:   ショク  ジキ
+Kun:  く.う  く.らう  た.べる  は.む
+Nanori: ぐい
+
+Meanings: eat; food
+
+Compounds:
+  食べる  [食[たべ]る]  to eat
+  食べ物  [食[たべ]物[もの]]  food
+  食べもの  [食[たべ]もの]  food
+  食事  [食[しょく]事[じ]]  meal (e.g. lunch, dinner)
+  食う  [食[く]う]  to eat

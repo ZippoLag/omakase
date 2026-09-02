@@ -9,6 +9,7 @@ import type {
   LoadedSentence,
   SearchHit,
   KanjiReadingHit,
+  KanjiWordHit,
   ThesaurusHit,
 } from "./lookup.js";
 import { displayHeader as lookupHeader, glossQueryTokens, isKanaInput, rubyFor } from "./lookup.js";
@@ -194,6 +195,8 @@ export function renderExamples(examples: LoadedSentence[]): string {
 /**
  * `kanji <literal>` page (render-goldens render_kanji).
  * `radicalDisplay` is the precomputed `食 (184)` string (or null to omit).
+ * When the compounds list was capped (kanji.compoundTotal > shown count) a
+ * trailing “… and N more” note reports the rest.
  */
 export function renderKanji(kanji: LoadedKanji, radicalDisplay: string | null): string {
   const lines: string[] = [];
@@ -217,6 +220,27 @@ export function renderKanji(kanji: LoadedKanji, radicalDisplay: string | null): 
     for (const c of kanji.compounds) {
       lines.push(`  ${c.writing}  [${c.ruby}]  ${c.gloss}`);
     }
+    if (kanji.compoundTotal > kanji.compounds.length) {
+      lines.push(`  … and ${kanji.compoundTotal - kanji.compounds.length} more`);
+    }
+  }
+  return lines.join("\n") + "\n";
+}
+
+/**
+ * Multi-kanji “Words” section (render-goldens render_kanji_words): words
+ * containing any of the requested kanji, ranked most-matched first, capped
+ * at `max` rows, with the full candidate count in the header and a trailing
+ * “… and N more” note when capped. Mirrors the search section header shape.
+ */
+export function renderKanjiWords(hits: KanjiWordHit[], total: number, max: number): string {
+  if (hits.length === 0) return "";
+  const lines: string[] = [`Words (${total}):`];
+  for (const h of hits) {
+    lines.push(`  ${h.writing}  [${h.ruby}]  ${h.gloss}`);
+  }
+  if (total > hits.length) {
+    lines.push(`  … and ${total - hits.length} more`);
   }
   return lines.join("\n") + "\n";
 }
@@ -233,6 +257,9 @@ const BOLD_OFF = "\u001b[22m";
 
 /** Default per-section cap for `search` rows; raise with `--max N`. */
 export const SEARCH_MAX_DEFAULT = 30;
+
+/** Default per-query cap for `kanji` (compounds, multi-kanji words, reading hits). */
+export const KANJI_MAX_DEFAULT = 30;
 
 /**
  * Wrap `ranges` (ascending [start, end) substrings of `text`) in bold when
@@ -348,9 +375,13 @@ export function renderSearch(
 }
 
 /** `kanji <reading>` result list — same rows as the search Kanji section. */
-export function renderKanjiReadingSearch(query: string, hits: KanjiReadingHit[]): string {
+export function renderKanjiReadingSearch(query: string, hits: KanjiReadingHit[], max?: number): string {
   const lines: string[] = [query, ""];
-  for (const k of hits) lines.push(kanjiHitRow(k));
+  const shown = max === undefined ? hits : hits.slice(0, max);
+  for (const k of shown) lines.push(kanjiHitRow(k));
   if (hits.length === 0) lines.push("  (no results)");
+  if (max !== undefined && hits.length > shown.length) {
+    lines.push(`  … and ${hits.length - shown.length} more`);
+  }
   return lines.join("\n") + "\n";
 }

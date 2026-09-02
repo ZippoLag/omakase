@@ -5,7 +5,7 @@
  * once by the worker and served only from device storage. Bump CACHE when
  * publishing an app update (old caches are deleted on activate).
  */
-const CACHE = "omakase-v4";
+const CACHE = "omakase-v5";
 
 const PRECACHE = [
   "./",
