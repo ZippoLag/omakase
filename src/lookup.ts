@@ -234,12 +234,21 @@ export function searchGloss(db: DB, token: string): SearchHit[] {
   return out;
 }
 
+/**
+ * Escape SQL LIKE wildcards (`%`, `_`) plus the escape char itself so user
+ * input (or a DB-derived writing) is matched literally — paired with the
+ * `ESCAPE '\\'` clause on every LIKE below.
+ */
+function escapeLike(s: string): string {
+  return s.replace(/[\\%_]/g, (ch) => "\\" + ch);
+}
+
 /** Reading-prefix search (kana text or romaji column), ordered by word id. */
 export function searchReadingPrefix(db: DB, prefix: string): SearchHit[] {
   const col = isKanaInput(prefix) ? "text" : "romaji";
   const rows = db.prepare(
-    `SELECT word_id, text FROM writings WHERE kind = 'kana' AND ${col} LIKE ? ORDER BY word_id, id`,
-  ).all(`${prefix}%`) as { word_id: string; text: string }[];
+    `SELECT word_id, text FROM writings WHERE kind = 'kana' AND ${col} LIKE ? ESCAPE '\\' ORDER BY word_id, id`,
+  ).all(`${escapeLike(prefix)}%`) as { word_id: string; text: string }[];
   const out: SearchHit[] = [];
   const seen = new Set<string>();
   for (const r of rows) {
@@ -555,8 +564,8 @@ export function exampleSentences(db: DB, word: LoadedWord): LoadedSentence[] {
   const matches: { id: number; japanese: string; english: string }[] = [];
   for (const w of writings) {
     matches.push(...db.prepare(
-      "SELECT id, japanese, english FROM sentences WHERE japanese LIKE ? ORDER BY id",
-    ).all(`%${w}%`) as { id: number; japanese: string; english: string }[]);
+      "SELECT id, japanese, english FROM sentences WHERE japanese LIKE ? ESCAPE '\\' ORDER BY id",
+    ).all(`%${escapeLike(w)}%`) as { id: number; japanese: string; english: string }[]);
   }
   // de-dup by id, preserve ascending
   const seen = new Set<number>();

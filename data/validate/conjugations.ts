@@ -22,6 +22,11 @@ import { conjugateReading, type ConjClass } from "../../src/conjugation.js";
 
 const URL = "https://raw.githubusercontent.com/jkindrix/japanese-language-data/main/data/grammar/conjugations.json";
 const SHA256 = "95b434beaebf66f8e454c6c3972b585ad992ea403d9a3765137d562669566c3a";
+// Committed, sha-pinned snapshot of the upstream file (underscore-prefixed so
+// the gap-fixture loader below skips it). Kept in fixtures so CI validates
+// fully offline and always checks against the exact data it was pinned to.
+const PINNED = join("tests", "fixtures", "conjugations", "_upstream-conjugations.json");
+// Disposable download cache used only when the committed snapshot is absent.
 const CACHE = join("data", "raw", "conjugations-upstream.json");
 const FIXTURES_DIR = join("tests", "fixtures", "conjugations");
 const REPORT = join("dist", "conjugation-validation.json");
@@ -42,18 +47,23 @@ function sha256(buf: Buffer): string {
 }
 
 async function loadUpstream(): Promise<TableEntry[]> {
-  if (!existsSync(CACHE) || sha256(readFileSync(CACHE)) !== SHA256) {
-    console.log("downloading upstream conjugations.json…");
-    const res = await fetch(URL);
-    if (!res.ok) throw new Error(`fetch failed: ${res.status}`);
-    const buf = Buffer.from(await res.arrayBuffer());
-    const got = sha256(buf);
-    if (got !== SHA256) throw new Error(`sha256 mismatch: expected ${SHA256}, got ${got}`);
-    mkdirSync(join("data", "raw"), { recursive: true });
-    writeFileSync(CACHE, buf);
+  // Prefer the committed snapshot so CI never touches the network; fall back
+  // to a cached download, then to a fresh (verified) download into data/raw.
+  for (const path of [PINNED, CACHE]) {
+    if (existsSync(path) && sha256(readFileSync(path)) === SHA256) {
+      console.log(`using ${path} (sha256 verified)`);
+      return (JSON.parse(readFileSync(path, "utf-8")) as { entries: TableEntry[] }).entries;
+    }
   }
-  const data = JSON.parse(readFileSync(CACHE, "utf-8")) as { entries: TableEntry[] };
-  return data.entries;
+  console.log("downloading upstream conjugations.json…");
+  const res = await fetch(URL);
+  if (!res.ok) throw new Error(`fetch failed: ${res.status}`);
+  const buf = Buffer.from(await res.arrayBuffer());
+  const got = sha256(buf);
+  if (got !== SHA256) throw new Error(`sha256 mismatch: expected ${SHA256}, got ${got}`);
+  mkdirSync(join("data", "raw"), { recursive: true });
+  writeFileSync(CACHE, buf);
+  return (JSON.parse(buf.toString("utf-8")) as { entries: TableEntry[] }).entries;
 }
 
 /** [G] gap-class + pinned tables from tests/fixtures/conjugations/*.json */
@@ -196,6 +206,7 @@ async function main(): Promise<void> {
   writeFileSync(REPORT, JSON.stringify({
     upstream: "jkindrix/japanese-language-data data/grammar/conjugations.json",
     upstreamSha256: SHA256,
+    upstreamSource: PINNED,
     gapFixtures: join("tests", "fixtures", "conjugations") + "/*.json (body equals engine output; see provenance field)",
     runAt: new Date().toISOString(),
     totals: { total, pass: totalPass, mismatches: mismatchCount, skipped },
@@ -219,6 +230,16 @@ async function main(): Promise<void> {
     }])),
   }, null, 2) + "\n");
   console.log(`\nreport written to ${REPORT}`);
+
+  // The validation is a CI gate: any mismatch between the engine and the
+  // pinned upstream tables fails the run (the report above has the details).
+  if (combined.mismatches > 0) {
+    console.error(`FAIL: ${combined.mismatches} conjugation mismatch(es) — see ${REPORT}`);
+    process.exit(1);
+  }
+  if (combined.skipped > 0) {
+    console.error(`WARN: ${combined.skipped} table(s) skipped (engine produced no table)`);
+  }
 }
 
 main().catch((err) => {

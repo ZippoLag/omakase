@@ -15,7 +15,7 @@ import { transform } from "../data/build/transform.js";
 import { buildDb } from "../data/build/buildDb.js";
 import { cmdWord, cmdKanji, cmdSearch, loadTags } from "../src/cli.js";
 import { renderSearch } from "../src/format.js";
-import { glossThesaurus, loadWord, searchKanjiByReading, searchReadingPrefix, wordThesaurus } from "../src/lookup.js";
+import { exampleSentences, glossThesaurus, loadWord, searchKanjiByReading, searchReadingPrefix, wordThesaurus } from "../src/lookup.js";
 import type { JmdictWord, Kanjidic2Character, KradfileFile, RadkfileFile } from "../data/build/parse.js";
 
 type DB = InstanceType<typeof Database>;
@@ -442,6 +442,67 @@ test("cmdSearch: unmatched ASCII falls back to English gloss token search", () =
     const hits = cmdSearch(db, "eat");
     assert.ok(hits.length > 0);
     assert.ok(hits.some((h) => h.reading === "たべる" && h.gloss === "to eat"));
+  } finally {
+    db.close();
+  }
+});
+
+test("search: LIKE wildcards in the query are matched literally, not as SQL wildcards", () => {
+  const db = buildFixtureDb();
+  try {
+    // A bare ``%`` used to match every kana writing (``LIKE '%%%'`` = anything),
+    // and ``_`` acted as a single-char wildcard (``tab_r`` matched たべる).
+    assert.equal(cmdSearch(db, "%").length, 0);
+    assert.equal(cmdSearch(db, "_").length, 0);
+    assert.equal(cmdSearch(db, "tab_r").length, 0);
+    // The kana column has the same protection.
+    assert.equal(cmdSearch(db, "たべ%").length, 0);
+    assert.equal(cmdSearch(db, "たべ_る").length, 0);
+    // A backslash in the query is literal too, not an escape for the engine.
+    assert.equal(cmdSearch(db, "tab\\eru").length, 0);
+    // Ordinary prefixes still match after escaping.
+    assert.deepEqual(readings(searchReadingPrefix(db, "tabe")), ["たべる", "たべもの"]);
+    assert.deepEqual(readings(searchReadingPrefix(db, "たべ")), ["たべる", "たべもの"]);
+  } finally {
+    db.close();
+  }
+});
+
+test("exampleSentences: a ``%`` inside a writing matches literally", () => {
+  // Without escaping, the ``%`` in the writing ``50%見る`` would widen
+  // ``LIKE '%50%見る%'`` to match any sentence with ``50`` before ``見る``
+  // (here: ``500見る``), even though it never contains the literal writing.
+  const mk = (id: string): JmdictWord => ({
+    id,
+    kanji: [{ common: true, text: "50%見る", tags: [] }],
+    kana: [{ common: true, text: "みる", tags: [], appliesToKanji: ["*"] }],
+    sense: [{
+      partOfSpeech: ["v1"],
+      appliesToKanji: ["*"],
+      appliesToKana: ["*"],
+      related: [],
+      antonym: [],
+      field: [],
+      dialect: [],
+      misc: [],
+      info: [],
+      languageSource: [],
+      gloss: [{ lang: "eng", gender: null, type: null, text: "to see" }],
+    }],
+  });
+  const rows = transform(
+    { words: [mk("10")] } as never,
+    { characters: [] } as never,
+    { version: "", kanji: {} } as KradfileFile,
+    { version: "", radicals: {} } as RadkfileFile,
+  );
+  const db = buildDb(rows, { tags: "{}" }, { dbPath: ":memory:" });
+  try {
+    const insert = db.prepare("INSERT INTO sentences (id, japanese, english) VALUES (?, ?, ?)");
+    insert.run(1, "50%見る", "contains the literal writing");
+    insert.run(2, "500見る", "only matches via a widened wildcard");
+    const found = exampleSentences(db, loadWord(db, "10")!);
+    assert.deepEqual(found.map((s) => s.id), [1]);
   } finally {
     db.close();
   }
