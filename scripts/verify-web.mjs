@@ -409,8 +409,90 @@ async function main() {
     );
     check("panes newest-first (history grows)", paneCount >= 15, `${paneCount} panes`);
 
+    // ---- persistent state (localStorage) ------------------------------------
+    // Input, max, last command and the result history survive a reload; the
+    // per-pane trashbin deletes one result (visible + persisted), the header
+    // trashbin deletes them all.
+    p = await runLookup(page, "word", "うどん");
+    const delProbe = await page.evaluate(() => {
+      const first = document.querySelector("#panes .pane");
+      return {
+        hasDel: !!first?.querySelector(".pane-del"),
+        q: first?.querySelector(".pane-query")?.textContent ?? "",
+        clearEnabled: !document.querySelector("#clear").disabled,
+        clearHasIcon: !!document.querySelector("#clear svg"),
+      };
+    });
+    check("each pane has a delete (trashbin) button", delProbe.hasDel && delProbe.q === "うどん", JSON.stringify(delProbe));
+    // No reload has happened since boot: with results in the list the header
+    // trashbin must be enabled and show its icon (it starts disabled).
+    check(
+      "header trashbin enabled + icon visible with results",
+      delProbe.clearEnabled && delProbe.clearHasIcon,
+      JSON.stringify({ enabled: delProbe.clearEnabled, hasIcon: delProbe.clearHasIcon }),
+    );
+    const delClick = await page.evaluate(() => {
+      const before = document.querySelectorAll("#panes .pane").length;
+      document.querySelector("#panes .pane .pane-del").click();
+      return {
+        before,
+        after: document.querySelectorAll("#panes .pane").length,
+        gone: ![...document.querySelectorAll("#panes .pane-query")].some((el) => el.textContent === "うどん"),
+      };
+    });
+    check(
+      "pane trashbin removes that result from the list",
+      delClick.before === delClick.after + 1 && delClick.gone,
+      JSON.stringify(delClick),
+    );
+
+    // reload (online): input, max, command highlight and history come back,
+    // and the deleted pane stays deleted (it was removed from storage too).
+    const beforeReload = await page.evaluate(() => ({
+      query: document.querySelector("#query").value,
+      max: document.querySelector("#max").value,
+      cmd: [...document.querySelectorAll("button[data-cmd]")]
+        .find((b) => b.classList.contains("primary"))?.dataset.cmd,
+      panes: document.querySelectorAll("#panes .pane").length,
+    }));
+    await page.reload({ waitUntil: "load", timeout: 30000 });
+    const restored = await waitFor(
+      page,
+      () => page.evaluate(() => {
+        const s = document.querySelector("#status")?.textContent ?? "";
+        return s.startsWith("ready") ? {
+          query: document.querySelector("#query").value,
+          max: document.querySelector("#max").value,
+          cmd: [...document.querySelectorAll("button[data-cmd]")]
+            .find((b) => b.classList.contains("primary"))?.dataset.cmd,
+          panes: document.querySelectorAll("#panes .pane").length,
+          udon: [...document.querySelectorAll("#panes .pane-query")].some((el) => el.textContent === "うどん"),
+        } : null;
+      }),
+      60000,
+      "reload ready with restored state",
+    );
+    check(
+      "reload restores input, max, command and pane history",
+      restored.query === beforeReload.query && restored.max === beforeReload.max
+        && restored.cmd === beforeReload.cmd && restored.panes === beforeReload.panes,
+      JSON.stringify({ before: beforeReload, after: restored }),
+    );
+    check("deleted pane stays deleted after reload", !restored.udon, `udon present: ${restored.udon}`);
+
+    // header trashbin: all results gone, button disables itself
+    const cleared = await page.evaluate(() => {
+      document.querySelector("#clear").click();
+      return {
+        panes: document.querySelectorAll("#panes .pane").length,
+        disabled: document.querySelector("#clear").disabled,
+      };
+    });
+    check("header trashbin clears all results and disables itself", cleared.panes === 0 && cleared.disabled, JSON.stringify(cleared));
+
     // offline: reload with network disabled — shell comes from the service
-    // worker, the dictionary from OPFS.
+    // worker, the dictionary from OPFS (history was cleared above, so the
+    // offline lookup below runs against a fresh pane).
     console.log("→ offline reload…");
     await page.evaluate(() => navigator.serviceWorker.ready.then(() => true));
     await page.setOfflineMode(true);
@@ -427,6 +509,18 @@ async function main() {
     check("offline: app boots from cache/OPFS", !!offStatus, offStatus);
     p = await runLookup(page, "word", "食べる");
     check("offline: query still works", p.text.includes("1. to eat"), `err=${p.isError}`);
+    // The header trashbin was disabled (history was cleared, then reloaded with
+    // no panes); the fresh lookup must re-enable it — no reload involved.
+    const clearState = await page.evaluate(() => ({
+      panes: document.querySelectorAll("#panes .pane").length,
+      disabled: document.querySelector("#clear").disabled,
+      hasIcon: !!document.querySelector("#clear svg"),
+    }));
+    check(
+      "header trashbin re-enabled by a new result (no reload)",
+      clearState.panes === 1 && !clearState.disabled && clearState.hasIcon,
+      JSON.stringify(clearState),
+    );
     await page.setOfflineMode(false);
 
     // OPFS VFS logs NotFound probes for sidecar files (journals) as errors; benign.

@@ -2,7 +2,9 @@
  * UI: a full-width single-line input with three buttons — kanji / word /
  * search. Every click runs the lookup in the DB worker and inserts a fresh
  * results pane directly below the button row, pushing older panes down
- * (newest-first history).
+ * (newest-first history). The input box, the last pressed command, the max
+ * count and the result history are persisted to localStorage and restored on
+ * reload; each pane (and the header) has a red trashbin to delete results.
  */
 import type { Command, WorkerMessage, WorkerRequest } from "./worker-api.js";
 import { VERSION, VERSION_FULL } from "../../src/version.js";
@@ -16,6 +18,7 @@ const maxInput = document.querySelector<HTMLInputElement>("#max")!;
 const buttons = document.querySelectorAll<HTMLButtonElement>("button[data-cmd]");
 const status = document.querySelector<HTMLDivElement>("#status")!;
 const versionBadge = document.querySelector<HTMLSpanElement>("#version")!;
+const clearBtn = document.querySelector<HTMLButtonElement>("#clear")!;
 const panes = document.querySelector<HTMLDivElement>("#panes")!;
 
 // Version badge — the app stamp at boot; the full stamp + dictionary build
@@ -30,6 +33,40 @@ let nextId = 1;
 /** Command run by the last button click — Enter repeats it. Default: search. */
 let lastCommand: Command = "search";
 let ready = false;
+
+// ---- persistent state (localStorage) ---------------------------------------
+/** One result pane as persisted/restored (the CLI text + how it was asked). */
+interface PaneRecord {
+  command: string;
+  query: string;
+  text: string;
+  error: boolean;
+}
+
+interface StoredState {
+  v?: unknown;
+  query?: unknown;
+  command?: unknown;
+  max?: unknown;
+  panes?: unknown;
+}
+
+const STORAGE_KEY = "omakase.state";
+const COMMANDS: readonly string[] = ["kanji", "word", "search"];
+/** Result history, newest first — mirrors the #panes DOM order (child 0 = newest). */
+let history: PaneRecord[] = [];
+
+/** Write input, last command, max and the pane history to localStorage. */
+function saveState(): void {
+  try {
+    localStorage.setItem(
+      STORAGE_KEY,
+      JSON.stringify({ v: 1, query: input.value, command: lastCommand, max: parseMax(), panes: history }),
+    );
+  } catch {
+    /* storage unavailable (private mode / quota) — persistence is a nicety */
+  }
+}
 
 /**
  * Per-list row cap from the "max" input: a positive integer, else the
@@ -115,6 +152,7 @@ function submit(command: Command): void {
   }
   lastCommand = command;
   queue.push({ id: nextId++, command, query, max: parseMax() });
+  saveState();
   beginBusy(command);
   input.select();
   drain();
@@ -187,6 +225,12 @@ const WORD_ICON_SVG =
   'fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round">' +
   '<circle cx="11" cy="11" r="7"/><path d="m16.3 16.3 4.2 4.2"/></svg>';
 
+/** Trashbin glyph for the per-pane and header delete buttons (red via CSS). */
+const TRASH_ICON_SVG =
+  '<svg viewBox="0 0 24 24" width="13" height="13" aria-hidden="true" ' +
+  'fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round">' +
+  '<path d="M3 6h18"/><path d="M8 6V4h8v2"/><path d="m6 6 1 14h10l1-14"/></svg>';
+
 /** One kanji character as a button → `kanji <ch>` lookup. */
 function kanjiButton(ch: string): HTMLButtonElement {
   const b = document.createElement("button");
@@ -242,24 +286,40 @@ function linkifyLine(line: string): (Node | string)[] {
 }
 
 // ---- panes -----------------------------------------------------------------
-/** One results pane: a small header (command · query) + the CLI text. */
-function addPane(command: string, query: string, text: string, isError: boolean): void {
+/**
+ * Build one results pane: a small header (command · query · trashbin) + the
+ * CLI text. Deleting via the trashbin removes the pane and its history
+ * record (persisted), leaving the rest of the history intact.
+ */
+function renderPane(rec: PaneRecord): HTMLElement {
   const pane = document.createElement("section");
   pane.className = "pane";
-  if (isError) pane.classList.add("error");
+  if (rec.error) pane.classList.add("error");
 
   const head = document.createElement("div");
   head.className = "pane-head";
   const badge = document.createElement("span");
   badge.className = "badge";
-  badge.textContent = command;
+  badge.textContent = rec.command;
   const q = document.createElement("span");
   q.className = "pane-query";
-  q.textContent = query;
-  head.append(badge, q);
+  q.textContent = rec.query;
+  const del = document.createElement("button");
+  del.type = "button";
+  del.className = "pane-del";
+  del.title = "Delete this result";
+  del.setAttribute("aria-label", `Delete result for ${rec.query}`);
+  del.innerHTML = TRASH_ICON_SVG;
+  del.addEventListener("click", () => {
+    history = history.filter((r) => r !== rec);
+    pane.remove();
+    updateClearButton();
+    saveState();
+  });
+  head.append(badge, q, del);
 
   const pre = document.createElement("pre");
-  const content = text.endsWith("\n") ? text.slice(0, -1) : text;
+  const content = rec.text.endsWith("\n") ? rec.text.slice(0, -1) : rec.text;
   const nodes: (Node | string)[] = [];
   content.split("\n").forEach((line, i) => {
     if (i > 0) nodes.push("\n");
@@ -268,8 +328,68 @@ function addPane(command: string, query: string, text: string, isError: boolean)
   pre.append(...nodes);
 
   pane.append(head, pre);
+  return pane;
+}
+
+/** Add a fresh result pane (newest first) and persist the history. */
+function addPane(command: string, query: string, text: string, isError: boolean): void {
+  const rec: PaneRecord = { command, query, text, error: isError };
+  history.unshift(rec);
+  updateClearButton();
+  const pane = renderPane(rec);
   panes.prepend(pane); // newest pane sits directly below the button row
   pane.scrollIntoView({ block: "start", behavior: "smooth" });
+  saveState();
+}
+
+/** The header trashbin is enabled only while there is history to delete. */
+function updateClearButton(): void {
+  clearBtn.disabled = history.length === 0;
+}
+
+/** Header trashbin: remove every result pane and clear the persisted history. */
+function clearAll(): void {
+  history = [];
+  panes.replaceChildren();
+  updateClearButton();
+  saveState();
+}
+
+/** Restore input, max, last command and the result history from storage. */
+function restoreState(): void {
+  let stored: StoredState | null = null;
+  try {
+    stored = JSON.parse(localStorage.getItem(STORAGE_KEY) ?? "null") as StoredState | null;
+  } catch {
+    /* corrupt storage — start fresh */
+  }
+  if (!stored || stored.v !== 1) {
+    setLastCommand("search");
+    return;
+  }
+  if (typeof stored.query === "string") input.value = stored.query;
+  const m = Number(stored.max);
+  if (Number.isInteger(m) && m >= 1) maxInput.value = String(m);
+  const command = typeof stored.command === "string" && COMMANDS.includes(stored.command)
+    ? (stored.command as Command)
+    : "search";
+  setLastCommand(command);
+  if (Array.isArray(stored.panes)) {
+    for (const rec of stored.panes) {
+      if (
+        rec && typeof rec === "object"
+        && typeof (rec as PaneRecord).command === "string"
+        && typeof (rec as PaneRecord).query === "string"
+        && typeof (rec as PaneRecord).text === "string"
+      ) {
+        const r = rec as PaneRecord;
+        history.push({ command: r.command, query: r.query, text: r.text, error: !!r.error });
+      }
+    }
+    // history is newest-first; appending in order reproduces the DOM order.
+    for (const rec of history) panes.append(renderPane(rec));
+  }
+  updateClearButton();
 }
 
 function setControlsDisabled(v: boolean): void {
@@ -283,12 +403,16 @@ for (const b of buttons) {
   b.addEventListener("click", () => {
     setLastCommand(b.dataset.cmd as Command);
     submit(b.dataset.cmd as Command);
+    saveState(); // persist the command even when the query is empty (submit bails)
   });
 }
 form.addEventListener("submit", (ev) => {
   ev.preventDefault();
   submit(lastCommand);
 });
+input.addEventListener("input", saveState);
+maxInput.addEventListener("input", saveState);
+clearBtn.addEventListener("click", clearAll);
 
 // ---- service worker (offline shell; the dictionary lives in OPFS) ----------
 if ("serviceWorker" in navigator && location.protocol !== "file:") {
@@ -298,7 +422,8 @@ if ("serviceWorker" in navigator && location.protocol !== "file:") {
     });
   });
 }
-
-setLastCommand("search"); // default action + highlight: search
+//FIXME: the trash icon is still not shown in the header global clear button, though it responds to events correctly and is getting disabled when there is no data.
+clearBtn.innerHTML = TRASH_ICON_SVG;
+restoreState(); // input, max, last command and pane history from localStorage
 setControlsDisabled(true);
 setStatus("starting engine…", "busy");

@@ -71,6 +71,34 @@ h1 {
   text-align: right;
 }
 
+/* Header trashbin: deletes every result pane (clears the persisted history). */
+#clear {
+  flex: none;
+  align-self: center;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 30px;
+  height: 30px;
+  padding: 0;
+  border: 1px solid color-mix(in srgb, var(--accent) 40%, var(--line));
+  border-radius: 8px;
+  background: none;
+  color: var(--accent);
+}
+
+#clear:hover:not(:disabled),
+#clear:focus-visible {
+  border-color: var(--accent);
+  background: color-mix(in srgb, var(--accent) 12%, transparent);
+}
+
+#clear:disabled {
+  color: var(--muted);
+  border-color: var(--line);
+  cursor: default;
+}
+
 #status.error { color: var(--accent); white-space: normal; text-align: left; }
 
 /* ---- control row ----------------------------------------------------------- */
@@ -232,6 +260,28 @@ button.busy {
 .pane.error .badge { color: var(--accent); border-color: var(--accent); }
 
 .pane-query { font-weight: 600; color: var(--ink); overflow-wrap: anywhere; }
+
+/* Per-pane trashbin: deletes that result from the list and the persisted
+   history. Sits at the pane's top-right corner (flex end of the head row). */
+.pane-del {
+  flex: none;
+  margin-left: auto;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 26px;
+  height: 26px;
+  padding: 0;
+  border: none;
+  border-radius: 8px;
+  background: none;
+  color: var(--accent);
+}
+
+.pane-del:hover,
+.pane-del:focus-visible {
+  background: color-mix(in srgb, var(--accent) 12%, transparent);
+}
 
 .pane pre {
   margin: 0;

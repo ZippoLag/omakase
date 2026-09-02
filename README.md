@@ -338,6 +338,11 @@ pnpm run web:serve        # prints your https://<lan-ip>:8443 URL
 (import → lookups → offline reload); set `CHROME_PATH` if Chrome isn't in the
 default location.
 
+The UI keeps its state in `localStorage`: the input box, the last used
+command, the max count, and the result history are restored on reload. Each
+result pane has a red trashbin that deletes that single result (from the list
+and the stored history); the header has one that clears every result.
+
 ### Trust the certificate on your phone (one time)
 
 The server uses a locally-generated CA (`mkcert`). Install its root
