@@ -422,7 +422,6 @@ if ("serviceWorker" in navigator && location.protocol !== "file:") {
     });
   });
 }
-//FIXME: the trash icon is still not shown in the header global clear button, though it responds to events correctly and is getting disabled when there is no data.
 clearBtn.innerHTML = TRASH_ICON_SVG;
 restoreState(); // input, max, last command and pane history from localStorage
 setControlsDisabled(true);
