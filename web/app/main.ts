@@ -20,8 +20,8 @@ const panes = document.querySelector<HTMLDivElement>("#panes")!;
 const queue: { id: number; command: Command; query: string }[] = [];
 let busy = false;
 let nextId = 1;
-/** Command run by the last button click — Enter repeats it. */
-let lastCommand: Command = "word";
+/** Command run by the last button click — Enter repeats it. Default: search. */
+let lastCommand: Command = "search";
 let ready = false;
 
 function setStatus(text: string, extraClass = ""): void {
@@ -60,10 +60,13 @@ worker.onmessage = (ev: MessageEvent<WorkerMessage>) => {
       const item = head && head.id === msg.id ? head : null;
       if (msg.text !== null) addPane(item?.command ?? "result", item?.query ?? "", msg.text, false);
       else if (msg.error !== null) addPane(item?.command ?? "result", item?.query ?? "", msg.error, true);
+      clearBusy();
+      setControlsDisabled(false);
       drain();
       break;
     }
     case "fatal":
+      clearBusy();
       setStatus(`⚠ ${msg.message}`, "error");
       setControlsDisabled(true);
       break;
@@ -71,6 +74,7 @@ worker.onmessage = (ev: MessageEvent<WorkerMessage>) => {
 };
 
 worker.onerror = (ev: ErrorEvent) => {
+  clearBusy();
   setStatus(`⚠ worker crashed: ${ev.message ?? "unknown error"}`, "error");
   setControlsDisabled(true);
 };
@@ -86,6 +90,7 @@ function drain(): void {
 }
 
 function submit(command: Command): void {
+  if (busy) return; // one operation at a time — the busy UI blocks new input anyway
   const query = input.value;
   if (!query.trim()) {
     input.focus();
@@ -93,8 +98,57 @@ function submit(command: Command): void {
   }
   lastCommand = command;
   queue.push({ id: nextId++, command, query });
+  beginBusy(command);
   input.select();
   drain();
+}
+
+// ---- busy state -------------------------------------------------------------
+/** Command whose lookup is in flight (null when idle) — its label is a spinner. */
+let busyCommand: Command | null = null;
+
+function buttonFor(command: Command): HTMLButtonElement | null {
+  for (const b of buttons) {
+    if (b.dataset.cmd === command) return b;
+  }
+  return null;
+}
+
+/** Highlight the active command button (default: search). */
+function setLastCommand(command: Command): void {
+  lastCommand = command;
+  for (const b of buttons) b.classList.toggle("primary", b.dataset.cmd === command);
+}
+
+/** Disable everything and swap the pressed button's label for a spinner. */
+function beginBusy(command: Command): void {
+  busyCommand = command;
+  form.setAttribute("aria-busy", "true");
+  setControlsDisabled(true);
+  const b = buttonFor(command);
+  if (b) {
+    b.dataset.label = b.textContent ?? "";
+    b.textContent = "";
+    b.classList.add("busy");
+    const spin = document.createElement("span");
+    spin.className = "spinner";
+    spin.setAttribute("aria-hidden", "true");
+    b.appendChild(spin);
+  }
+}
+
+/** Put the button label back and mark the form idle (does not touch disabled). */
+function clearBusy(): void {
+  if (busyCommand !== null) {
+    const b = buttonFor(busyCommand);
+    if (b) {
+      b.classList.remove("busy");
+      b.textContent = b.dataset.label ?? "";
+      delete b.dataset.label;
+    }
+    busyCommand = null;
+  }
+  form.removeAttribute("aria-busy");
 }
 
 // ---- panes -----------------------------------------------------------------
@@ -129,7 +183,10 @@ function setControlsDisabled(v: boolean): void {
 
 // ---- events ----------------------------------------------------------------
 for (const b of buttons) {
-  b.addEventListener("click", () => submit(b.dataset.cmd as Command));
+  b.addEventListener("click", () => {
+    setLastCommand(b.dataset.cmd as Command);
+    submit(b.dataset.cmd as Command);
+  });
 }
 form.addEventListener("submit", (ev) => {
   ev.preventDefault();
@@ -145,5 +202,6 @@ if ("serviceWorker" in navigator && location.protocol !== "file:") {
   });
 }
 
+setLastCommand("search"); // default action + highlight: search
 setControlsDisabled(true);
 setStatus("starting engine…", "busy");

@@ -130,9 +130,84 @@ async function main() {
     check("engine ready, dictionary in OPFS", statusText.includes("ready"), statusText);
     check("word count reported", /ready — \d/.test(statusText), statusText.split("ready")[1]?.trim());
 
+    // default command highlight is search (before anything is clicked)
+    const hl = await page.evaluate(() => {
+      const p = (c) => document.querySelector(`button[data-cmd="${c}"]`).classList.contains("primary");
+      return { search: p("search"), word: p("word"), kanji: p("kanji") };
+    });
+    check("default highlight is search", hl.search && !hl.word && !hl.kanji, JSON.stringify(hl));
+
+    // busy state while a query is in flight: pressed button shows a spinner
+    // and is disabled; other buttons and the input are disabled too.
+    const busy = await page.evaluate(() => {
+      const input = document.querySelector("#query");
+      input.value = "eat";
+      document.querySelector('button[data-cmd="search"]').click(); // listener runs synchronously
+      const pressed = document.querySelector('button[data-cmd="search"]');
+      return {
+        pressedDisabled: pressed.disabled,
+        spinner: !!pressed.querySelector(".spinner"),
+        label: pressed.textContent.trim(),
+        othersDisabled: [...document.querySelectorAll("button[data-cmd]")]
+          .filter((b) => b !== pressed).every((b) => b.disabled),
+        inputDisabled: input.disabled,
+        ariaBusy: document.querySelector("#lookup").getAttribute("aria-busy"),
+      };
+    });
+    check("busy: pressed button disabled + spinner", busy.pressedDisabled && busy.spinner && busy.label === "", JSON.stringify(busy));
+    check("busy: other buttons + input disabled", busy.othersDisabled && busy.inputDisabled && busy.ariaBusy === "true", JSON.stringify(busy));
+    let p = await runLookup(page, "search", "eat");
+    check("busy lookup still returns result", p.text.includes("Meanings"), `err=${p.isError}`);
+    const idle = await page.evaluate(() => {
+      const s = document.querySelector('button[data-cmd="search"]');
+      return {
+        disabledNow: s.disabled,
+        spinnerGone: !s.querySelector(".spinner"),
+        label: s.textContent.trim(),
+        othersEnabled: [...document.querySelectorAll("button[data-cmd]")].every((b) => !b.disabled),
+        inputEnabled: !document.querySelector("#query").disabled,
+        ariaBusy: document.querySelector("#lookup").hasAttribute("aria-busy"),
+      };
+    });
+    check(
+      "idle: spinner replaced + controls re-enabled",
+      !idle.disabledNow && idle.spinnerGone && idle.label === "search" && idle.othersEnabled && idle.inputEnabled && !idle.ariaBusy,
+      JSON.stringify(idle),
+    );
+
+    // Enter runs the default (search) command
+    await page.evaluate(() => {
+      const input = document.querySelector("#query");
+      input.value = "taberu";
+      document.querySelector("#lookup").requestSubmit();
+    });
+    const enterPane = await waitFor(
+      page,
+      () => page.evaluate(() => {
+        const first = document.querySelector("#panes .pane");
+        const qry = first?.querySelector(".pane-query")?.textContent;
+        return first && qry === "taberu"
+          ? { badge: first.querySelector(".badge")?.textContent, text: first.querySelector("pre")?.textContent ?? "" }
+          : null;
+      }),
+      30000,
+      "enter search result",
+    );
+    check(
+      "Enter runs default search command",
+      enterPane?.badge === "search" && enterPane.text.includes("Readings") && enterPane.text.includes("食べる"),
+      JSON.stringify(enterPane),
+    );
+
     // word
-    let p = await runLookup(page, "word", "食べる");
+    p = await runLookup(page, "word", "食べる");
     check("word 食べる shows senses", p.text.includes("1. to eat") && p.text.includes("[たべる]"), `err=${p.isError}`);
+    // highlight follows the last clicked command
+    const hl2 = await page.evaluate(() => {
+      const p2 = (c) => document.querySelector(`button[data-cmd="${c}"]`).classList.contains("primary");
+      return { word: p2("word"), search: p2("search") };
+    });
+    check("highlight follows clicked command", hl2.word && !hl2.search, JSON.stringify(hl2));
     // kanji (page)
     p = await runLookup(page, "kanji", "食");
     check("kanji 食 page renders", p.text.includes("strokes") && p.text.includes("On:") && p.text.includes("eat"), "kanji page");
@@ -151,8 +226,8 @@ async function main() {
     // error path (no entry)
     p = await runLookup(page, "word", "zzzznotaword");
     check("unknown word shows error pane", p.isError && p.text.includes("no entry"), p.text);
-    await waitFor(page, () => page.$$eval("#panes .pane", (els) => els.length).then((n) => n >= 7), 15000, "7 panes");
-    check("panes newest-first (7 panes)", (await page.$$eval("#panes .pane", (els) => els.length)) === 7, "history growing");
+    await waitFor(page, () => page.$$eval("#panes .pane", (els) => els.length).then((n) => n >= 9), 15000, "9 panes");
+    check("panes newest-first (9 panes)", (await page.$$eval("#panes .pane", (els) => els.length)) === 9, "history growing");
 
     // offline: reload with network disabled — shell comes from the service
     // worker, the dictionary from OPFS.

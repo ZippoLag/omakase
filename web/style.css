@@ -131,6 +131,24 @@ button:active { transform: translateY(1px); }
 button.primary { border-color: var(--accent); color: var(--accent); }
 button:disabled { opacity: 0.5; }
 
+/* Spinner while a lookup is in flight (replaces the pressed button's label). */
+button.busy {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+}
+
+.spinner {
+  width: 15px;
+  height: 15px;
+  border: 2px solid rgba(127, 127, 127, 0.35);
+  border-top-color: currentColor;
+  border-radius: 50%;
+  animation: spin 0.7s linear infinite;
+}
+
+@keyframes spin { to { transform: rotate(360deg); } }
+
 /* ---- result panes ---------------------------------------------------------- */
 #panes {
   max-width: 860px;
