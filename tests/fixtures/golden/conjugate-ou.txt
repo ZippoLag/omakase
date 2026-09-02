@@ -1,0 +1,18 @@
+Conjugations of 覆う [おおう]
+
+  dictionary             覆う
+  polite nonpast         覆います
+  polite past            覆いました
+  polite negative        覆いません
+  polite past negative   覆いませんでした
+  te-form                覆うて
+  ta-form (past)         覆うた
+  nai-form (negative)    覆わない
+  nakatta (neg. past)    覆わなかった
+  potential              覆える
+  passive                覆われる
+  causative              覆わせる
+  imperative             覆え
+  volitional             覆おう
+  conditional -ba        覆えば
+  conditional -tara      覆うたら

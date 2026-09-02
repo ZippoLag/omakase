@@ -73,6 +73,9 @@ def main():
         "jmdict-1605820-yoi.json": "良い",
         "jmdict-1358340-tabemono.json": "食べ物",
         "jmdict-1358490-shokuji.json": "食事",
+        # per-class [G] gap words (vs-c / vs-s — no upstream conjugation rows)
+        "jmdict-2410560-shisu.json": "死す",
+        "jmdict-1150450-aisuru.json": "愛する",
         "jmdict-1591900-kirei.json": "綺麗",
         "jmdict-1343460-atsui.json": "暑い",
         "jmdict-1169870-nomu.json": "飲む",

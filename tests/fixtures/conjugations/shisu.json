@@ -1,0 +1,43 @@
+{
+ "id": "2410560",
+ "dictionary_form": "死す",
+ "reading": "しす",
+ "class": "vs-c",
+ "provenance": "[G] engine-generated expected values (vs-c). Entry 死す from jmdict-simplified 3.6.2; no vs-c table exists in japanese-language-data.",
+ "forms": {
+  "dictionary": "しす",
+  "polite_nonpast": "しします",
+  "polite_past": "ししました",
+  "polite_negative": "ししません",
+  "polite_past_negative": "ししませんでした",
+  "te_form": "しして",
+  "ta_form": "しした",
+  "nai_form": "ししない",
+  "nakatta_form": "ししなかった",
+  "potential": "しできる",
+  "passive": "しされる",
+  "causative": "しさせる",
+  "imperative": "ししろ",
+  "volitional": "ししよう",
+  "conditional_ba": "しすれば",
+  "conditional_tara": "ししたら"
+ },
+ "display_forms": {
+  "dictionary": "死す",
+  "polite_nonpast": "死します",
+  "polite_past": "死しました",
+  "polite_negative": "死しません",
+  "polite_past_negative": "死しませんでした",
+  "te_form": "死して",
+  "ta_form": "死した",
+  "nai_form": "死しない",
+  "nakatta_form": "死しなかった",
+  "potential": "死できる",
+  "passive": "死される",
+  "causative": "死させる",
+  "imperative": "死しろ",
+  "volitional": "死しよう",
+  "conditional_ba": "死すれば",
+  "conditional_tara": "死したら"
+ }
+}

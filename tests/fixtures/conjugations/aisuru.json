@@ -1,0 +1,43 @@
+{
+ "id": "1150450",
+ "dictionary_form": "愛する",
+ "reading": "あいする",
+ "class": "vs-s",
+ "provenance": "[G] engine-generated expected values (vs-s). Entry 愛する from jmdict-simplified 3.6.2; no vs-s table exists in japanese-language-data.",
+ "forms": {
+  "dictionary": "あいする",
+  "polite_nonpast": "あいします",
+  "polite_past": "あいしました",
+  "polite_negative": "あいしません",
+  "polite_past_negative": "あいしませんでした",
+  "te_form": "あいして",
+  "ta_form": "あいした",
+  "nai_form": "あいしない",
+  "nakatta_form": "あいしなかった",
+  "potential": "あいできる",
+  "passive": "あいされる",
+  "causative": "あいさせる",
+  "imperative": "あいしろ",
+  "volitional": "あいしよう",
+  "conditional_ba": "あいすれば",
+  "conditional_tara": "あいしたら"
+ },
+ "display_forms": {
+  "dictionary": "愛する",
+  "polite_nonpast": "愛します",
+  "polite_past": "愛しました",
+  "polite_negative": "愛しません",
+  "polite_past_negative": "愛しませんでした",
+  "te_form": "愛して",
+  "ta_form": "愛した",
+  "nai_form": "愛しない",
+  "nakatta_form": "愛しなかった",
+  "potential": "愛できる",
+  "passive": "愛される",
+  "causative": "愛させる",
+  "imperative": "愛しろ",
+  "volitional": "愛しよう",
+  "conditional_ba": "愛すれば",
+  "conditional_tara": "愛したら"
+ }
+}

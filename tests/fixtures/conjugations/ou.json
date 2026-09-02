@@ -1,0 +1,43 @@
+{
+ "id": "9000101",
+ "dictionary_form": "覆う",
+ "reading": "おおう",
+ "class": "v5uru",
+ "provenance": "[G] synthetic v5uru entry (覆う) — no jmdict-simplified 3.6.2 entry carries v5uru; godan-u archaic う音便 (覆うて/覆うた) per conjugation-engine.md §2. Not in japanese-language-data.",
+ "forms": {
+  "dictionary": "おおう",
+  "polite_nonpast": "おおいます",
+  "polite_past": "おおいました",
+  "polite_negative": "おおいません",
+  "polite_past_negative": "おおいませんでした",
+  "te_form": "おおうて",
+  "ta_form": "おおうた",
+  "nai_form": "おおわない",
+  "nakatta_form": "おおわなかった",
+  "potential": "おおえる",
+  "passive": "おおわれる",
+  "causative": "おおわせる",
+  "imperative": "おおえ",
+  "volitional": "おおおう",
+  "conditional_ba": "おおえば",
+  "conditional_tara": "おおうたら"
+ },
+ "display_forms": {
+  "dictionary": "覆う",
+  "polite_nonpast": "覆います",
+  "polite_past": "覆いました",
+  "polite_negative": "覆いません",
+  "polite_past_negative": "覆いませんでした",
+  "te_form": "覆うて",
+  "ta_form": "覆うた",
+  "nai_form": "覆わない",
+  "nakatta_form": "覆わなかった",
+  "potential": "覆える",
+  "passive": "覆われる",
+  "causative": "覆わせる",
+  "imperative": "覆え",
+  "volitional": "覆おう",
+  "conditional_ba": "覆えば",
+  "conditional_tara": "覆うたら"
+ }
+}

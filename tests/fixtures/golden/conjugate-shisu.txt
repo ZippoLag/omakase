@@ -1,0 +1,18 @@
+Conjugations of 死す [しす]
+
+  dictionary             死す
+  polite nonpast         死します
+  polite past            死しました
+  polite negative        死しません
+  polite past negative   死しませんでした
+  te-form                死して
+  ta-form (past)         死した
+  nai-form (negative)    死しない
+  nakatta (neg. past)    死しなかった
+  potential              死できる
+  passive                死される
+  causative              死させる
+  imperative             死しろ
+  volitional             死しよう
+  conditional -ba        死すれば
+  conditional -tara      死したら

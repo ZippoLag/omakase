@@ -220,10 +220,23 @@ function suru(reading: string, pos: string): Record<string, string> | null {
       conditional_ba: root + "れば", conditional_tara: root + "たら",
     };
   }
-  if (reading.endsWith("する")) root = reading.slice(0, -2);
-  else root = reading; // vs suru noun: 食事 → しょくじ
+  let dictionary: string;
+  if (reading.endsWith("する")) {
+    root = reading.slice(0, -2);
+    dictionary = reading;
+  } else if ((pos === "vs-c" || pos === "vs-a") && reading.endsWith("す")) {
+    // ～す verbs (vs-c "su verb — precursor to suru", archaic vs-a): the
+    // reading's final す plays the role of する's す, so the stem is the
+    // reading minus す and the dictionary form is the reading itself
+    // (死す [しす] → 死します, 死して, 死しない — conjugation-engine.md §4.7).
+    root = reading.slice(0, -1);
+    dictionary = reading;
+  } else {
+    root = reading; // vs suru noun: 食事 → しょくじ
+    dictionary = reading + "する";
+  }
   return {
-    dictionary: reading.endsWith("する") ? reading : reading + "する",
+    dictionary,
     polite_nonpast: root + "します", polite_past: root + "しました",
     polite_negative: root + "しません", polite_past_negative: root + "しませんでした",
     te_form: root + "して", ta_form: root + "した",

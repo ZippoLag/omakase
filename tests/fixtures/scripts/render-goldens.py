@@ -611,7 +611,10 @@ def main():
     # --- conjugate ---
     for eid, name in [("1358280", "conjugate-taberu"), ("1547720", "conjugate-kuru"), ("1157170", "conjugate-suru"),
                       ("1605820", "conjugate-yoi"), ("2820690", "conjugate-ii"), ("1296400", "conjugate-aru"),
-                      ("1358490", "conjugate-shokuji"), ("1609650", "conjugate-kanzuru")]:
+                      ("1358490", "conjugate-shokuji"), ("1609650", "conjugate-kanzuru"),
+                      # per-class [G] gap classes (see tests/fixtures/conjugations provenance)
+                      ("2410560", "conjugate-shisu"), ("1150450", "conjugate-aisuru"),
+                      ("9000101", "conjugate-ou"), ("9000102", "conjugate-kentou")]:
         stem = name.replace("conjugate-", "")
         conj = load(os.path.join(C, stem + ".json"))
         write(name + ".txt", render_conjugate(w(eid), conj, entries))

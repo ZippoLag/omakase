@@ -1,0 +1,18 @@
+Conjugations of 愛する [あいする]
+
+  dictionary             愛する
+  polite nonpast         愛します
+  polite past            愛しました
+  polite negative        愛しません
+  polite past negative   愛しませんでした
+  te-form                愛して
+  ta-form (past)         愛した
+  nai-form (negative)    愛しない
+  nakatta (neg. past)    愛しなかった
+  potential              愛できる
+  passive                愛される
+  causative              愛させる
+  imperative             愛しろ
+  volitional             愛しよう
+  conditional -ba        愛すれば
+  conditional -tara      愛したら

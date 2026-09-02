@@ -3,9 +3,11 @@
  *
  * Runs the engine over every table in jkindrix/japanese-language-data's
  * conjugations.json (3,511 tables) AND the [G] gap-class fixtures under
- * tests/fixtures/conjugations/ (bare ある, suru noun 食事, vz 感ずる + the
- * upstream-verified pinned tables), diffing `forms` (kana) and
- * `display_forms` per entry, reporting pass rate by class.
+ * tests/fixtures/conjugations/ (bare ある, suru noun 食事, vz 感ずる, plus one
+ * fixture per class with no upstream rows — vs-c 死す, vs-s 愛する, v5uru 覆う
+ * [synthetic], vs-a 検討 [synthetic] — and the upstream-verified pinned
+ * tables), diffing `forms` (kana) and `display_forms` per entry, reporting
+ * pass rate by class.
  *
  * The upstream download is pinned by sha256 and cached in data/raw/. The [G]
  * fixtures carry a `provenance` field marking them as our engine-generated

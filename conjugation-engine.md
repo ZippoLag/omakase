@@ -196,6 +196,13 @@ conjugated table = noun reading + every する form above (しょくじ**する*
 validation dataset — golden-pin with our fixture (word-shokuji).
 **vz (ずる)** [G]: ずる behaves as じる after ず→じ (感ずる → 感じます, 感じた,
 感じない, 感じれば…); dictionary 感ずる, potential 感じられる. Not in dataset.
+**vs-c / vs-a (～す verbs)** [G]: vs-c is the "su verb — precursor to the
+modern suru"; the reading ends in す (死す → しす) and that final す plays the
+role of する's す — stem = reading minus す, dictionary = the reading itself
+(死します, 死して, 死しない, 死できる — not 死す*する). The vs-a class covers the same
+す-ending shape plus the suru-noun form (検討 → 検討する). Neither class has
+tables in the validation dataset — golden-pin with our fixtures
+(conjugate-shisu, conjugate-aisuru, conjugate-ou, conjugate-kentou).
 
 ### 4.8 i-adjective (`adj-i`) — stem + suffix [V]
 Stem = reading minus final い.
@@ -300,10 +307,12 @@ pinned tables byte-for-byte [V]):
    taxonomy.
 3. **Gap coverage (marked [G]):** `pnpm run validate:conjugations` also diffs the
    [G] gap fixtures in `tests/fixtures/conjugations/` through the same engine
-   path — bare ある (v5r-i, id 1296400), suru noun 食事 (vs, 1358490), and vz
-   感ずる (1609650), plus a v5uru verb (覆う — still to pin). **Result
-   (2026-08-28): 8/8 fixtures pass, 0 mismatches.** Combined with the 3,511
-   upstream tables: **3,519/3,519 pass (100.00%)**.
+   path — bare ある (v5r-i, 1296400), suru noun 食事 (vs, 1358490), vz 感ずる
+   (1609650), plus one fixture per class with no upstream rows: vs-c 死す
+   (2410560), vs-s 愛する (1150450), v5uru 覆う (9000101, synthetic), vs-a
+   検討 (9000102, synthetic). **Result (2026-09-02): 12/12 fixtures pass,
+   0 mismatches.** Combined with the 3,511 upstream tables: **3,523/3,523
+   pass (100.00%)**.
 4. **Deconjugate check:** every generated `value` must deconjugate back to its
    entry via `idx_conjugations_value` (round-trip test).
 

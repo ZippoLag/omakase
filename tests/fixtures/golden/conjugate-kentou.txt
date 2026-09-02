@@ -1,0 +1,18 @@
+Conjugations of 検討 [けんとう]
+
+  dictionary             検討する
+  polite nonpast         検討します
+  polite past            検討しました
+  polite negative        検討しません
+  polite past negative   検討しませんでした
+  te-form                検討して
+  ta-form (past)         検討した
+  nai-form (negative)    検討しない
+  nakatta (neg. past)    検討しなかった
+  potential              検討できる
+  passive                検討される
+  causative              検討させる
+  imperative             検討しろ
+  volitional             検討しよう
+  conditional -ba        検討すれば
+  conditional -tara      検討したら

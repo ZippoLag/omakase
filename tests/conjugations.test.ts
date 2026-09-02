@@ -87,6 +87,11 @@ const CONJUGATE_GOLDENS: [string, string][] = [
   ["conjugate-aru.txt", "1296400"],
   ["conjugate-shokuji.txt", "1358490"],
   ["conjugate-kanzuru.txt", "1609650"],
+  // per-class [G] gap fixtures: vs-c 死す, vs-s 愛する, v5uru 覆う (synthetic), vs-a 検討 (synthetic)
+  ["conjugate-shisu.txt", "2410560"],
+  ["conjugate-aisuru.txt", "1150450"],
+  ["conjugate-ou.txt", "9000101"],
+  ["conjugate-kentou.txt", "9000102"],
 ];
 
 const DECONJUGATE_GOLDENS: [string, string][] = [
@@ -126,8 +131,9 @@ test("conjugations table populated for all conjugatable fixture words", () => {
     const count = db.prepare("SELECT COUNT(*) AS n FROM conjugations").get() as { n: number };
     const wordCount = db.prepare("SELECT COUNT(DISTINCT word_id) AS n FROM conjugations").get() as { n: number };
     // fixture words with conjugatable POS: taberu, kuru, suru, yoi, ii, aru,
-    // shokuji, kanzuru, nomu, kuu, atsui, kirei, samui, iru
-    assert.equal(wordCount.n, 14);
+    // shokuji, kanzuru, nomu, kuu, atsui, kirei, samui, iru, plus the
+    // per-class gap words shisu (vs-c), aisuru (vs-s), ou (v5uru), kentou (vs-a)
+    assert.equal(wordCount.n, 18);
     assert.ok(count.n > 12 * 8, `expected >96 rows, got ${count.n}`);
   } finally {
     db.close();

@@ -1,0 +1,43 @@
+{
+ "id": "9000102",
+ "dictionary_form": "検討",
+ "reading": "けんとう",
+ "class": "vs-a",
+ "provenance": "[G] synthetic vs-a entry (検討) — no jmdict-simplified 3.6.2 entry carries vs-a; exercises the suru-noun shape under vs-a per conjugation-engine.md §4.7. Not in japanese-language-data.",
+ "forms": {
+  "dictionary": "けんとうする",
+  "polite_nonpast": "けんとうします",
+  "polite_past": "けんとうしました",
+  "polite_negative": "けんとうしません",
+  "polite_past_negative": "けんとうしませんでした",
+  "te_form": "けんとうして",
+  "ta_form": "けんとうした",
+  "nai_form": "けんとうしない",
+  "nakatta_form": "けんとうしなかった",
+  "potential": "けんとうできる",
+  "passive": "けんとうされる",
+  "causative": "けんとうさせる",
+  "imperative": "けんとうしろ",
+  "volitional": "けんとうしよう",
+  "conditional_ba": "けんとうすれば",
+  "conditional_tara": "けんとうしたら"
+ },
+ "display_forms": {
+  "dictionary": "検討する",
+  "polite_nonpast": "検討します",
+  "polite_past": "検討しました",
+  "polite_negative": "検討しません",
+  "polite_past_negative": "検討しませんでした",
+  "te_form": "検討して",
+  "ta_form": "検討した",
+  "nai_form": "検討しない",
+  "nakatta_form": "検討しなかった",
+  "potential": "検討できる",
+  "passive": "検討される",
+  "causative": "検討させる",
+  "imperative": "検討しろ",
+  "volitional": "検討しよう",
+  "conditional_ba": "検討すれば",
+  "conditional_tara": "検討したら"
+ }
+}
