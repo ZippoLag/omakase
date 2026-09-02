@@ -39,7 +39,7 @@ function buildFixtureDb(): DB {
   const kradfile = { kanji: {} } as never;
   const radkfile = { radicals: {} } as never;
 
-  const rows = transform(jmdict, kanjidic2, kradfile, radkfile) as Transformed;
+  const rows = transform(jmdict, kanjidic2, kradfile, radkfile, []) as Transformed;
   const tags = loadJson<Record<string, string>>(join(FIXTURES, "meta", "tags.json"));
   const db = buildDb(rows, { tags: JSON.stringify(tags) }, { dbPath: ":memory:" });
   return db;

@@ -13,7 +13,8 @@ Sources of fixture data (see README.md):
   - meta/tags.json   tag descriptions from the same release
   - conjugations/*.json  real tables from jkindrix/japanese-language-data
   - sentences/*.json real curated Tatoeba pairs (CC BY 2.0 FR)
-  - furigana: pinned known-correct values (pipeline will source JmdictFurigana)
+  - furigana-jmdict.json exact snapshots from Doublevil/JmdictFurigana
+    2.3.1+2026-08-25 (MIT; data derived from JMdict, CC BY-SA 4.0)
   - radical numbers: Kangxi numbering (public domain); full map in real impl
 """
 import json
@@ -68,26 +69,29 @@ ROMAJI = {
 def romaji(text):
     return ROMAJI.get(text, text)
 
-# pinned furigana (kanji writing -> ruby segments), known-correct
-FURIGANA = {
-    "食べる": "食[たべ]る", "喰べる": "喰[たべ]る",
-    "食べ物": "食[たべ]物[もの]", "食べもの": "食[たべ]もの",
-    "食事": "食[しょく]事[じ]",
-    "来る": "来[く]る", "來る": "來[く]る",
-    "良い": "良[よ]い", "好い": "好[よ]い", "善い": "善[よ]い",
-    "佳い": "佳[よ]い", "吉い": "吉[よ]い", "宜い": "宜[よ]い",
-    "綺麗": "綺[き]麗[れい]", "奇麗": "奇[き]麗[れい]", "暉麗": "暉[き]麗[れい]",
-    "暑い": "暑[あつ]い",
-    "飲む": "飲[の]む", "呑む": "呑[の]む", "飮む": "飮[の]む", "吞む": "吞[の]む",
-    "食う": "食[く]う", "喰う": "喰[く]う", "啖う": "啖[く]う",
-    "為る": "為[す]る",
-}
+# ---- JmdictFurigana (entries/furigana-jmdict.json, mirrored in
+# ---- data/build/transform.ts furiganaLookup / furiganaForWriting):
+# ---- (writing, reading) -> ruby-marked string.
+FURIGANA_MAP = {}
+for _e in load(os.path.join(E, "furigana-jmdict.json")):
+    FURIGANA_MAP[(_e["text"], _e["reading"])] = "".join(
+        s["ruby"] + ("[" + s["rt"] + "]" if s.get("rt") else "") for s in _e["furigana"]
+    )
+
+
+def furigana_for(entry, writing):
+    """Ruby-marked string for `writing` of `entry`, or None when the dataset
+    has no (writing, reading) pair for it. Pairs with the first kana reading
+    that has an entry (mirrors transform.ts furiganaForWriting) — the CLI
+    omits the Furigana line entirely when this returns None."""
+    for k in entry.get("kana", []):
+        ruby = FURIGANA_MAP.get((writing, k["text"]))
+        if ruby is not None:
+            return ruby
+    return None
 
 # Kangxi radical number -> character (subset used by fixtures; full list in real impl)
 KANGXI = {184: "食", 85: "水", 144: "行", 75: "木", 120: "糸", 72: "日", 138: "艮", 30: "口", 147: "見"}
-
-def furigana(writing):
-    return FURIGANA.get(writing, writing)
 
 def is_kanji(ch):
     return "\u4e00" <= ch <= "\u9fff"
@@ -122,7 +126,8 @@ def compound_rows(entries):
             for ch in k["text"]:
                 if is_kanji(ch) and ch not in seen:
                     seen.add(ch)
-                    rows.setdefault(ch, []).append((wid, k["text"], furigana(k["text"]), first_gloss(w)))
+                    fg = furigana_for(w, k["text"]) or k["text"]
+                    rows.setdefault(ch, []).append((wid, k["text"], fg, first_gloss(w)))
     return rows
 
 COMPOUNDS = compound_rows(word_entries())
@@ -138,7 +143,7 @@ def render_kanji_words(lits, entries, max_n=30):
         for k in w.get("kanji", []):
             matched = len({ch for ch in k["text"] if ch in lits})
             if matched and (best is None or matched > best[2]):
-                best = (wid, k["text"], matched, furigana(k["text"]), first_gloss(w))
+                best = (wid, k["text"], matched, furigana_for(w, k["text"]) or k["text"], first_gloss(w))
         if best:
             cand[wid] = best
     ranked = sorted(
@@ -168,7 +173,12 @@ def render_word(word, limit=None):
     if kanji:
         lines.append("Writings: " + "・".join(k["text"] for k in kanji))
     lines.append("Readings: " + "・".join(k["text"] for k in kana))
-    lines.append("Furigana: " + furigana(kanji[0]["text"]) if kanji else "Furigana: " + reading)
+    if kanji:
+        fg = furigana_for(word, kanji[0]["text"])
+        if fg is not None:
+            lines.append("Furigana: " + fg)
+    else:
+        lines.append("Furigana: " + reading)
     lines.append("")
     pos = []
     for s in word["sense"]:
@@ -578,6 +588,7 @@ def main():
     write("word-suru-limit3.txt", word_out("1157170", limit=3))
     write("word-atsui.txt", word_out("1343460"))
     write("word-aru.txt", word_out("1296400"))
+    write("word-aikyogen.txt", word_out("1215390"))
 
     # --- kanji ---
     for lit, name in [("食", "kanji-shoku"), ("水", "kanji-mizu"), ("喰", "kanji-kuu")]:

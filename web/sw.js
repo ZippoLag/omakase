@@ -24,7 +24,6 @@ const PRECACHE = [
   "./src/format.js",
   "./src/kana.js",
   "./src/kangxi.js",
-  "./src/furigana.js",
   "./src/conjugation.js",
   // SQLite WASM engine
   "./web/vendor/index.mjs",

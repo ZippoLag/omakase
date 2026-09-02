@@ -1,0 +1,60 @@
+{
+  "id": "1215390",
+  "kanji": [
+    {
+      "common": false,
+      "text": "間狂言",
+      "tags": []
+    }
+  ],
+  "kana": [
+    {
+      "common": false,
+      "text": "あいきょうげん",
+      "tags": [],
+      "appliesToKanji": [
+        "*"
+      ]
+    }
+  ],
+  "sense": [
+    {
+      "partOfSpeech": [
+        "n"
+      ],
+      "appliesToKanji": [
+        "*"
+      ],
+      "appliesToKana": [
+        "*"
+      ],
+      "related": [
+        [
+          "本狂言"
+        ]
+      ],
+      "antonym": [],
+      "field": [
+        "noh"
+      ],
+      "dialect": [],
+      "misc": [],
+      "info": [],
+      "languageSource": [],
+      "gloss": [
+        {
+          "lang": "eng",
+          "gender": null,
+          "type": null,
+          "text": "kyogen interlude"
+        },
+        {
+          "lang": "eng",
+          "gender": null,
+          "type": "explanation",
+          "text": "short scene during a noh play, performed by a kyogen actor (usu. explaining the play)"
+        }
+      ]
+    }
+  ]
+}

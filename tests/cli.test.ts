@@ -64,7 +64,10 @@ function buildFixtureDbFile(): { dbPath: string; dir: string } {
       radk.radicals[lit] = { strokeCount: s.strokeCount ?? 0, code: s.code ?? null, kanji: s.kanji ?? [] };
     }
   }
-  const rows = transform({ words } as never, { characters } as never, krad, radk);
+  const furigana = entries
+    .filter((f) => f.startsWith("furigana-"))
+    .flatMap((f) => loadJson<unknown[]>(join(FIXTURES, "entries", f)));
+  const rows = transform({ words } as never, { characters } as never, krad, radk, furigana as never);
   const tags = loadJson<Record<string, string>>(join(FIXTURES, "meta", "tags.json"));
   const db = buildDb(rows, { tags: JSON.stringify(tags) }, { dbPath });
   try {

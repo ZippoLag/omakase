@@ -8,8 +8,17 @@
     "kradfile-3.6.2+20260824122934.json.tgz": "535d6ac0d8aef49eba309c1f85c77836af735d3b178b6ce7a1218e6ba1c1dec1",
     "radkfile-3.6.2+20260824122934.json.tgz": "d69f9c7227612059229a824e06eea39c75edfe87777a4ca1236d820ca86c369b"
   },
+  "furigana": {
+    "source": "Doublevil/JmdictFurigana",
+    "release": "2.3.1+2026-08-25",
+    "file": "JmdictFurigana.json.tar.gz",
+    "sha256": "74bcd9d814de16acc006c328a4b2ebb6ab6733614c9135bc5d7553bcf62240a1",
+    "entry_counts": {
+      "pairs_total": 236255
+    }
+  },
   "entry_counts": {
     "jmdict_words_total": 218577
   },
-  "note": "Fixture entries are exact snapshots from the release above."
+  "note": "Fixture entries are exact snapshots from the release above; furigana slice entries are exact snapshots from the JmdictFurigana release above."
 }

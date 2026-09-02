@@ -187,11 +187,14 @@ CREATE INDEX idx_conjugations_display ON conjugations(display) WHERE display IS 
 CREATE INDEX idx_conjugations_word    ON conjugations(word_id);
 
 -- ============ Enrichment: furigana ============
+-- Populated from the Doublevil/JmdictFurigana release (see data/build/config.ts
+-- FURIGANA_ASSET): one row per kanji writing, keyed by the kana reading it
+-- pairs with (first kana reading that has a dataset entry).
 CREATE TABLE furigana (
   word_id  TEXT NOT NULL REFERENCES words(id),
   writing  TEXT NOT NULL,              -- kanji writing
-  reading  TEXT NOT NULL,              -- kana reading
-  segments TEXT NOT NULL               -- JSON: [{"kanji":"食","kana":"たべ"}, ...]
+  reading  TEXT NOT NULL,              -- the paired kana reading
+  segments TEXT NOT NULL               -- ruby-marked string, e.g. '食[た]べる'
 );
 
 -- ============ Enrichment: sentences (curated Tatoeba) ============
@@ -249,7 +252,7 @@ CREATE VIRTUAL TABLE glosses_fts USING fts5(
 );
 ```
 
-**Row counts (full jmdict-eng build, 2026-08-29):** words 218,577, writings 498,621, senses 253,299, glosses 442,536, kanji 13,108, kanji_readings 37,048, kanji_meanings 48,088, kanji_nanori 3,454, kanji_radicals 54,321, kanji_words 584,238, conjugations 506,348 (34,609 words), sentences 25,980, word_sentences ~45k, thesaurus_links (schema v2) 129,673 rows. All trivially within SQLite's comfort zone. The thesaurus_links closure lifts coverage from the raw xrefs: 32,014 → 50,917 words with synonym links and 1,054 → 1,546 words with antonym links (445 antonym pairs come from 2-hop closure, 524 from reverse edges).
+**Row counts (full jmdict-eng build, 2026-09-02, with JmdictFurigana 2.3.1+2026-08-25):** words 218,577, writings 498,621, senses 253,299, glosses 442,536, kanji 13,108, kanji_readings 37,048, kanji_meanings 48,088, kanji_nanori 3,454, kanji_radicals 54,321, kanji_words 584,238, conjugations 506,348 (34,609 words), furigana 225,664 rows covering 96.8% of kanji writings (writings the dataset lacks no longer echo themselves on `word` — the Furigana line is omitted instead), sentences 25,980, word_sentences ~45k, thesaurus_links (schema v2) 129,673 rows. All trivially within SQLite's comfort zone. The thesaurus_links closure lifts coverage from the raw xrefs: 32,014 → 50,917 words with synonym links and 1,054 → 1,546 words with antonym links (445 antonym pairs come from 2-hop closure, 524 from reverse edges).
 
 ---
 

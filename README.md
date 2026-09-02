@@ -147,7 +147,7 @@ $ omakase word 食べる
 
 Writings: 食べる・喰べる
 Readings: たべる
-Furigana: 食[たべ]る
+Furigana: 食[た]べる
 
 Ichidan verb; transitive verb
 

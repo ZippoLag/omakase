@@ -138,8 +138,11 @@ export function renderWordBody(word: LoadedWord, tags: Record<string, string>, l
   }
   lines.push("Readings: " + word.kana.map((k) => k.text).join("・"));
   if (word.kanji.length > 0) {
+    // Only show a Furigana line when there is an actual ruby annotation: a
+    // writing with no known split would otherwise echo the Writings line.
     const c = word.kanji.filter((k) => k.common)[0] ?? word.kanji[0]!;
-    lines.push("Furigana: " + rubyFor(word, c.text));
+    const ruby = rubyFor(word, c.text);
+    if (ruby !== c.text) lines.push("Furigana: " + ruby);
   } else {
     lines.push("Furigana: " + (h.reading ?? ""));
   }

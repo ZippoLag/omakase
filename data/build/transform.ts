@@ -3,9 +3,10 @@
  * in data-model.md §3. Deterministic: identical input ⇒ identical rows.
  */
 import { toRomaji } from "../../src/kana.js";
-import { furiganaFor } from "../../src/furigana.js";
 import { CONJUGATABLE, conjugateReading, type ConjClass } from "../../src/conjugation.js";
 import type {
+  FuriganaEntry,
+  FuriganaSegment,
   JmdictFile,
   Kanjidic2File,
   KradfileFile,
@@ -133,6 +134,42 @@ export interface Transformed {
 
 const json = (v: unknown): string => JSON.stringify(v);
 
+/** Render JmdictFurigana segments to one ruby-marked string (`食[た]べる`). */
+export function renderFurigana(segments: FuriganaSegment[]): string {
+  return segments.map((s) => (s.rt ? `${s.ruby}[${s.rt}]` : s.ruby)).join("");
+}
+
+/**
+ * (writing, reading) -> ruby-marked string, from the raw JmdictFurigana
+ * entries. The dataset keys on the exact JMdict spelling + kana reading pair,
+ * so lookups use the word's own kana writings as-is.
+ */
+export function furiganaLookup(entries: FuriganaEntry[]): Map<string, string> {
+  const map = new Map<string, string>();
+  for (const e of entries) {
+    map.set(`${e.text}\u0000${e.reading}`, renderFurigana(e.furigana));
+  }
+  return map;
+}
+
+/**
+ * Ruby-marked segments for a kanji writing of a word: the first kana reading
+ * (JMdict kana order) that has a dataset entry wins. Returns null when the
+ * dataset has no entry for any (writing, reading) pair — the CLI then omits
+ * the Furigana line rather than echoing the writing.
+ */
+export function furiganaForWriting(
+  word: Pick<JmdictWord, "kana">,
+  writing: string,
+  lookup: Map<string, string>,
+): { reading: string; segments: string } | null {
+  for (const k of word.kana) {
+    const segments = lookup.get(`${writing}\u0000${k.text}`);
+    if (segments !== undefined) return { reading: k.text, segments };
+  }
+  return null;
+}
+
 function isKanji(ch: string): boolean {
   const code = ch.codePointAt(0)!;
   return code >= 0x4e00 && code <= 0x9fff;
@@ -143,7 +180,10 @@ export function transform(
   kanjidic2: Kanjidic2File,
   kradfile: KradfileFile,
   radkfile: RadkfileFile,
+  furiganaData: FuriganaEntry[],
 ): Transformed {
+  const lookup = furiganaLookup(furiganaData);
+
   const words: WordRow[] = [];
   const writings: WritingRow[] = [];
   const senses: SenseRow[] = [];
@@ -251,16 +291,17 @@ export function transform(
       }
     }
 
-    // furigana: pin ruby only for known writings (M1 pinned map; M2 = JmdictFurigana)
-    const headReading = word.kana[0]?.text ?? "";
+    // furigana: ruby segmentation sourced from the JmdictFurigana dataset
+    // (writing × first kana reading with an entry). No entry -> no row; the
+    // CLI omits the Furigana line for such writings instead of echoing them.
     for (const k of kanjiWritings) {
-      const ruby = furiganaFor(k.text);
-      if (ruby !== k.text) {
+      const fg = furiganaForWriting(word, k.text, lookup);
+      if (fg && fg.segments !== k.text) {
         furigana.push({
           word_id: word.id,
           writing: k.text,
-          reading: headReading,
-          segments: ruby,
+          reading: fg.reading,
+          segments: fg.segments,
         });
       }
     }

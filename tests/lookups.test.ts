@@ -14,7 +14,7 @@ import Database from "better-sqlite3";
 import { transform } from "../data/build/transform.js";
 import { buildDb } from "../data/build/buildDb.js";
 import { cmdWord, cmdKanji, cmdSearch, loadTags } from "../src/cli.js";
-import { renderKanjiWords, renderSearch } from "../src/format.js";
+import { renderKanjiWords, renderSearch, renderWordBody } from "../src/format.js";
 import {
   exampleSentences,
   glossThesaurus,
@@ -25,7 +25,8 @@ import {
   wordsContainingKanji,
 } from "../src/lookup.js";
 import type { LoadedWord } from "../src/lookup.js";
-import type { JmdictWord, Kanjidic2Character, KradfileFile, RadkfileFile } from "../data/build/parse.js";
+import type { FuriganaEntry, JmdictWord, Kanjidic2Character, KradfileFile, RadkfileFile } from "../data/build/parse.js";
+import { furiganaForWriting, furiganaLookup, renderFurigana } from "../data/build/transform.js";
 
 type DB = InstanceType<typeof Database>;
 
@@ -70,7 +71,12 @@ function buildFixtureDb(): DB {
     }
   }
 
-  const rows = transform({ words } as never, { characters } as never, krad, radk);
+  // furigana: seeded from the JmdictFurigana dataset slices (entries/
+  // furigana-*.json), like the full build wires the pinned release asset.
+  const furigana = fixtureDir("entries")
+    .filter((f) => f.startsWith("furigana-"))
+    .flatMap((f) => loadJson<FuriganaEntry[]>(join(FIXTURES, "entries", f)));
+  const rows = transform({ words } as never, { characters } as never, krad, radk, furigana);
   const tags = loadJson<Record<string, string>>(join(FIXTURES, "meta", "tags.json"));
   const db = buildDb(rows, { tags: JSON.stringify(tags) }, { dbPath: ":memory:" });
 
@@ -102,6 +108,10 @@ const WORD_GOLDENS: [string, string, string?, number?][] = [
   // thesaurus: 暑い has an antonym (寒い), 有る a related word (居る).
   ["word-atsui.txt", "暑い"],
   ["word-aru.txt", "有る"],
+  // a kanji writing whose ruby split only exists in the JmdictFurigana
+  // dataset (never in the hand-pinned map): 間狂言 / あいきょうげん ->
+  // 間[あい]狂[きょう]言[げん]. Regression for the "Furigana: <writing>" echo.
+  ["word-aikyogen.txt", "間狂言"],
 ];
 
 const KANJI_GOLDENS: [string, string][] = [
@@ -262,6 +272,7 @@ test("thesaurus_links: forward, reverse and 2-hop closure built offline", () => 
     { characters: [] } as never,
     { version: "", kanji: {} } as KradfileFile,
     { version: "", radicals: {} } as RadkfileFile,
+    [],
   );
   const db = buildDb(rows, { tags: "{}" }, { dbPath: ":memory:" });
   try {
@@ -356,6 +367,7 @@ test("gloss-thesaurus fallback: shared tokens, POS filter, exclusion, common tie
     { characters: [] } as never,
     { version: "", kanji: {} } as KradfileFile,
     { version: "", radicals: {} } as RadkfileFile,
+    [],
   );
   const db = buildDb(rows, { tags: "{}" }, { dbPath: ":memory:" });
   try {
@@ -442,6 +454,82 @@ test("no-match paths return null / empty result set", () => {
   } finally {
     db.close();
   }
+});
+
+// ---- furigana (JmdictFurigana dataset) -------------------------------------
+
+test("furigana: dataset ruby rows for every fixture kanji writing", () => {
+  // Regression guard for the 間狂言-class bug: a kanji writing with no
+  // dataset entry silently rendered "Furigana: <writing>" (same as
+  // "Writings:"). Every fixture kanji writing must carry a real split.
+  const db = buildFixtureDb();
+  try {
+    const writings = db.prepare(
+      "SELECT word_id, text FROM writings WHERE kind = 'kanji' ORDER BY word_id, text",
+    ).all() as { word_id: string; text: string }[];
+    const rows = db.prepare("SELECT word_id, writing, segments FROM furigana ORDER BY word_id, writing").all() as
+      { word_id: string; writing: string; segments: string }[];
+    assert.ok(writings.length >= 34, `fixture kanji writings: ${writings.length}`);
+    // exactly one row per kanji writing — none may fall back to bare
+    assert.equal(rows.length, writings.length, "every fixture kanji writing gets a furigana row");
+    const byKey = new Map(rows.map((r) => [r.word_id + "\u0000" + r.writing, r.segments]));
+    for (const w of writings) {
+      const segments = byKey.get(w.word_id + "\u0000" + w.text);
+      assert.ok(segments !== undefined, `furigana row for ${w.word_id} ${w.text}`);
+      assert.notEqual(segments, w.text, `${w.text} has a real ruby split`);
+    }
+    // Known values from the JmdictFurigana slice (release 2.3.1+2026-08-25):
+    assert.equal(byKey.get("1215390\u0000間狂言"), "間[あい]狂[きょう]言[げん]", "間狂言 splits via the dataset");
+    assert.equal(byKey.get("1296400\u0000有る"), "有[あ]る", "有る was the bare-fallback case");
+    // The dataset convention, not the old hand-pinned 食[たべ]る:
+    assert.equal(byKey.get("1358280\u0000食べる"), "食[た]べる");
+  } finally {
+    db.close();
+  }
+});
+
+test("furiganaForWriting: first kana reading with a dataset entry wins; none -> null", () => {
+  const entries: FuriganaEntry[] = [{
+    text: "間狂言",
+    reading: "あいきょうげん",
+    furigana: [
+      { ruby: "間", rt: "あい" },
+      { ruby: "狂", rt: "きょう" },
+      { ruby: "言", rt: "げん" },
+    ],
+  }];
+  const lookup = furiganaLookup(entries);
+  const mkWord = (readings: string[]): Pick<JmdictWord, "kana"> => ({
+    kana: readings.map((text) => ({ common: true, text, tags: [], appliesToKanji: ["*"] })),
+  });
+  const want = { reading: "あいきょうげん", segments: "間[あい]狂[きょう]言[げん]" };
+  assert.deepEqual(furiganaForWriting(mkWord(["あいきょうげん"]), "間狂言", lookup), want);
+  // Kana order decides the pairing when several readings could match.
+  assert.deepEqual(furiganaForWriting(mkWord(["アイキョウゲン", "あいきょうげん"]), "間狂言", lookup), want);
+  assert.equal(furiganaForWriting(mkWord(["べつのよみ"]), "間狂言", lookup), null);
+  // Bare-kana segments render passthrough (食べ物 -> 食[た]べ物[もの]).
+  assert.equal(
+    renderFurigana([{ ruby: "食", rt: "た" }, { ruby: "べ" }, { ruby: "物", rt: "もの" }]),
+    "食[た]べ物[もの]",
+  );
+});
+
+test("renderWordBody omits the Furigana line when a kanji writing has no ruby", () => {
+  // A kanji writing with no dataset entry must not echo itself as its own
+  // furigana — the line is omitted (kana-only words keep showing the reading).
+  const mk = (furigana: Map<string, string>): LoadedWord => ({
+    id: "1",
+    common: true,
+    kanji: [{ text: "喫茶店", common: true }],
+    kana: [{ text: "きっさてん", common: true }],
+    senses: [{ partOfSpeech: ["n"], glosses: ["coffee shop"] }],
+    furigana,
+  });
+  const bare = renderWordBody(mk(new Map()), { n: "noun" });
+  assert.ok(!bare.includes("Furigana:"), "line omitted without a ruby annotation:\n" + bare);
+  assert.ok(bare.includes("Writings: 喫茶店") && bare.includes("Readings: きっさてん"), bare);
+  const ruby = renderWordBody(mk(new Map([["喫茶店", "喫[きっ]茶[さ]店[てん]"]])), { n: "noun" });
+  assert.ok(ruby.includes("Furigana: 喫[きっ]茶[さ]店[てん]"), ruby);
 });
 
 const readings = (hits: { reading: string }[]) => hits.map((h) => h.reading);
@@ -562,6 +650,7 @@ test("cmdSearch gloss: tokens are ANDed and prefix-matched", () => {
     { characters: [] } as never,
     { version: "", kanji: {} } as KradfileFile,
     { version: "", radicals: {} } as RadkfileFile,
+    [],
   );
   const db = buildDb(rows, { tags: "{}" }, { dbPath: ":memory:" });
   try {
@@ -612,6 +701,7 @@ test("cmdSearch: ambiguous query shows BOTH ranked sections (reading + meaning)"
     { characters: [] } as never,
     { version: "", kanji: {} } as KradfileFile,
     { version: "", radicals: {} } as RadkfileFile,
+    [],
   );
   const db = buildDb(rows, { tags: "{}" }, { dbPath: ":memory:" });
   try {
@@ -660,6 +750,7 @@ test("meaning ranking: an earlier covering sense beats a later one", () => {
     { characters: [] } as never,
     { version: "", kanji: {} } as KradfileFile,
     { version: "", radicals: {} } as RadkfileFile,
+    [],
   );
   const db = buildDb(rows, { tags: "{}" }, { dbPath: ":memory:" });
   try {
@@ -703,6 +794,7 @@ test("cmdSearch: accidental ASCII reading prefixes are dropped when meanings mat
     { characters: [] } as never,
     { version: "", kanji: {} } as KradfileFile,
     { version: "", radicals: {} } as RadkfileFile,
+    [],
   );
   const db = buildDb(rows, { tags: "{}" }, { dbPath: ":memory:" });
   try {
@@ -772,6 +864,7 @@ test("exampleSentences: a ``%`` inside a writing matches literally", () => {
     { characters: [] } as never,
     { version: "", kanji: {} } as KradfileFile,
     { version: "", radicals: {} } as RadkfileFile,
+    [],
   );
   const db = buildDb(rows, { tags: "{}" }, { dbPath: ":memory:" });
   try {

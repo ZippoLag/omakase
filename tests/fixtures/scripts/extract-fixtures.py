@@ -31,6 +31,11 @@ def save(name, obj):
         json.dump(obj, f, ensure_ascii=False, indent=2)
 
 
+def load(name):
+    with open(os.path.join(ENTRIES, name), encoding="utf-8") as f:
+        return json.load(f)
+
+
 def main():
     os.makedirs(ENTRIES, exist_ok=True)
     with open(os.path.join(BASE, "manifest.json"), encoding="utf-8") as f:
@@ -58,6 +63,40 @@ def main():
     kanjidic2 = load_json_tgz(blobs["kanjidic2-en-%s.json.tgz" % tag])
     krad = load_json_tgz(blobs["kradfile-%s.json.tgz" % tag])
     radk = load_json_tgz(blobs["radkfile-%s.json.tgz" % tag])
+
+    # ---- JmdictFurigana (separate repo/release; pinned in manifest) ----
+    fman = manifest.get("furigana")
+    if fman:
+        fr = json.loads(get("https://api.github.com/repos/Doublevil/JmdictFurigana/releases/latest"))
+        want_tag = fman["release"]
+        if fr["tag_name"] != want_tag:
+            raise SystemExit("JmdictFurigana moved to %s; update manifest.json before regenerating" % fr["tag_name"])
+        furl = next(
+            a["browser_download_url"]
+            for a in fr["assets"] if a["name"] == fman["file"]
+        )
+        fdata = get(furl)
+        got = hashlib.sha256(fdata).hexdigest()
+        if got != fman["sha256"]:
+            raise SystemExit("sha256 mismatch for %s: %s" % (fman["file"], got))
+        furigana = load_json_tgz(fdata)  # inner JSON has a UTF-8 BOM; json.load handles it
+        print("furigana verified:", fman["file"], "(%d pairs)" % len(furigana))
+        fg_by_key = {(e["text"], e["reading"]): e for e in furigana}
+
+        def fg_slice():
+            out = {}
+            for name in sorted(os.listdir(ENTRIES)):
+                if not name.startswith("jmdict-") or not name.endswith(".json"):
+                    continue
+                w = load(os.path.join(ENTRIES, name))
+                for k in w.get("kanji", []):
+                    for r in w.get("kana", []):
+                        e = fg_by_key.get((k["text"], r["text"]))
+                        if e:
+                            out[(k["text"], r["text"])] = e
+            return sorted(out.values(), key=lambda e: (e["text"], e["reading"]))
+
+        save("furigana-jmdict.json", fg_slice())
 
     # ---- JMdict entries (by kanji text, or kana text when kanji absent) ----
     def find_jmdict(k):

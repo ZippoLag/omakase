@@ -6,7 +6,6 @@
  * contract in tests/fixtures/scripts/render-goldens.py so the formatters can
  * reproduce the golden outputs byte-for-byte.
  */
-import { furiganaFor } from "./furigana.js";
 import { kangxiChar } from "./kangxi.js";
 import { katakanaToHiragana, toRomaji } from "./kana.js";
 
@@ -112,9 +111,13 @@ export function firstGloss(word: LoadedWord): string {
   return "";
 }
 
-/** Ruby for a writing of a loaded word (furigana table, falling back to bare). */
+/**
+ * Ruby-marked form of a writing of a loaded word (from the furigana table; a
+ * writing with no dataset entry falls back to the bare writing, which callers
+ * treat as "no annotation").
+ */
 export function rubyFor(word: LoadedWord, writing: string): string {
-  return word.furigana.get(writing) ?? furiganaFor(writing);
+  return word.furigana.get(writing) ?? writing;
 }
 
 // ---- kanji ----------------------------------------------------------------

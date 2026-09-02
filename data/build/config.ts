@@ -6,6 +6,18 @@
 export const SOURCE = "scriptin/jmdict-simplified";
 export const RELEASE = "3.6.2+20260824122934";
 
+/**
+ * JmdictFurigana release pin (Doublevil/JmdictFurigana, MIT; data derived from
+ * JMdict, CC BY-SA 4.0). Rebuilt monthly from the same upstream JMdict that
+ * jmdict-simplified mirrors, so the release dates track each other. The repo
+ * ships a plain JSON and a .tar.gz of the same file; we pin the .tar.gz so the
+ * existing tar loader applies unchanged. The inner JSON is UTF-8 with a BOM.
+ */
+export const FURIGANA_SOURCE = "Doublevil/JmdictFurigana";
+export const FURIGANA_RELEASE = "2.3.1+2026-08-25";
+export const FURIGANA_ASSET = "JmdictFurigana.json.tar.gz";
+export const FURIGANA_SHA256 = "74bcd9d814de16acc006c328a4b2ebb6ab6733614c9135bc5d7553bcf62240a1";
+
 export interface Asset {
   /** Release asset file name */
   name: string;
@@ -35,6 +47,13 @@ export const ASSETS: Asset[] = [
   {
     name: `radkfile-${RELEASE}.json.tgz`,
     sha256: "d69f9c7227612059229a824e06eea39c75edfe87777a4ca1236d820ca86c369b",
+  },
+  {
+    // Curated kanji->kana ruby segmentation for JMdict headwords (236,255
+    // text+reading pairs). Release 2.3.1+2026-08-25 (5 MB tgz of a single
+    // JSON with a UTF-8 BOM).
+    name: FURIGANA_ASSET,
+    sha256: FURIGANA_SHA256,
   },
 ];
 

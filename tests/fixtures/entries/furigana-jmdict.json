@@ -1,0 +1,471 @@
+[
+  {
+    "text": "佳い",
+    "reading": "よい",
+    "furigana": [
+      {
+        "ruby": "佳",
+        "rt": "よ"
+      },
+      {
+        "ruby": "い"
+      }
+    ]
+  },
+  {
+    "text": "來る",
+    "reading": "くる",
+    "furigana": [
+      {
+        "ruby": "來",
+        "rt": "く"
+      },
+      {
+        "ruby": "る"
+      }
+    ]
+  },
+  {
+    "text": "吉い",
+    "reading": "よい",
+    "furigana": [
+      {
+        "ruby": "吉",
+        "rt": "よ"
+      },
+      {
+        "ruby": "い"
+      }
+    ]
+  },
+  {
+    "text": "吞む",
+    "reading": "のむ",
+    "furigana": [
+      {
+        "ruby": "吞",
+        "rt": "の"
+      },
+      {
+        "ruby": "む"
+      }
+    ]
+  },
+  {
+    "text": "呑む",
+    "reading": "のむ",
+    "furigana": [
+      {
+        "ruby": "呑",
+        "rt": "の"
+      },
+      {
+        "ruby": "む"
+      }
+    ]
+  },
+  {
+    "text": "啖う",
+    "reading": "くう",
+    "furigana": [
+      {
+        "ruby": "啖",
+        "rt": "く"
+      },
+      {
+        "ruby": "う"
+      }
+    ]
+  },
+  {
+    "text": "善い",
+    "reading": "よい",
+    "furigana": [
+      {
+        "ruby": "善",
+        "rt": "よ"
+      },
+      {
+        "ruby": "い"
+      }
+    ]
+  },
+  {
+    "text": "喰う",
+    "reading": "くう",
+    "furigana": [
+      {
+        "ruby": "喰",
+        "rt": "く"
+      },
+      {
+        "ruby": "う"
+      }
+    ]
+  },
+  {
+    "text": "喰べる",
+    "reading": "たべる",
+    "furigana": [
+      {
+        "ruby": "喰",
+        "rt": "た"
+      },
+      {
+        "ruby": "べる"
+      }
+    ]
+  },
+  {
+    "text": "在る",
+    "reading": "ある",
+    "furigana": [
+      {
+        "ruby": "在",
+        "rt": "あ"
+      },
+      {
+        "ruby": "る"
+      }
+    ]
+  },
+  {
+    "text": "奇麗",
+    "reading": "きれい",
+    "furigana": [
+      {
+        "ruby": "奇",
+        "rt": "き"
+      },
+      {
+        "ruby": "麗",
+        "rt": "れい"
+      }
+    ]
+  },
+  {
+    "text": "好い",
+    "reading": "よい",
+    "furigana": [
+      {
+        "ruby": "好",
+        "rt": "よ"
+      },
+      {
+        "ruby": "い"
+      }
+    ]
+  },
+  {
+    "text": "宜い",
+    "reading": "よい",
+    "furigana": [
+      {
+        "ruby": "宜",
+        "rt": "よ"
+      },
+      {
+        "ruby": "い"
+      }
+    ]
+  },
+  {
+    "text": "寒い",
+    "reading": "さむい",
+    "furigana": [
+      {
+        "ruby": "寒",
+        "rt": "さむ"
+      },
+      {
+        "ruby": "い"
+      }
+    ]
+  },
+  {
+    "text": "居る",
+    "reading": "いる",
+    "furigana": [
+      {
+        "ruby": "居",
+        "rt": "い"
+      },
+      {
+        "ruby": "る"
+      }
+    ]
+  },
+  {
+    "text": "愛する",
+    "reading": "あいする",
+    "furigana": [
+      {
+        "ruby": "愛",
+        "rt": "あい"
+      },
+      {
+        "ruby": "する"
+      }
+    ]
+  },
+  {
+    "text": "感ずる",
+    "reading": "かんずる",
+    "furigana": [
+      {
+        "ruby": "感",
+        "rt": "かん"
+      },
+      {
+        "ruby": "ずる"
+      }
+    ]
+  },
+  {
+    "text": "暉麗",
+    "reading": "きれい",
+    "furigana": [
+      {
+        "ruby": "暉",
+        "rt": "き"
+      },
+      {
+        "ruby": "麗",
+        "rt": "れい"
+      }
+    ]
+  },
+  {
+    "text": "暑い",
+    "reading": "あつい",
+    "furigana": [
+      {
+        "ruby": "暑",
+        "rt": "あつ"
+      },
+      {
+        "ruby": "い"
+      }
+    ]
+  },
+  {
+    "text": "有る",
+    "reading": "ある",
+    "furigana": [
+      {
+        "ruby": "有",
+        "rt": "あ"
+      },
+      {
+        "ruby": "る"
+      }
+    ]
+  },
+  {
+    "text": "来る",
+    "reading": "くる",
+    "furigana": [
+      {
+        "ruby": "来",
+        "rt": "く"
+      },
+      {
+        "ruby": "る"
+      }
+    ]
+  },
+  {
+    "text": "検討",
+    "reading": "けんとう",
+    "furigana": [
+      {
+        "ruby": "検",
+        "rt": "けん"
+      },
+      {
+        "ruby": "討",
+        "rt": "とう"
+      }
+    ]
+  },
+  {
+    "text": "死す",
+    "reading": "しす",
+    "furigana": [
+      {
+        "ruby": "死",
+        "rt": "し"
+      },
+      {
+        "ruby": "す"
+      }
+    ]
+  },
+  {
+    "text": "為る",
+    "reading": "する",
+    "furigana": [
+      {
+        "ruby": "為",
+        "rt": "す"
+      },
+      {
+        "ruby": "る"
+      }
+    ]
+  },
+  {
+    "text": "綺麗",
+    "reading": "きれい",
+    "furigana": [
+      {
+        "ruby": "綺",
+        "rt": "き"
+      },
+      {
+        "ruby": "麗",
+        "rt": "れい"
+      }
+    ]
+  },
+  {
+    "text": "良い",
+    "reading": "よい",
+    "furigana": [
+      {
+        "ruby": "良",
+        "rt": "よ"
+      },
+      {
+        "ruby": "い"
+      }
+    ]
+  },
+  {
+    "text": "覆う",
+    "reading": "おおう",
+    "furigana": [
+      {
+        "ruby": "覆",
+        "rt": "おお"
+      },
+      {
+        "ruby": "う"
+      }
+    ]
+  },
+  {
+    "text": "間狂言",
+    "reading": "あいきょうげん",
+    "furigana": [
+      {
+        "ruby": "間",
+        "rt": "あい"
+      },
+      {
+        "ruby": "狂",
+        "rt": "きょう"
+      },
+      {
+        "ruby": "言",
+        "rt": "げん"
+      }
+    ]
+  },
+  {
+    "text": "食う",
+    "reading": "くう",
+    "furigana": [
+      {
+        "ruby": "食",
+        "rt": "く"
+      },
+      {
+        "ruby": "う"
+      }
+    ]
+  },
+  {
+    "text": "食べもの",
+    "reading": "たべもの",
+    "furigana": [
+      {
+        "ruby": "食",
+        "rt": "た"
+      },
+      {
+        "ruby": "べもの"
+      }
+    ]
+  },
+  {
+    "text": "食べる",
+    "reading": "たべる",
+    "furigana": [
+      {
+        "ruby": "食",
+        "rt": "た"
+      },
+      {
+        "ruby": "べる"
+      }
+    ]
+  },
+  {
+    "text": "食べ物",
+    "reading": "たべもの",
+    "furigana": [
+      {
+        "ruby": "食",
+        "rt": "た"
+      },
+      {
+        "ruby": "べ"
+      },
+      {
+        "ruby": "物",
+        "rt": "もの"
+      }
+    ]
+  },
+  {
+    "text": "食事",
+    "reading": "しょくじ",
+    "furigana": [
+      {
+        "ruby": "食",
+        "rt": "しょく"
+      },
+      {
+        "ruby": "事",
+        "rt": "じ"
+      }
+    ]
+  },
+  {
+    "text": "飮む",
+    "reading": "のむ",
+    "furigana": [
+      {
+        "ruby": "飮",
+        "rt": "の"
+      },
+      {
+        "ruby": "む"
+      }
+    ]
+  },
+  {
+    "text": "飲む",
+    "reading": "のむ",
+    "furigana": [
+      {
+        "ruby": "飲",
+        "rt": "の"
+      },
+      {
+        "ruby": "む"
+      }
+    ]
+  }
+]

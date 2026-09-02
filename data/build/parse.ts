@@ -81,6 +81,20 @@ export interface Kanjidic2File {
   characters: Kanjidic2Character[];
 }
 
+/** One ruby segment of a JmdictFurigana entry: a kanji (or other symbol)
+ * with its reading, or a bare kana run (no `rt`). */
+export interface FuriganaSegment {
+  ruby: string;
+  rt?: string;
+}
+
+/** One JmdictFurigana entry: text + reading keyed pair with its segments. */
+export interface FuriganaEntry {
+  text: string;
+  reading: string;
+  furigana: FuriganaSegment[];
+}
+
 export interface KradfileFile {
   version: string;
   kanji: Record<string, string[]>;
@@ -108,6 +122,21 @@ function loadJson<T>(buf: Buffer): T {
   }
   const json = tar.subarray(512, 512 + size);
   return JSON.parse(json.toString("utf-8")) as T;
+}
+
+/**
+ * Load the JmdictFurigana JSON (same tgz-of-single-json layout, but the inner
+ * JSON is UTF-8 with a BOM, which breaks a bare JSON.parse).
+ */
+export function loadFurigana(buf: Buffer): FuriganaEntry[] {
+  const tar = gunzipSync(buf);
+  const sizeField = tar.subarray(124, 136).toString("utf-8").replace(/\0.*$/, "");
+  const size = parseInt(sizeField, 8);
+  if (!Number.isFinite(size) || size <= 0) {
+    throw new Error("unexpected furigana tar layout: size field = " + JSON.stringify(sizeField));
+  }
+  const json = tar.subarray(512, 512 + size).toString("utf-8").replace(/^\uFEFF/, "");
+  return JSON.parse(json) as FuriganaEntry[];
 }
 
 export function loadJmdict(buf: Buffer): JmdictFile {

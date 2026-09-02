@@ -18,7 +18,6 @@
     "web/**/*.ts",
     "src/kana.ts",
     "src/kangxi.ts",
-    "src/furigana.ts",
     "src/conjugation.ts",
     "src/format.ts",
     "src/lookup.ts"

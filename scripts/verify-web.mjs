@@ -79,7 +79,10 @@ async function runLookup(page, cmd, query) {
         // The newest pane must be the one we just asked for (queries are serialized).
         return first && lastRun === q && !st.startsWith("starting") ? { text: first.querySelector("pre")?.textContent ?? "", err: first.classList.contains("error"), q: lastRun } : null;
       }, query),
-      30000,
+      // The first lookup after the OPFS import reads a cold 318 MB DB
+      // (gloss FTS scoring loads hundreds of words through the async proxy
+      // and can take ~40 s before the page cache warms up).
+      120000,
       "lookup result",
     );
   } catch (e) {
@@ -198,7 +201,7 @@ async function main() {
           ? { badge: first.querySelector(".badge")?.textContent, text: first.querySelector("pre")?.textContent ?? "" }
           : null;
       }),
-      30000,
+      60000,
       "enter search result",
     );
     check(
