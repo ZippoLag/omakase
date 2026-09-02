@@ -233,4 +233,49 @@ button.busy {
   overflow-x: auto;
 }
 
+/* ---- clickable result tokens ---------------------------------------------- */
+/* Kanji characters and word-lookup icons rendered inside result panes. */
+.pane pre button.tok {
+  font: inherit;
+  font-weight: inherit;
+  color: inherit;
+  background: none;
+  border: none;
+  padding: 0;
+  margin: 0;
+  border-radius: 0;
+  cursor: pointer;
+  vertical-align: baseline;
+  touch-action: manipulation;
+  -webkit-tap-highlight-color: transparent;
+}
+
+.pane pre button.tok:active { transform: none; }
+
+.tok-kanji {
+  border-bottom: 1px dotted color-mix(in srgb, var(--muted) 70%, transparent);
+  padding: 0 1px;
+  margin: 0 -1px;
+}
+
+.tok-kanji:hover,
+.tok-kanji:focus-visible {
+  color: var(--accent);
+  border-bottom-color: var(--accent);
+}
+
+.tok-word {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 14px;
+  height: 14px;
+  margin-right: 3px;
+  vertical-align: -2px;
+  color: var(--accent);
+}
+
+.tok-word:hover,
+.tok-word:focus-visible { opacity: 0.8; }
+
 .pane.error pre { color: var(--accent); }

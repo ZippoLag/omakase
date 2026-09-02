@@ -277,6 +277,12 @@ default 30) plays the role of the CLI's `-max`. Nothing is published
 anywhere: you serve the app from your own computer over your home Wi-Fi,
 once, to install it.
 
+Result panes are interactive: every kanji character shown is individually
+tappable (equivalent to typing it alone and pressing **kanji**), and each
+dictionary word displayed in a list (compounds, multi-kanji “Words”, search
+hits, thesaurus rows) carries a small magnifier icon at its left that looks
+the whole word up (equivalent to typing it and pressing **word**).
+
 ### Build & run once on your computer
 
 ```bash

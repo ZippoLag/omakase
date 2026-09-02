@@ -161,6 +161,79 @@ function clearBusy(): void {
   form.removeAttribute("aria-busy");
 }
 
+// ---- interactive tokens -----------------------------------------------------
+/** CJK ideographs — every displayed kanji is individually clickable. */
+const KANJI_RE = /\p{Script=Han}/u;
+/** Hiragana/katakana — a writing containing kana is a word, not a lone kanji. */
+const KANA_RE = /[\p{Script=Hiragana}\p{Script=Katakana}]/u;
+
+/**
+ * “Word row” — `  writing  [reading/ruby]  gloss…`, the shape used by
+ * compounds, multi-kanji Words, search hits, thesaurus and deconjugate rows.
+ * The bracket group allows nested ruby like `食[たべ]物[もの]`.
+ */
+const WORD_ROW_RE = /^(\s*)([^\[]*?)\s{2}\[((?:[^\[\]]|\[[^\[\]]*\])*)\](.*)$/;
+
+/** Magnifier glyph for word-lookup buttons (inline SVG, monochrome). */
+const WORD_ICON_SVG =
+  '<svg viewBox="0 0 24 24" width="12" height="12" aria-hidden="true" ' +
+  'fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round">' +
+  '<circle cx="11" cy="11" r="7"/><path d="m16.3 16.3 4.2 4.2"/></svg>';
+
+/** One kanji character as a button → `kanji <ch>` lookup. */
+function kanjiButton(ch: string): HTMLButtonElement {
+  const b = document.createElement("button");
+  b.className = "tok tok-kanji";
+  b.textContent = ch;
+  b.title = `kanji ${ch}`;
+  b.addEventListener("click", () => {
+    input.value = ch;
+    submit("kanji");
+  });
+  return b;
+}
+
+/** A word-lookup icon at the left of a word → `word <writing>` lookup. */
+function wordIconButton(writing: string): HTMLButtonElement {
+  const b = document.createElement("button");
+  b.className = "tok tok-word";
+  b.title = `word ${writing}`;
+  b.setAttribute("aria-label", `look up “${writing}”`);
+  b.innerHTML = WORD_ICON_SVG;
+  b.addEventListener("click", () => {
+    input.value = writing;
+    submit("word");
+  });
+  return b;
+}
+
+/**
+ * Render one output line as DOM nodes: every kanji becomes an individual
+ * kanji-lookup button; on word rows the writing also gets a word-lookup icon
+ * at its left when it is an actual dictionary word (contains kana or multiple
+ * kanji — a standalone single kanji stays kanji-only). Bracket contents
+ * (readings/ruby) are left plain apart from their own kanji being clickable.
+ */
+function linkifyLine(line: string): (Node | string)[] {
+  const out: (Node | string)[] = [];
+  const m = WORD_ROW_RE.exec(line);
+  let cursor = 0;
+  if (m) {
+    const writingStart = m[1]!.length;
+    const writing = m[2]!;
+    const hanCount = [...writing].filter((c) => KANJI_RE.test(c)).length;
+    if (KANA_RE.test(writing) || hanCount >= 2) {
+      out.push(line.slice(cursor, writingStart));
+      out.push(wordIconButton(writing));
+      cursor = writingStart;
+    }
+  }
+  for (const ch of line.slice(cursor)) {
+    out.push(KANJI_RE.test(ch) ? kanjiButton(ch) : ch);
+  }
+  return out;
+}
+
 // ---- panes -----------------------------------------------------------------
 /** One results pane: a small header (command · query) + the CLI text. */
 function addPane(command: string, query: string, text: string, isError: boolean): void {
@@ -179,7 +252,13 @@ function addPane(command: string, query: string, text: string, isError: boolean)
   head.append(badge, q);
 
   const pre = document.createElement("pre");
-  pre.textContent = text.endsWith("\n") ? text.slice(0, -1) : text;
+  const content = text.endsWith("\n") ? text.slice(0, -1) : text;
+  const nodes: (Node | string)[] = [];
+  content.split("\n").forEach((line, i) => {
+    if (i > 0) nodes.push("\n");
+    nodes.push(...linkifyLine(line));
+  });
+  pre.append(...nodes);
 
   pane.append(head, pre);
   panes.prepend(pane); // newest pane sits directly below the button row

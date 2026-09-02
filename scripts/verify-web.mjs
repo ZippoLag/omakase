@@ -249,6 +249,121 @@ async function main() {
     p = await runLookup(page, "word", "zzzznotaword");
     check("unknown word shows error pane", p.isError && p.text.includes("no entry"), p.text);
 
+    // ---- clickable tokens in result panes ---------------------------------
+    // Every displayed kanji is individually clickable → `kanji <ch>`;
+    // dictionary words carry a word-lookup icon at their left → `word <w>`.
+    p = await runLookup(page, "word", "食べる");
+    const wordTok = await page.evaluate(() => {
+      const pre = document.querySelector("#panes .pane:first-child pre");
+      return [...pre.querySelectorAll(".tok-kanji")].map((b) => b.textContent);
+    });
+    check(
+      "tokens: per-kanji buttons in word pane",
+      wordTok.includes("食") && wordTok.every((k) => !/[\p{Script=Hiragana}\p{Script=Katakana}]/u.test(k)),
+      JSON.stringify(wordTok),
+    );
+    // the kanji page's Compounds rows are words: they get a word icon and the
+    // writing kanji stay individually clickable
+    p = await runLookup(page, "kanji", "食");
+    const compoundTok = await page.evaluate(() => {
+      const pre = document.querySelector("#panes .pane:first-child pre");
+      return {
+        icons: [...pre.querySelectorAll(".tok-word")].map((b) => b.title),
+        kanji: [...pre.querySelectorAll(".tok-kanji")].map((b) => b.textContent),
+      };
+    });
+    check(
+      "tokens: compound rows have word icon + clickable kanji",
+      compoundTok.icons.length >= 5
+        && compoundTok.icons.every((t) => t.startsWith("word "))
+        && compoundTok.kanji.includes("食") && compoundTok.kanji.length >= 5,
+      `${compoundTok.icons.length} icons, ${compoundTok.kanji.length} kanji buttons`,
+    );
+    // click a word icon from the page (a real compound row) → same as typing
+    // the word + pressing word
+    const clickTarget = compoundTok.icons[0];
+    const expectedWord = clickTarget.replace(/^word /, "");
+    await page.evaluate((title) => {
+      const b = [...document.querySelectorAll("#panes .pane:first-child pre .tok-word")]
+        .find((x) => x.title === title);
+      b.click();
+    }, clickTarget);
+    const tokWordPane = await waitFor(
+      page,
+      () => page.evaluate((q) => {
+        const first = document.querySelector("#panes .pane");
+        return first && first.querySelector(".badge")?.textContent === "word"
+          && first.querySelector(".pane-query")?.textContent === q
+          ? first.querySelector("pre")?.textContent : null;
+      }, expectedWord),
+      30000,
+      `word icon click (${expectedWord})`,
+    );
+    check(
+      "tokens: word icon click → word pane for that compound",
+      !!tokWordPane && tokWordPane.includes("Writings"),
+      tokWordPane ? `${expectedWord}: ${tokWordPane.slice(0, 40)}` : "(none)",
+    );
+    // click the 食 kanji token → same as typing it + pressing kanji
+    await page.evaluate(() => {
+      const b = [...document.querySelectorAll("#panes .pane:first-child pre .tok-kanji")]
+        .find((x) => x.textContent === "食");
+      b.click();
+    });
+    const tokKanjiPane = await waitFor(
+      page,
+      () => page.evaluate(() => {
+        const first = document.querySelector("#panes .pane");
+        return first && first.querySelector(".badge")?.textContent === "kanji"
+          && first.querySelector(".pane-query")?.textContent === "食"
+          ? first.querySelector("pre")?.textContent : null;
+      }),
+      30000,
+      "kanji token click",
+    );
+    check(
+      "tokens: kanji click → kanji 食 pane",
+      !!tokKanjiPane && tokKanjiPane.includes("strokes"),
+      tokKanjiPane ? tokKanjiPane.slice(0, 40) : "(none)",
+    );
+    // multi-kanji Words row: the ranked word gets an icon, each character a button
+    p = await runLookup(page, "kanji", "制作者");
+    const multiTok = await page.evaluate(() => {
+      const pre = document.querySelector("#panes .pane:first-child pre");
+      return {
+        icons: [...pre.querySelectorAll(".tok-word")].map((b) => b.title),
+        kanji: [...pre.querySelectorAll(".tok-kanji")].map((b) => b.textContent),
+      };
+    });
+    check(
+      "tokens: multi-kanji Words row icon + per-char buttons",
+      multiTok.icons.includes("word 制作者")
+        && ["制", "作", "者"].every((c) => multiTok.kanji.includes(c)),
+      JSON.stringify({ icons: multiTok.icons.slice(0, 3), kanji: [...new Set(multiTok.kanji)].slice(0, 8) }),
+    );
+    // click the word icon on 制作者 → `word 制作者` in the box
+    await page.evaluate(() => {
+      const b = [...document.querySelectorAll("#panes .pane:first-child pre .tok-word")]
+        .find((x) => x.title === "word 制作者");
+      b.click();
+    });
+    const tokSeisakusha = await waitFor(
+      page,
+      () => page.evaluate(() => {
+        const first = document.querySelector("#panes .pane");
+        return first && first.querySelector(".badge")?.textContent === "word"
+          && first.querySelector(".pane-query")?.textContent === "制作者"
+          ? first.querySelector("pre")?.textContent : null;
+      }),
+      30000,
+      "word icon click (制作者)",
+    );
+    check(
+      "tokens: word icon click → word 制作者 pane",
+      !!tokSeisakusha && tokSeisakusha.includes("Writings"),
+      tokSeisakusha ? tokSeisakusha.slice(0, 40) : "(none)",
+    );
+
     // the max box drives the caps end-to-end
     await page.evaluate(() => { document.querySelector("#max").value = "3"; });
     p = await runLookup(page, "kanji", "食");
@@ -258,8 +373,13 @@ async function main() {
     check("max=5 caps search sections", p.text.includes("… and "), p.text.slice(0, 80));
     await page.evaluate(() => { document.querySelector("#max").value = "30"; });
 
-    await waitFor(page, () => page.$$eval("#panes .pane", (els) => els.length).then((n) => n >= 15), 15000, "15 panes");
-    check("panes newest-first (15 panes)", (await page.$$eval("#panes .pane", (els) => els.length)) === 15, "history growing");
+    const paneCount = await waitFor(
+      page,
+      () => page.$$eval("#panes .pane", (els) => els.length).then((n) => (n >= 15 ? n : null)),
+      15000,
+      "15 panes",
+    );
+    check("panes newest-first (history grows)", paneCount >= 15, `${paneCount} panes`);
 
     // offline: reload with network disabled — shell comes from the service
     // worker, the dictionary from OPFS.
