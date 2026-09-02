@@ -369,7 +369,9 @@ when you (re)install or update.
   browser's private origin storage, so iOS may evict it only under extreme
   storage pressure; re-opening the app re-imports if it is gone).
 - Updating the app = rebuild + re-serve, then open the app once online; the
-  service worker cache version (`web/sw.js` `CACHE`) is bumped on releases.
+  service worker cache version is stamped from the build version at
+  `web:build` time, so it bumps automatically on every build (old caches are
+  purged on the next visit).
 - `web/vendor/` holds the pinned sqlite-wasm engine (see its README) so the
   web app builds and serves without `node_modules`.
 

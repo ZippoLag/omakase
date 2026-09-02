@@ -11,10 +11,11 @@
  * `dist/` is the web server root.
  */
 import { spawnSync } from "node:child_process";
-import { cpSync, existsSync, mkdirSync, statSync } from "node:fs";
+import { cpSync, existsSync, mkdirSync, readFileSync, statSync, writeFileSync } from "node:fs";
 import { createRequire } from "node:module";
 import { dirname, join, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
+import { patchSwCache, versionFromStamp } from "./sw-version.mjs";
 
 const root = resolve(dirname(fileURLToPath(import.meta.url)), "..");
 const require = createRequire(import.meta.url);
@@ -42,8 +43,26 @@ if (run.status !== 0) {
 }
 
 // Static shell files land at the docroot (dist/).
-for (const f of ["index.html", "sw.js", "style.css", "manifest.webmanifest", "icon.svg"]) {
+for (const f of ["index.html", "style.css", "manifest.webmanifest", "icon.svg"]) {
   cpSync(join(root, "web", f), join(root, "dist", f));
+}
+
+// The service worker's cache name is derived from the freshly stamped build
+// version (written to src/version.ts above), so every web build publishes a
+// new cache and the sw purges older caches on activate.
+const version = versionFromStamp(readFileSync(join(root, "src", "version.ts"), "utf8"));
+if (!version) {
+  console.error("src/version.ts has no version stamp — version stamping did not run?");
+  process.exit(1);
+}
+try {
+  writeFileSync(
+    join(root, "dist", "sw.js"),
+    patchSwCache(readFileSync(join(root, "web", "sw.js"), "utf8"), version),
+  );
+} catch (err) {
+  console.error(err instanceof Error ? err.message : err);
+  process.exit(1);
 }
 
 // Vendored engine (runtime files + provenance + type decls).

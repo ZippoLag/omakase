@@ -2,10 +2,16 @@
  *
  * Caches the app + engine so the UI runs with no network after the first
  * visit. The 289 MB dictionary is NOT cached here — it is imported into OPFS
- * once by the worker and served only from device storage. Bump CACHE when
- * publishing an app update (old caches are deleted on activate).
+ * once by the worker and served only from device storage. The cache name is
+ * stamped from the build version by scripts/build-web.mjs, so every web build
+ * publishes a new cache (old caches are deleted on activate).
  */
-const CACHE = "omakase-v6";
+// Cache name for the offline shell. scripts/build-web.mjs substitutes the
+// placeholder below with the freshly stamped build version (e.g.
+// "omakase-0.1.0-build.7") when it emits dist/sw.js, so the cache changes on
+// every web build. The placeholder itself is never served (dist/ is the web
+// root); keep it valid JS for typechecking/dev runs.
+const CACHE = "omakase-v__VERSION__";
 
 const PRECACHE = [
   "./",

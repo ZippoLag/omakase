@@ -8,7 +8,8 @@
  * Run:  pnpm run web:verify   (requires web/.certs/*.pem — web:gen-cert)
  */
 import { spawn } from "node:child_process";
-import { existsSync } from "node:fs";
+import { existsSync, readFileSync } from "node:fs";
+import { versionFromStamp } from "./sw-version.mjs";
 import { dirname, join, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 import puppeteer from "puppeteer-core";
@@ -104,6 +105,16 @@ async function runLookup(page, cmd, query) {
 }
 
 async function main() {
+  // Static invariant: the served service worker's cache name must be stamped
+  // with the version the served app reports (both emitted by web:build).
+  const stamp = versionFromStamp(readFileSync(join(root, "dist", "src", "version.js"), "utf8"));
+  const swJs = readFileSync(join(root, "dist", "sw.js"), "utf8");
+  check(
+    "sw.js cache name stamped with the served build version",
+    !!stamp && swJs.includes(`const CACHE = "omakase-${stamp}";`),
+    stamp ? `CACHE=omakase-${stamp}` : "(dist/src/version.js has no stamp — run web:build)",
+  );
+
   const server = await startServer();
   const browser = await puppeteer.launch({
     executablePath: CHROME,
