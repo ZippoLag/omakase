@@ -204,18 +204,19 @@ export function isKanaInput(input: string): boolean {
   return [...input].some(isKana);
 }
 
+/** Lowercased [a-z0-9]+ tokens from a gloss query, dropping single characters. */
+function glossQueryTokens(query: string): string[] {
+  return (query.toLowerCase().match(/[a-z0-9]+/g) ?? []).filter((t) => t.length > 1);
+}
+
 /**
- * English-gloss token search via the FTS5 `glosses_fts` index (unicode61),
- * ordered by word id. One hit per word; gloss shown is the first gloss.
- * The quoted token is matched literally, so FTS operators (`*`, `-`, …) in
- * the query are inert. Mirrors render-goldens `eat` example.
+ * Word ids whose FTS gloss row matches `expr` (FTS5 query language: prefix
+ * terms like `develop*`, `AND`/`OR` …), ordered by word id. FTS rowid = gloss
+ * id (glosses_fts is contentless, populated in buildDb), so the join goes
+ * through glosses → senses (ids are per-table sequences, so a bare
+ * senses.id = f.rowid join would mispair whenever the ids coincide).
  */
-export function searchGloss(db: DB, token: string): SearchHit[] {
-  const needle = token.toLowerCase();
-  const quoted = '"' + needle.replace(/"/g, '""') + '"';
-  // FTS rowid = gloss id (glosses_fts is contentless, populated in buildDb),
-  // so join through glosses → senses (ids are per-table sequences, so a bare
-  // senses.id = f.rowid join would mispair whenever the ids coincide).
+function glossWordIds(db: DB, expr: string): string[] {
   const rows = db.prepare(`
     SELECT DISTINCT s.word_id
     FROM glosses_fts f
@@ -223,15 +224,65 @@ export function searchGloss(db: DB, token: string): SearchHit[] {
     JOIN senses s ON s.id = g.sense_id
     WHERE glosses_fts MATCH ?
     ORDER BY s.word_id
-  `).all(quoted) as { word_id: string }[];
+  `).all(expr) as { word_id: string }[];
+  return rows.map((r) => r.word_id);
+}
+
+/**
+ * English-gloss search via the FTS5 `glosses_fts` index (unicode61), ordered
+ * by word id. The query is split into tokens; ALL tokens must match, as
+ * prefix terms, inside a single gloss text — `develop film` matches a gloss
+ * containing a token starting with `develop` and one starting with `film`
+ * (e.g. 現像's "development (of film)"), and `develop` alone also matches
+ * "development". Tokens are [a-z0-9]+ (lowercased), so no FTS operator
+ * escaping is needed; single-character tokens are ignored. One hit per word;
+ * gloss shown is the first gloss.
+ */
+export function searchGloss(db: DB, query: string): SearchHit[] {
+  const tokens = glossQueryTokens(query);
+  if (tokens.length === 0) return [];
+  const match = tokens.map((t) => `${t}*`).join(" AND ");
   const out: SearchHit[] = [];
-  for (const r of rows) {
-    const word = loadWord(db, r.word_id);
+  for (const wordId of glossWordIds(db, match)) {
+    const word = loadWord(db, wordId);
     if (!word) continue;
     const { reading } = displayHeader(word);
     out.push({ word, reading: reading ?? "", gloss: firstGloss(word) });
   }
   return out;
+}
+
+export interface ReadingSuggestion {
+  word: LoadedWord;
+  /** the suggested reading (kana), which the CLI can search by prefix. */
+  reading: string;
+  /** romaji transcription of the suggested reading (src/kana.ts). */
+  romaji: string;
+  gloss: string;
+}
+
+/**
+ * Best-effort "did you mean" for an ASCII query whose gloss + reading searches
+ * both came up empty: relaxes to *any single non-stopword token* as a prefix
+ * term and returns the first word (by id) whose gloss matches. Null when no
+ * token matches anything, so the caller can fall back to a generic hint.
+ */
+export function suggestReading(db: DB, query: string): ReadingSuggestion | null {
+  const tokens = glossQueryTokens(query).filter((t) => !GLOSS_STOPWORDS.has(t));
+  for (const t of tokens) {
+    const ids = glossWordIds(db, `${t}*`);
+    if (ids.length === 0) continue;
+    const word = loadWord(db, ids[0]!);
+    if (!word) continue;
+    const { reading } = displayHeader(word);
+    return {
+      word,
+      reading: reading ?? "",
+      romaji: toRomaji(reading ?? ""),
+      gloss: firstGloss(word),
+    };
+  }
+  return null;
 }
 
 /**

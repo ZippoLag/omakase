@@ -140,7 +140,7 @@ test("search --help: detailed usage describing input forms, exits 0", () => {
   const { code, stdout } = run(["search", "-h"]);
   assert.equal(code, 0);
   assert.ok(stdout.includes("omakase search <query>"));
-  assert.ok(stdout.includes("gloss token search"));
+  assert.ok(stdout.includes("prefix-matched"));
 });
 
 test("unknown command: error to stderr with base help, exits 2", () => {
@@ -269,6 +269,27 @@ test("search: gloss hit, kana prefix with Kanji section, and empty result", () =
     const empty = runOnDb(["search", "zqxjk"], dbPath);
     assert.equal(empty.code, 0);
     assert.ok(empty.stdout.includes("(no results)"));
+  } finally {
+    rmSync(dir, { recursive: true, force: true });
+  }
+});
+
+test("empty ASCII gloss search: prints a reading-path hint (did you mean)", () => {
+  const { dbPath, dir } = buildFixtureDbFile();
+  try {
+    // Completely unmatched query: generic hint pointing at the reading path.
+    const miss = runOnDb(["search", "zqxjk"], dbPath);
+    assert.equal(miss.code, 0);
+    assert.ok(miss.stdout.includes("(no results)"));
+    assert.ok(miss.stdout.includes("readings match by kana or romaji prefix"));
+
+    // ``eat zzz``: the ANDed gloss search is empty, but a relaxed single-token
+    // match suggests 食べる and its reading as the path to search instead.
+    const close = runOnDb(["search", "eat zzz"], dbPath);
+    assert.equal(close.code, 0);
+    assert.ok(close.stdout.includes("did you mean「食べる [たべる] to eat」"));
+    assert.ok(close.stdout.includes("omakase search たべる"));
+    assert.ok(close.stdout.includes("taberu"));
   } finally {
     rmSync(dir, { recursive: true, force: true });
   }

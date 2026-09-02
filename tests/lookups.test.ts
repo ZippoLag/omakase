@@ -447,6 +447,56 @@ test("cmdSearch: unmatched ASCII falls back to English gloss token search", () =
   }
 });
 
+test("cmdSearch gloss: tokens are ANDed and prefix-matched", () => {
+  const mk = (id: string, writing: string, reading: string, glosses: string[]): JmdictWord => ({
+    id,
+    kanji: writing ? [{ common: true, text: writing, tags: [] }] : [],
+    kana: [{ common: true, text: reading, tags: [], appliesToKanji: ["*"] }],
+    sense: glosses.map((g) => ({
+      partOfSpeech: ["n"],
+      appliesToKanji: ["*"],
+      appliesToKana: ["*"],
+      related: [],
+      antonym: [],
+      field: [],
+      dialect: [],
+      misc: [],
+      info: [],
+      languageSource: [],
+      gloss: [{ lang: "eng", gender: null, type: null, text: g }],
+    })),
+  });
+  const words: JmdictWord[] = [
+    // 現像: both ``develop`` and ``film`` tokens live in ONE gloss → matches.
+    mk("10", "現像", "げんぞう", ["development (of film); photographic processing"]),
+    mk("20", "開発", "かいはつ", ["development (of a project, land, etc.)"]),
+    mk("30", "育成", "いくせい", ["to develop"]),
+    mk("40", "", "ふぃるむ", ["film"]),
+    mk("50", "開発者", "かいはつしゃ", ["developer"]),
+    // Both tokens exist but in DIFFERENT sense glosses → ``develop film`` must NOT match.
+    mk("60", "育成中", "いくせいちゅう", ["to develop", "film stock"]),
+  ];
+  const rows = transform(
+    { words } as never,
+    { characters: [] } as never,
+    { version: "", kanji: {} } as KradfileFile,
+    { version: "", radicals: {} } as RadkfileFile,
+  );
+  const db = buildDb(rows, { tags: "{}" }, { dbPath: ":memory:" });
+  try {
+    const ids = (q: string): string[] => cmdSearch(db, q).map((h) => h.word.id);
+    // Multi-word query: every token must prefix-match within a single gloss.
+    assert.deepEqual(ids("develop film"), ["10"]);
+    // Prefix matching: ``develop`` and ``devel`` both find ``development``/``developer``.
+    assert.deepEqual(ids("develop"), ["10", "20", "30", "50", "60"]);
+    assert.deepEqual(ids("devel"), ["10", "20", "30", "50", "60"]);
+    assert.deepEqual(ids("film"), ["10", "40", "60"]);
+    assert.deepEqual(ids("zzz"), []);
+  } finally {
+    db.close();
+  }
+});
+
 test("search: LIKE wildcards in the query are matched literally, not as SQL wildcards", () => {
   const db = buildFixtureDb();
   try {

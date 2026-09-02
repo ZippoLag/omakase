@@ -197,8 +197,11 @@ How the query is interpreted depends on its form:
 
 - **kana input** → reading-prefix match, e.g. `omakase search たべ`
 - **ASCII input** → romaji reading-prefix match, e.g. `omakase search taberu`;
-  an exact reading wins; otherwise an English gloss token search is preferred
-  when it matches, e.g. `omakase search eat`
+  an exact reading wins; otherwise an English gloss search is preferred when
+  it matches — query tokens are ANDed and prefix-matched, so `omakase search
+  eat` finds “to eat” words and `omakase search develop film` finds
+  現像 “development (of film)”. An empty gloss search prints a “did you mean”
+  hint pointing at the reading-prefix path.
 
 Word hits are followed by a **Kanji:** section listing kanji whose
 on/kun/nanori readings start with the query (the same reading search as the

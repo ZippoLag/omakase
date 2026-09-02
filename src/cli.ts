@@ -8,6 +8,7 @@ import { pathToFileURL } from "node:url";
 import Database from "better-sqlite3";
 import { DB_PATH } from "../data/build/config.js";
 import {
+  displayHeader,
   exampleSentences,
   findWordByWriting,
   glossThesaurus,
@@ -17,6 +18,7 @@ import {
   searchGloss,
   searchKanjiByReading,
   searchReadingPrefix,
+  suggestReading,
   wordThesaurus,
 } from "./lookup.js";
 import type { SearchHit } from "./lookup.js";
@@ -90,10 +92,11 @@ export function cmdKanji(db: DB, query: string): string | null {
  *   - kana input  → reading-prefix (kana text)
  *   - ASCII input → romaji reading-prefix over the romaji column; a hit whose
  *                   romaji *equals* the whole query counts as reading intent
- *                   (e.g. `taberu` → 食べる). Otherwise an English gloss-token
- *                   match is preferred when present (e.g. `eat` → “to eat”
- *                   words, not エアターミナル “eataminaru”), with partial
- *                   romaji prefixes as the last resort.
+ *                   (e.g. `taberu` → 食べる). Otherwise an English gloss search
+ *                   matches with tokens ANDed and prefix-matched (e.g.
+ *                   `eat` → “to eat” words, `develop film` → 現像
+ *                   “development (of film)”; not エアターミナル “eataminaru”),
+ *                   with partial romaji prefixes as the last resort.
  */
 export function cmdSearch(db: DB, query: string): SearchHit[] {
   const trimmed = query.trim();
@@ -110,6 +113,26 @@ export function cmdSearch(db: DB, query: string): SearchHit[] {
 
 function isAscii(s: string): boolean {
   return /^[\x20-\x7e]+$/.test(s);
+}
+
+/**
+ * "did you mean" hint for an empty ASCII search: point at the reading-prefix
+ * path. When `suggestReading` finds a candidate word from a relaxed gloss
+ * token, name it and its reading; otherwise give a generic reading hint.
+ */
+function searchHint(db: DB, query: string): string {
+  const sug = suggestReading(db, query);
+  if (sug && sug.reading) {
+    const text = displayHeader(sug.word).text;
+    return (
+      `  hint: no gloss matches — did you mean「${text} [${sug.reading}] ${sug.gloss}」?\n` +
+      `  readings match by prefix — try \`omakase search ${sug.reading}\` (romaji: ${sug.romaji})\n`
+    );
+  }
+  return (
+    "  hint: no matches — readings match by kana or romaji prefix\n" +
+    "  try e.g. `omakase search genzou`, or the kanji reading search `omakase kanji genzou`\n"
+  );
 }
 
 // ---------------------------------------------------------------------------
@@ -180,8 +203,9 @@ Examples:
 Search the dictionary. How the query is interpreted depends on its form:
   - kana input  → reading-prefix match (e.g. たべ)
   - ASCII input → romaji reading-prefix match (e.g. taberu); an exact
-                  reading wins, otherwise an English gloss token search
-                  is preferred when present (e.g. "eat")
+                  reading wins, otherwise an English gloss search matches:
+                  tokens are ANDed and prefix-matched (e.g. "develop film"
+                  finds 現像 "development (of film)")
   - kanji whose readings start with the query are appended in a
     "Kanji:" section (e.g. まか → 任)
 
@@ -279,7 +303,14 @@ export function runCommand(
       const kanjiHits = isKanaInput(trimmed) || isAscii(trimmed)
         ? searchKanjiByReading(db, trimmed)
         : [];
-      return renderSearch(query, hits, kanjiHits);
+      const out = renderSearch(query, hits, kanjiHits);
+      // An ASCII gloss search that found nothing gets a "did you mean" hint
+      // pointing at the reading-prefix path (a reading is almost always how
+      // the word is actually searched).
+      if (hits.length === 0 && kanjiHits.length === 0 && isAscii(trimmed)) {
+        return out + searchHint(db, trimmed);
+      }
+      return out;
     }
     default:
       stderr(USAGE);
