@@ -210,13 +210,14 @@ Examples:
   omakase kanji <query> [-max N]
 
 When <query> is one or more kanji literals, render a kanji page per character
-(stroke count, grade/JLPT/frequency, classical radical, on/kun/nanori
-readings, meanings, compounds — the compounds capped at N). A multi-kanji
-query ("kanji 制作者" ≡ "kanji 制" "kanji 作" "kanji 者") first lists the
-words containing the characters — all of them before subsets, ranked by how
-many are matched — capped at N, before the per-kanji pages. Otherwise
-<query> is a reading: kanji whose on/kun/nanori readings start with it are
-listed (kana or romaji, dot separators ignored), capped at N.
+(stroke count, grade/JLPT/frequency, classical radical, a kradfile radical
+breakdown, on/kun/nanori readings, meanings, compounds — the compounds
+capped at N). A multi-kanji query ("kanji 制作者" ≡ "kanji 制" "kanji 作"
+"kanji 者") first lists the words containing the characters — all of them
+before subsets, ranked by how many are matched — capped at N, before the
+per-kanji pages. Otherwise <query> is a reading: kanji whose
+on/kun/nanori readings start with it are listed (kana or romaji, dot
+separators ignored), capped at N.
 
 Arguments:
   <query>        kanji literal(s) (e.g. 食, 制作者), kana, or romaji reading

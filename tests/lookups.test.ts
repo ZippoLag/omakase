@@ -18,6 +18,7 @@ import { renderKanjiWords, renderSearch, renderWordBody } from "../src/format.js
 import {
   exampleSentences,
   glossThesaurus,
+  loadKanji,
   loadWord,
   searchKanjiByReading,
   searchReadingPrefix,
@@ -438,6 +439,52 @@ test("kanji -max caps compounds, words and reading results", () => {
     assert.equal(rows(mi).length, 2);
     assert.ok(mi.includes("… and 1 more"), mi);
     assert.ok(!cmdKanji(db, "mi", 30)!.includes("… and "));
+  } finally {
+    db.close();
+  }
+});
+
+test("kanji page: radical breakdown lists kradfile components in order", () => {
+  const db = buildFixtureDb();
+  try {
+    // kradfile order is preserved (kanji_radicals rowid): 喰 -> 口 + 食.
+    assert.deepEqual(loadKanji(db, "喰")!.radicals, ["口", "食"]);
+    // A kanji that is itself a radical lists itself first (kradfile
+    // convention), then its subcomponents: 見 -> 見 + 目 + 儿.
+    assert.deepEqual(loadKanji(db, "見")!.radicals, ["見", "目", "儿"]);
+    assert.deepEqual(loadKanji(db, "飲")!.radicals, ["欠", "食"]);
+    // The page renders the decomposition as a Radicals line.
+    const out = cmdKanji(db, "喰")!;
+    assert.ok(out.includes("Radicals: 口 + 食"), out);
+    assert.ok(out.indexOf("Radicals: 口 + 食") < out.indexOf("Kun:"), out);
+    // A lone self-component still renders (the kanji is its own radical).
+    assert.ok(cmdKanji(db, "食")!.includes("Radicals: 食"));
+    assert.ok(cmdKanji(db, "水")!.includes("Radicals: 水"));
+    // Multi-kanji pages render one breakdown per character.
+    const multi = cmdKanji(db, "飲食")!;
+    assert.ok(multi.includes("Radicals: 欠 + 食") && multi.includes("Radicals: 食"), multi);
+  } finally {
+    db.close();
+  }
+});
+
+test("kanji page: no Radicals line when kradfile has no decomposition", () => {
+  // Same kanjidic2 character but an empty kradfile -> no kanji_radicals rows:
+  // the page must omit the breakdown rather than print an empty line.
+  const characters = [loadJson<Kanjidic2Character>(join(FIXTURES, "entries", "kanjidic2-shoku.json"))];
+  const rows = transform(
+    { words: [] } as never,
+    { characters } as never,
+    { version: "", kanji: {} } as KradfileFile,
+    { version: "", radicals: {} } as RadkfileFile,
+    [],
+  );
+  const db = buildDb(rows, { tags: "{}" }, { dbPath: ":memory:" });
+  try {
+    assert.deepEqual(loadKanji(db, "食")!.radicals, []);
+    const out = cmdKanji(db, "食")!;
+    assert.ok(!out.includes("Radicals:"), out);
+    assert.ok(out.includes("On:   ショク"), out); // page still renders normally
   } finally {
     db.close();
   }

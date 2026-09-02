@@ -99,6 +99,11 @@ the test suite.
   the acceptance criteria for the engine's gap-class coverage.
 - `kanji` compounds are computed from the word fixtures (kanji writings
   containing the literal, sorted by entry id, first gloss each).
+- `kanji` pages show a `Radicals:` breakdown line: the kradfile component
+  decomposition in kradfile order (e.g. 喰 → `Radicals: 口 + 食`; a kanji
+  that is itself a radical lists itself first, e.g. 見 → `見 + 目 + 儿`),
+  omitted when kradfile has no entry for the character (mirrors
+  `lookup.ts` `loadKanji` + `format.ts` `renderKanji`).
 - `deconjugate` matches against the `conjugations` table values (index-backed
   in the app); `deconjugate-nomatch.txt` pins the no-result output.
 - POS lines join JMdict tag descriptions (from `meta/tags.json`), sentence-case

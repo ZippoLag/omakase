@@ -7,6 +7,7 @@ Words (5):
 飲  [12 strokes]
 
 grade 3 · JLPT 4 · frequency 969 · radical 食 (184)
+Radicals: 欠 + 食
 
 On:   イン  オン
 Kun:  の.む  -の.み
@@ -18,6 +19,7 @@ Compounds:
 食  [9 strokes]
 
 grade 2 · JLPT 4 · frequency 328 · radical 食 (184)
+Radicals: 食
 
 On:   ショク  ジキ
 Kun:  く.う  く.らう  た.べる  は.む

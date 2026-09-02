@@ -182,8 +182,9 @@ omakase kanji makase          # same, by romaji reading
 Every list in `kanji` output is capped at **30 rows** by default; raise or
 lower it with `-max N` (also `--max N` / `--max=N`, like `search`). One or
 more kanji literals render a full page per character: stroke count,
-grade/JLPT/frequency, classical radical, on/kun/nanori readings, meanings,
-and compounds containing the character (capped at N). A multi-kanji query
+grade/JLPT/frequency, classical radical, a kradfile radical breakdown,
+on/kun/nanori readings, meanings, and compounds containing the character
+(capped at N). A multi-kanji query
 first lists **words containing the characters** — those with all of them
 first, then subsets ranked by how many they match, common words first (also
 capped at N) — followed by one page per character (`kanji 制作者` ≡ `kanji 制`

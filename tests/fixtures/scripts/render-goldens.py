@@ -132,6 +132,14 @@ def compound_rows(entries):
 
 COMPOUNDS = compound_rows(word_entries())
 
+# kradfile decomposition slices (entries/krad-<kanji>.json -> components),
+# mirroring src/lookup.ts loadKanji (kanji_radicals in kradfile order).
+KRAD = {}
+for _name in sorted(os.listdir(E)):
+    if _name.startswith("krad-"):
+        _k = load(os.path.join(E, _name))
+        KRAD[_k["literal"]] = _k["components"]
+
 def render_kanji_words(lits, entries, max_n=30):
     """Words containing any of `lits`, ranked: most distinct matched kanji
     first, then common, then entry id — mirrors src/lookup.ts
@@ -472,6 +480,9 @@ def render_kanji(lit, kanji_data, word_entries, max_compounds=30):
     if classical:
         bits.append("radical %s (%s)" % (rad_ch, classical))
     lines.append(" · ".join(bits))
+    comps = KRAD.get(lit)
+    if comps:
+        lines.append("Radicals: " + " + ".join(comps))
     lines.append("")
     if on:
         lines.append("On:   " + "  ".join(on))

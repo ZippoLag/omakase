@@ -198,8 +198,10 @@ export function renderExamples(examples: LoadedSentence[]): string {
 /**
  * `kanji <literal>` page (render-goldens render_kanji).
  * `radicalDisplay` is the precomputed `食 (184)` string (or null to omit).
- * When the compounds list was capped (kanji.compoundTotal > shown count) a
- * trailing “… and N more” note reports the rest.
+ * The Radicals line lists the kradfile component decomposition when present
+ * (omitted for characters kradfile has no components for). When the
+ * compounds list was capped (kanji.compoundTotal > shown count) a trailing
+ * “… and N more” note reports the rest.
  */
 export function renderKanji(kanji: LoadedKanji, radicalDisplay: string | null): string {
   const lines: string[] = [];
@@ -211,6 +213,10 @@ export function renderKanji(kanji: LoadedKanji, radicalDisplay: string | null): 
   if (kanji.frequency) bits.push(`frequency ${kanji.frequency}`);
   if (radicalDisplay) bits.push(`radical ${radicalDisplay}`);
   lines.push(bits.join(" · "));
+  // radical breakdown: kradfile component radicals in kradfile order (a
+  // radical kanji lists itself first, e.g. 見 → 見 + 目 + 儿); omitted when
+  // kradfile has no decomposition for this character.
+  if (kanji.radicals.length > 0) lines.push("Radicals: " + kanji.radicals.join(" + "));
   lines.push("");
   if (kanji.on.length > 0) lines.push("On:   " + kanji.on.join("  "));
   if (kanji.kun.length > 0) lines.push("Kun:  " + kanji.kun.join("  "));

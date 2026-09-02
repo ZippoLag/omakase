@@ -145,6 +145,8 @@ export interface LoadedKanji {
   frequency: number | null;
   jlptLevel: number | null;
   classicalRadical: number | null;
+  /** Component radicals from kradfile (rowid = kradfile order), e.g. 喰 → [口, 食]. */
+  radicals: string[];
   on: string[];
   kun: string[];
   nanori: string[];
@@ -164,7 +166,9 @@ function firstGlossById(db: DB, id: string): string {
 }
 
 /**
- * Load a kanji page (readings, meanings, nanori, compounds) by literal.
+ * Load a kanji page (radical breakdown, readings, meanings, nanori,
+ * compounds) by literal. `radicals` are the kradfile component radicals in
+ * kradfile order (a radical kanji lists itself first, e.g. 見 → 見 目 儿).
  * `maxCompounds` caps the compounds list (the page still reports how many
  * compounds exist via LoadedKanji.compoundTotal).
  */
@@ -178,6 +182,7 @@ export function loadKanji(db: DB, literal: string, maxCompounds?: number): Loade
   const kun = (db.prepare("SELECT value FROM kanji_readings WHERE kanji = ? AND type = 'kun' ORDER BY rowid").all(literal) as { value: string }[]).map((r) => r.value);
   const nanori = (db.prepare("SELECT value FROM kanji_nanori WHERE kanji = ? ORDER BY rowid").all(literal) as { value: string }[]).map((r) => r.value);
   const meanings = (db.prepare("SELECT value FROM kanji_meanings WHERE kanji = ? AND lang = 'en' ORDER BY rowid").all(literal) as { value: string }[]).map((r) => r.value);
+  const radicals = (db.prepare("SELECT radical FROM kanji_radicals WHERE kanji = ? ORDER BY rowid").all(literal) as { radical: string }[]).map((r) => r.radical);
 
   const rows = db.prepare(`
     SELECT kw.word_id, kw.writing_id, w.text AS writing
@@ -208,6 +213,7 @@ export function loadKanji(db: DB, literal: string, maxCompounds?: number): Loade
     frequency: k.frequency,
     jlptLevel: k.jlpt_level,
     classicalRadical: k.classical_radical,
+    radicals,
     on,
     kun,
     nanori,
