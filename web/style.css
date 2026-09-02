@@ -1,0 +1,187 @@
+/* omakase web UI — deliberately minimal: control row + stacked result panes. */
+
+:root {
+  --bg: #f7f7f5;
+  --bg-pane: #ffffff;
+  --ink: #1a1d21;
+  --muted: #6b7280;
+  --line: #e3e3de;
+  --accent: #b91c1c;
+  --progress: 0%;
+}
+
+@media (prefers-color-scheme: dark) {
+  :root {
+    --bg: #111418;
+    --bg-pane: #181c21;
+    --ink: #e8e6e3;
+    --muted: #9aa0a6;
+    --line: #2a2f36;
+    --accent: #ef6a5e;
+  }
+}
+
+* { box-sizing: border-box; }
+
+html { -webkit-text-size-adjust: 100%; }
+
+body {
+  margin: 0;
+  background: var(--bg);
+  color: var(--ink);
+  font: 16px/1.45 system-ui, -apple-system, "Segoe UI", Roboto, "Helvetica Neue",
+        "Noto Sans JP", "Hiragino Kaku Gothic ProN", "Yu Gothic UI", Meiryo, sans-serif;
+}
+
+/* ---- header + status ------------------------------------------------------ */
+header {
+  padding: 10px 14px 8px;
+  max-width: 860px;
+  margin: 0 auto;
+  display: flex;
+  align-items: baseline;
+  gap: 10px;
+  min-height: 44px;
+}
+
+h1 {
+  margin: 0;
+  font-size: 17px;
+  font-weight: 650;
+  letter-spacing: 0.02em;
+}
+
+#status {
+  font-size: 12px;
+  color: var(--muted);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  flex: 1;
+  text-align: right;
+}
+
+#status.error { color: var(--accent); white-space: normal; text-align: left; }
+
+/* ---- control row ----------------------------------------------------------- */
+#lookup {
+  position: sticky;
+  top: 0;
+  z-index: 10;
+  background: var(--bg);
+  padding: 2px 14px 10px;
+  max-width: 860px;
+  margin: 0 auto;
+  border-bottom: 1px solid var(--line);
+  box-shadow: 0 1px 0 rgba(0, 0, 0, 0.03);
+}
+
+#lookup::after { /* import progress, thin bar under the controls */
+  content: "";
+  display: block;
+  position: absolute;
+  left: 0;
+  bottom: 0;
+  height: 2px;
+  width: var(--progress);
+  background: var(--accent);
+  transition: width 0.3s ease;
+}
+
+#query {
+  display: block;
+  width: 100%;
+  font: inherit;
+  font-size: 18px;
+  padding: 12px 14px;
+  border: 1px solid var(--line);
+  border-radius: 10px;
+  background: var(--bg-pane);
+  color: var(--ink);
+  outline: none;
+  -webkit-appearance: none;
+  appearance: none;
+}
+
+#query:focus { border-color: var(--accent); }
+#query:disabled { opacity: 0.55; }
+
+#buttons {
+  display: grid;
+  grid-template-columns: 1fr 1fr 1fr;
+  gap: 8px;
+  margin-top: 8px;
+}
+
+button {
+  font: inherit;
+  font-size: 16px;
+  font-weight: 600;
+  padding: 11px 0;
+  border: 1px solid var(--line);
+  border-radius: 10px;
+  background: var(--bg-pane);
+  color: var(--ink);
+  cursor: pointer;
+  -webkit-tap-highlight-color: transparent;
+  touch-action: manipulation;
+}
+
+button:active { transform: translateY(1px); }
+button.primary { border-color: var(--accent); color: var(--accent); }
+button:disabled { opacity: 0.5; }
+
+/* ---- result panes ---------------------------------------------------------- */
+#panes {
+  max-width: 860px;
+  margin: 0 auto;
+  padding: 10px 14px calc(40px + env(safe-area-inset-bottom));
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+}
+
+.pane {
+  background: var(--bg-pane);
+  border: 1px solid var(--line);
+  border-radius: 12px;
+  overflow: hidden;
+}
+
+.pane-head {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 6px 12px;
+  border-bottom: 1px solid var(--line);
+  font-size: 12px;
+  color: var(--muted);
+  background: color-mix(in srgb, var(--bg-pane) 60%, var(--bg));
+}
+
+.badge {
+  text-transform: uppercase;
+  font-size: 10px;
+  letter-spacing: 0.08em;
+  font-weight: 700;
+  padding: 1px 6px;
+  border-radius: 999px;
+  border: 1px solid var(--line);
+  color: var(--muted);
+}
+
+.pane.error .badge { color: var(--accent); border-color: var(--accent); }
+
+.pane-query { font-weight: 600; color: var(--ink); overflow-wrap: anywhere; }
+
+.pane pre {
+  margin: 0;
+  padding: 12px 14px;
+  font: 13px/1.5 ui-monospace, "SF Mono", Menlo, Consolas, "Noto Sans JP",
+        "Hiragino Kaku Gothic ProN", Meiryo, monospace;
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
+  overflow-x: auto;
+}
+
+.pane.error pre { color: var(--accent); }

@@ -18,13 +18,20 @@
     "cli": "tsx src/cli.ts",
     "link:global": "node scripts/link-global.mjs",
     "validate:conjugations": "tsx data/validate/conjugations.ts",
+    "web:typecheck": "tsc -p tsconfig.web.json --noEmit",
+    "web:build": "node scripts/build-web.mjs",
+    "web:serve": "node scripts/serve-web.mjs",
+    "web:gen-cert": "node scripts/serve-web.mjs --gen-cert",
+    "web:verify": "node scripts/verify-web.mjs",
     "setup": "bash ./install.sh",
     "uninstall": "bash ./uninstall.sh"
   },
   "devDependencies": {
+    "@sqlite.org/sqlite-wasm": "3.53.0-build1",
     "@types/better-sqlite3": "^7.6.11",
     "@types/node": "^22.0.0",
     "better-sqlite3": "^11.0.0",
+    "puppeteer-core": "^25.9.0",
     "tsx": "^4.19.0",
     "typescript": "^5.5.0"
   },

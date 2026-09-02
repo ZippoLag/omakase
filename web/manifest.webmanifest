@@ -1,0 +1,19 @@
+{
+  "name": "omakase — offline Japanese reference",
+  "short_name": "omakase",
+  "description": "100% offline Japanese dictionary: word, kanji and search lookups against the local JMdict database.",
+  "start_url": "./",
+  "scope": "./",
+  "display": "standalone",
+  "orientation": "portrait",
+  "background_color": "#111418",
+  "theme_color": "#111418",
+  "icons": [
+    {
+      "src": "./icon.svg",
+      "sizes": "any",
+      "type": "image/svg+xml",
+      "purpose": "any"
+    }
+  ]
+}

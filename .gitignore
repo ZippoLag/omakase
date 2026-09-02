@@ -3,3 +3,4 @@ dist/
 data/raw/
 *.tgz
 .DS_Store
+web/.certs/

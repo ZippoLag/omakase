@@ -251,6 +251,74 @@ Meanings (12):
 | `1`  | Missing command / cannot open the DB      |
 | `2`  | Unknown command                           |
 
+## Phone web app (fully offline)
+
+The same dictionary ships as a tiny static web app you can install on a phone
+(Android Chrome or iOS Safari → *Add to Home Screen*). It runs the real
+`dist/kanji.db` in an in-browser SQLite (sqlite-wasm) engine: the first time
+you open it, the dictionary is copied into the phone's private storage
+(OPFS), and from then on everything — lookups and the app itself — works
+with no network at all. The UI is deliberately minimal: one input, three
+buttons (`kanji` / `word` / `search`), and each click adds a result pane
+below the buttons, pushing older results down.
+
+The lookups reuse the exact query + rendering code as the CLI
+(`src/lookup.ts` / `src/format.ts`), so panes show the same output the CLI
+prints. Nothing is published anywhere: you serve the app from your own
+computer over your home Wi-Fi, once, to install it.
+
+### Build & run once on your computer
+
+```bash
+# 1. Build the web bundle (also needs dist/kanji.db — run ./install.sh or pnpm run build:db first)
+pnpm run web:build
+
+# 2. Create a TLS cert trusted by your machines (needs mkcert: brew install mkcert)
+pnpm run web:gen-cert     # prints the CA file path; also installs it on this Mac
+
+# 3. Serve over your LAN (https, with the COOP/COEP headers the engine needs)
+pnpm run web:serve        # prints your https://<lan-ip>:8443 URL
+```
+
+`pnpm run web:verify` runs an automated end-to-end check in headless Chrome
+(import → lookups → offline reload); set `CHROME_PATH` if Chrome isn't in the
+default location.
+
+### Trust the certificate on your phone (one time)
+
+The server uses a locally-generated CA (`mkcert`). Install its root
+certificate on each phone (the path is printed by `web:gen-cert`):
+
+- **Android**: copy `rootCA.pem` to the phone (USB / Drive), then
+  *Settings → Security → More security settings → Install a certificate →
+  CA certificate* and pick the file.
+- **iPhone**: AirDrop `rootCA.pem` to the phone, *Settings → General → VPN &
+  Device Management* → install the profile, then *Settings → General →
+  About → Certificate Trust Settings* → enable full trust for it.
+
+### Install on the phone
+
+Open `https://<your-lan-ip>:8443` in the phone browser (same Wi-Fi as your
+computer), wait for the one-time import (progress bar; ~300 MB), then
+**Add to Home Screen** (Android Chrome: menu → *Add to Home screen*; iOS
+Safari: *Share → Add to Home Screen*). Afterwards the app opens full-screen
+and works offline — airplane mode included. The computer only needs to be on
+when you (re)install or update.
+
+### Notes & limits
+
+- Needs a browser with OPFS + SharedArrayBuffer (Chrome 108+, Safari 17+);
+  iPhone/iPad Safari 16.x can't run the OPFS engine. The server must stay
+  https with the COOP/COEP headers — the provided `serve-web` script does
+  this.
+- The dictionary occupies ~300 MB of phone storage (it lives in the
+  browser's private origin storage, so iOS may evict it only under extreme
+  storage pressure; re-opening the app re-imports if it is gone).
+- Updating the app = rebuild + re-serve, then open the app once online; the
+  service worker cache version (`web/sw.js` `CACHE`) is bumped on releases.
+- `web/vendor/` holds the pinned sqlite-wasm engine (see its README) so the
+  web app builds and serves without `node_modules`.
+
 ## Development
 
 ```bash

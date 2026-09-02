@@ -1,0 +1,149 @@
+/**
+ * UI: a full-width single-line input with three buttons — kanji / word /
+ * search. Every click runs the lookup in the DB worker and inserts a fresh
+ * results pane directly below the button row, pushing older panes down
+ * (newest-first history).
+ */
+import type { Command, WorkerMessage, WorkerRequest } from "./worker-api.js";
+
+const worker = new Worker(new URL("./worker.js", import.meta.url), { type: "module" });
+
+// ---- DOM -------------------------------------------------------------------
+const form = document.querySelector<HTMLFormElement>("#lookup")!;
+const input = document.querySelector<HTMLInputElement>("#query")!;
+const buttons = document.querySelectorAll<HTMLButtonElement>("button[data-cmd]");
+const status = document.querySelector<HTMLDivElement>("#status")!;
+const panes = document.querySelector<HTMLDivElement>("#panes")!;
+
+// ---- state -----------------------------------------------------------------
+/** Queue of lookups waiting for the worker (single in-flight at a time). */
+const queue: { id: number; command: Command; query: string }[] = [];
+let busy = false;
+let nextId = 1;
+/** Command run by the last button click — Enter repeats it. */
+let lastCommand: Command = "word";
+let ready = false;
+
+function setStatus(text: string, extraClass = ""): void {
+  status.textContent = text;
+  status.className = extraClass;
+}
+
+function fmtMB(n: number): string {
+  return `${Math.max(0, Math.round(n / 1048576))} MB`;
+}
+
+// ---- worker messages -------------------------------------------------------
+worker.onmessage = (ev: MessageEvent<WorkerMessage>) => {
+  const msg = ev.data;
+  switch (msg.kind) {
+    case "status":
+      setStatus(msg.text);
+      break;
+    case "progress": {
+      const pct = msg.totalBytes > 0 ? Math.round((msg.loadedBytes / msg.totalBytes) * 100) : 0;
+      setStatus(`Importing dictionary… ${pct}% (${fmtMB(msg.loadedBytes)} / ${fmtMB(msg.totalBytes)})`, "busy");
+      document.documentElement.style.setProperty("--progress", `${pct}%`);
+      break;
+    }
+    case "ready":
+      ready = true;
+      document.documentElement.style.setProperty("--progress", "100%");
+      setStatus(`ready — ${msg.words.toLocaleString()} words · SQLite ${msg.version} (100% offline)`);
+      setControlsDisabled(false);
+      input.focus();
+      drain();
+      break;
+    case "result": {
+      const head = queue.shift();
+      busy = false;
+      const item = head && head.id === msg.id ? head : null;
+      if (msg.text !== null) addPane(item?.command ?? "result", item?.query ?? "", msg.text, false);
+      else if (msg.error !== null) addPane(item?.command ?? "result", item?.query ?? "", msg.error, true);
+      drain();
+      break;
+    }
+    case "fatal":
+      setStatus(`⚠ ${msg.message}`, "error");
+      setControlsDisabled(true);
+      break;
+  }
+};
+
+worker.onerror = (ev: ErrorEvent) => {
+  setStatus(`⚠ worker crashed: ${ev.message ?? "unknown error"}`, "error");
+  setControlsDisabled(true);
+};
+
+// ---- queue -----------------------------------------------------------------
+function drain(): void {
+  if (busy || !ready) return;
+  const item = queue[0];
+  if (!item) return;
+  busy = true;
+  const req: WorkerRequest = { kind: "run", id: item.id, command: item.command, query: item.query };
+  worker.postMessage(req);
+}
+
+function submit(command: Command): void {
+  const query = input.value;
+  if (!query.trim()) {
+    input.focus();
+    return;
+  }
+  lastCommand = command;
+  queue.push({ id: nextId++, command, query });
+  input.select();
+  drain();
+}
+
+// ---- panes -----------------------------------------------------------------
+/** One results pane: a small header (command · query) + the CLI text. */
+function addPane(command: string, query: string, text: string, isError: boolean): void {
+  const pane = document.createElement("section");
+  pane.className = "pane";
+  if (isError) pane.classList.add("error");
+
+  const head = document.createElement("div");
+  head.className = "pane-head";
+  const badge = document.createElement("span");
+  badge.className = "badge";
+  badge.textContent = command;
+  const q = document.createElement("span");
+  q.className = "pane-query";
+  q.textContent = query;
+  head.append(badge, q);
+
+  const pre = document.createElement("pre");
+  pre.textContent = text.endsWith("\n") ? text.slice(0, -1) : text;
+
+  pane.append(head, pre);
+  panes.prepend(pane); // newest pane sits directly below the button row
+  pane.scrollIntoView({ block: "start", behavior: "smooth" });
+}
+
+function setControlsDisabled(v: boolean): void {
+  input.disabled = v;
+  for (const b of buttons) b.disabled = v;
+}
+
+// ---- events ----------------------------------------------------------------
+for (const b of buttons) {
+  b.addEventListener("click", () => submit(b.dataset.cmd as Command));
+}
+form.addEventListener("submit", (ev) => {
+  ev.preventDefault();
+  submit(lastCommand);
+});
+
+// ---- service worker (offline shell; the dictionary lives in OPFS) ----------
+if ("serviceWorker" in navigator && location.protocol !== "file:") {
+  window.addEventListener("load", () => {
+    void navigator.serviceWorker.register("./sw.js").catch((err: unknown) => {
+      console.warn("service worker registration failed (app still works online):", err);
+    });
+  });
+}
+
+setControlsDisabled(true);
+setStatus("starting engine…", "busy");

@@ -6,12 +6,30 @@
  * contract in tests/fixtures/scripts/render-goldens.py so the formatters can
  * reproduce the golden outputs byte-for-byte.
  */
-import type Database from "better-sqlite3";
 import { furiganaFor } from "./furigana.js";
 import { kangxiChar } from "./kangxi.js";
 import { katakanaToHiragana, toRomaji } from "./kana.js";
 
-type DB = InstanceType<typeof Database>;
+/** A value bound to a SQL parameter (strings, numbers, nulls). */
+export type SqlValue = string | number | null;
+
+/**
+ * Minimal synchronous SQLite surface the query layer needs. Implemented by
+ * better-sqlite3 in the CLI and by the sqlite-wasm statement shim in the web
+ * app (src/web) — keeps this module browser-portable. `get`/`all` return
+ * opaque values; every call site casts rows to the shape it expects.
+ * Parameters are typed loosely (unknown[]) so both drivers' bind signatures
+ * stay structurally compatible; the query layer only ever binds strings,
+ * numbers and nulls.
+ */
+export interface DbLike {
+  prepare(sql: string): {
+    get(...params: unknown[]): unknown;
+    all(...params: unknown[]): unknown[];
+  };
+}
+
+type DB = DbLike;
 
 export interface LoadedWriting {
   text: string;

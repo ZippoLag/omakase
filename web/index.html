@@ -1,0 +1,36 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+  <meta name="theme-color" content="#111418">
+  <meta name="mobile-web-app-capable" content="yes">
+  <meta name="apple-mobile-web-app-status-bar-style" content="black-translucent">
+  <meta name="apple-mobile-web-app-title" content="omakase">
+  <title>omakase — offline Japanese reference</title>
+  <link rel="manifest" href="./manifest.webmanifest">
+  <link rel="icon" href="./icon.svg" type="image/svg+xml">
+  <link rel="stylesheet" href="./style.css">
+</head>
+<body>
+  <header>
+    <h1>omakase</h1>
+    <div id="status" class="busy" role="status">starting…</div>
+  </header>
+
+  <form id="lookup" autocomplete="off">
+    <input id="query" type="search" placeholder="e.g. 食べる, 食, eat, taberu"
+           autocapitalize="none" autocorrect="off" spellcheck="false"
+           enterkeyhint="go" aria-label="Look up">
+    <div id="buttons">
+      <button type="button" data-cmd="kanji">kanji</button>
+      <button type="button" data-cmd="word" class="primary">word</button>
+      <button type="button" data-cmd="search">search</button>
+    </div>
+  </form>
+
+  <div id="panes" aria-live="polite"></div>
+
+  <script type="module" src="./web/app/main.js"></script>
+</body>
+</html>
