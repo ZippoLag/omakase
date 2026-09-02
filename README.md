@@ -191,44 +191,55 @@ makase
   委  [まかせ]  committee; entrust to; leave to; devote; discard
 ```
 
-### `search` — gloss / kana / romaji search
+### `search` — readings and meanings, ranked
 
-How the query is interpreted depends on its form:
+Results come back in up to three ranked sections (each capped at 30 rows by
+default; raise it with `--max N`):
 
-- **kana input** → reading-prefix match, e.g. `omakase search たべ`
-- **ASCII input** → romaji reading-prefix match, e.g. `omakase search taberu`;
-  an exact reading wins; otherwise an English gloss search is preferred when
-  it matches — query tokens are ANDed and prefix-matched, so `omakase search
-  eat` finds “to eat” words and `omakase search develop film` finds
-  現像 “development (of film)”. An empty gloss search prints a “did you mean”
-  hint pointing at the reading-prefix path.
+- **Readings** — kana / romaji reading-prefix matches (e.g. `たべ`, `taberu`,
+  or `ta be ru`); each row shows the kana reading *and* its romaji
+- **Meanings** — English-gloss matches: the query's words are ANDed and
+  prefix-matched within a single sense, so `omakase search eat` finds “to
+  eat” words and `omakase search develop film` finds
+  現像 “development (of film)”
+- **Kanji** — kanji whose on/kun/nanori readings start with the query (the
+  same reading search as the `kanji` command)
 
-Word hits are followed by a **Kanji:** section listing kanji whose
-on/kun/nanori readings start with the query (the same reading search as the
-`kanji` command):
+Rows are sorted most-likely-first: an exact reading or exact gloss token
+beats a prefix match, then common words beat rare ones, then entry id. A
+query that is both a plausible reading and an English word shows both
+sections — `search take` lists 竹-type readings (たけ) and “to take” meanings
+side by side. When the terminal supports it, the literal overlap of your
+query is **bolded** on each result: the romaji/kana of reading hits, the
+matched gloss words of meaning hits. An ASCII search with no hits at all
+prints a “did you mean” hint pointing at the reading-prefix path.
 
 ```
-$ omakase search makase
-makase
-
-  任せる  [まかせる]  to leave (a matter, decision, etc. to someone)
-  …
-
-Kanji:
-  任  [まか.せる]  responsibility; duty; term; entrust to; appoint
-```
-
-```bash
-$ omakase search taberu
-taberu
-
-  食べる  [たべる]  to eat
-
 $ omakase search eat
 eat
 
-  遣る  [やる]  to do
+Meanings (2):
   食べる  [たべる]  to eat
+  食う  [くう]  to eat
+
+$ omakase search taberu
+taberu
+
+Readings (1):
+  食べる  [たべる (taberu)]  to eat
+
+Kanji (1):
+  食  [た.べる]  eat; food
+
+$ omakase search take --max 10
+take
+
+Readings (3):
+  竹  [たけ (take)]  bamboo; the middle (of a three-tier ranking system)
+  …
+
+Meanings (12):
+  取る  [とる]  to take
   …
 ```
 

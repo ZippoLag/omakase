@@ -15,8 +15,8 @@ import {
   isKanaInput,
   loadKanji,
   radicalChar,
-  searchGloss,
   searchKanjiByReading,
+  searchMeanings,
   searchReadingPrefix,
   suggestReading,
   wordThesaurus,
@@ -29,6 +29,7 @@ import {
   renderWordBody,
   renderKanji,
   renderKanjiReadingSearch,
+  SEARCH_MAX_DEFAULT,
 } from "./format.js";
 
 type DB = InstanceType<typeof Database>;
@@ -88,27 +89,28 @@ export function cmdKanji(db: DB, query: string): string | null {
 }
 
 /**
- * `search <query>`:
- *   - kana input  → reading-prefix (kana text)
- *   - ASCII input → romaji reading-prefix over the romaji column; a hit whose
- *                   romaji *equals* the whole query counts as reading intent
- *                   (e.g. `taberu` → 食べる). Otherwise an English gloss search
- *                   matches with tokens ANDed and prefix-matched (e.g.
- *                   `eat` → “to eat” words, `develop film` → 現像
- *                   “development (of film)”; not エアターミナル “eataminaru”),
- *                   with partial romaji prefixes as the last resort.
+ * `search <query>` sections:
+ *   - readings — reading-prefix matches over kana text / stored romaji
+ *     (ASCII input, incl. spaces typed between kana: `ta be ru` ≈ `taberu`)
+ *   - meanings — English-gloss matches (ASCII input only): query tokens are
+ *     ANDed and prefix-matched within a single sense, so `eat` finds “to
+ *     eat” words and `develop film` finds 現像 “development (of film)”.
+ *
+ * An ASCII query shows BOTH ranked sections when it is genuinely ambiguous
+ * (`take` → たけ readings AND “to take” meanings). But when the query has
+ * real meaning hits and its reading matches are only accidental prefixes
+ * (`eat` → エアタオル “eataoru”, never an exact reading), the meaning hits
+ * are what was asked for and the Readings section is dropped — katakana
+ * loans no longer crowd out “to eat” words.
  */
-export function cmdSearch(db: DB, query: string): SearchHit[] {
+export function cmdSearch(db: DB, query: string): { readings: SearchHit[]; meanings: SearchHit[] } {
   const trimmed = query.trim();
-  const hits = searchReadingPrefix(db, trimmed);
-  if (hits.length === 0) return isAscii(trimmed) ? searchGloss(db, trimmed) : hits;
-  if (!isAscii(trimmed)) return hits; // kana input: reading prefix wins
-  const exact = db.prepare(
-    "SELECT 1 FROM writings WHERE kind = 'kana' AND romaji = ? LIMIT 1",
-  ).get(trimmed.toLowerCase());
-  if (exact) return hits;
-  const gloss = searchGloss(db, trimmed);
-  return gloss.length > 0 ? gloss : hits;
+  const readings = searchReadingPrefix(db, trimmed);
+  const meanings = isAscii(trimmed) ? searchMeanings(db, trimmed) : [];
+  const keepReadings = isKanaInput(trimmed)
+    || meanings.length === 0
+    || readings.some((h) => h.exact);
+  return { readings: keepReadings ? readings : [], meanings };
 }
 
 function isAscii(s: string): boolean {
@@ -198,29 +200,40 @@ Examples:
   omakase kanji makase
 `,
   search: `Usage:
-  omakase search <query>
+  omakase search <query> [--max N]
 
-Search the dictionary. How the query is interpreted depends on its form:
-  - kana input  → reading-prefix match (e.g. たべ)
-  - ASCII input → romaji reading-prefix match (e.g. taberu); an exact
-                  reading wins, otherwise an English gloss search matches:
-                  tokens are ANDed and prefix-matched (e.g. "develop film"
-                  finds 現像 "development (of film)")
-  - kanji whose readings start with the query are appended in a
-    "Kanji:" section (e.g. まか → 任)
+Search the dictionary, returning up to ${SEARCH_MAX_DEFAULT} hits per section
+(raise the cap with --max). Results are split into ranked sections:
+  - Readings: kana / romaji reading-prefix matches (e.g. たべ, taberu,
+    "ta be ru"); each row shows its kana reading plus romaji
+  - Meanings: English-gloss matches — the query's words are ANDed and
+    prefix-matched within a single sense (e.g. "develop film" finds
+    現像 "development (of film)"; "eat" finds "to eat" words)
+  - Kanji: kanji whose on/kun/nanori readings start with the query
+When a query is both a plausible reading and English (e.g. take → たけ,
+ken → けん) the Readings and Meanings sections are both shown; when the
+terminal supports it, the literal overlap of the query is bolded in each
+result (the romaji for reading hits, the gloss for meaning hits).
 
 Arguments:
-  <query>        kana, romaji, or an English gloss
+  <query>        kana, romaji (single or multi-word), or an English gloss
+
+Options:
+  --max N        show at most N hits per section instead of
+                 ${SEARCH_MAX_DEFAULT} (also accepts --max=N or -max N)
 
 Examples:
   omakase search たべ
   omakase search taberu
-  omakase search eat
+  omakase search "ta be ru"
+  omakase search "develop film"
+  omakase search take
+  omakase search eat --max 10
 `,
 };
 
 /** Flags that take a separate following value, per the USAGE text (e.g. `--limit 3`). */
-const VALUE_FLAGS = new Set(["limit"]);
+const VALUE_FLAGS = new Set(["limit", "max"]);
 
 function parseArgs(argv: string[]): { args: string[]; flags: Map<string, string | null> } {
   const args: string[] = [];
@@ -231,14 +244,17 @@ function parseArgs(argv: string[]): { args: string[]; flags: Map<string, string 
       flags.set(a === "-h" ? "h" : "help", null);
       continue;
     }
-    if (!a.startsWith("--")) {
+    // `-max` is accepted as an alias of `--max` (single-dash, like `-h`);
+    // other single-dash args stay positional so `search -ing` still queries.
+    const long = a.startsWith("--") || /^-max($|=)/.test(a);
+    if (!long) {
       args.push(a);
       continue;
     }
-    const [k, ...rest] = a.slice(2).split("=");
+    const [k, ...rest] = (a.startsWith("--") ? a.slice(2) : a.slice(1)).split("=");
     if (!k) continue;
     if (rest.length) {
-      // `--limit=2` (equals form)
+      // `--limit=2` / `--max=2` (equals form)
       flags.set(k, rest.join("="));
     } else if (VALUE_FLAGS.has(k)) {
       // `--limit 2` (space form): consume the following value token.
@@ -256,6 +272,21 @@ function parseArgs(argv: string[]): { args: string[]; flags: Map<string, string 
   return { args, flags };
 }
 
+/**
+ * `--max` cap for search sections: a positive integer, defaulting to
+ * SEARCH_MAX_DEFAULT. Prints an error (and returns null) when invalid.
+ */
+function searchMax(flags: Map<string, string | null>, stderr: (s: string) => void): number | null {
+  const raw = flags.get("max");
+  if (raw === null || raw === undefined) return SEARCH_MAX_DEFAULT;
+  const n = Number(raw);
+  if (!Number.isInteger(n) || n < 1) {
+    stderr("error: --max must be a positive integer\n");
+    return null;
+  }
+  return n;
+}
+
 /** Run one command against an open DB, returning its output (or null for error+exit). */
 export function runCommand(
   db: DB,
@@ -263,6 +294,7 @@ export function runCommand(
   query: string | undefined,
   flags: Map<string, string | null>,
   stderr: (s: string) => void,
+  opts: { color?: boolean } = {},
 ): string | null {
   const tags = loadTags(db);
   switch (command) {
@@ -298,16 +330,18 @@ export function runCommand(
         return "";
       }
       const trimmed = query.trim();
-      const hits = cmdSearch(db, trimmed);
+      const max = searchMax(flags, stderr);
+      if (max === null) return "";
+      const { readings, meanings } = cmdSearch(db, trimmed);
       // Surface kanji whose readings start with the query too (Tangorin-style).
       const kanjiHits = isKanaInput(trimmed) || isAscii(trimmed)
         ? searchKanjiByReading(db, trimmed)
         : [];
-      const out = renderSearch(query, hits, kanjiHits);
-      // An ASCII gloss search that found nothing gets a "did you mean" hint
-      // pointing at the reading-prefix path (a reading is almost always how
-      // the word is actually searched).
-      if (hits.length === 0 && kanjiHits.length === 0 && isAscii(trimmed)) {
+      const out = renderSearch(trimmed, readings, meanings, kanjiHits, { max, color: opts.color ?? false });
+      // An ASCII search that found nothing (readings, meanings, kanji) gets a
+      // "did you mean" hint pointing at the reading-prefix path — a reading is
+      // almost always how the word is actually searched.
+      if (readings.length === 0 && meanings.length === 0 && kanjiHits.length === 0 && isAscii(trimmed)) {
         return out + searchHint(db, trimmed);
       }
       return out;
@@ -324,6 +358,7 @@ export function main(
   dbPath: string,
   stdout: (s: string) => void,
   stderr: (s: string) => void,
+  opts: { color?: boolean } = {},
 ): number {
   const [command, ...rest] = argv;
 
@@ -359,7 +394,7 @@ export function main(
   }
 
   try {
-    const out = runCommand(db, command, args[0], flags, stderr);
+    const out = runCommand(db, command, args[0], flags, stderr, opts);
     if (out === null) return 2;
     if (out !== "") stdout(out);
     return 0;
@@ -372,7 +407,13 @@ export { DB_PATH };
 
 /** Called from the bin / npm cli script with the real process args. */
 export function cli(argv: string[]): number {
-  return main(argv, process.env.JAPANESE_DB ?? DB_PATH, process.stdout.write.bind(process.stdout), process.stderr.write.bind(process.stderr));
+  return main(
+    argv,
+    process.env.JAPANESE_DB ?? DB_PATH,
+    process.stdout.write.bind(process.stdout),
+    process.stderr.write.bind(process.stderr),
+    { color: !!process.stdout.isTTY },
+  );
 }
 
 // Run directly: `tsx src/cli.ts word 食べる`

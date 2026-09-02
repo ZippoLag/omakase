@@ -190,9 +190,18 @@ export function radicalChar(db: DB, number: number): string | null {
 
 export interface SearchHit {
   word: LoadedWord;
-  /** the specific kana/reading shown (the matched reading for prefix hits). */
+  /** kana reading shown in the result row (`[たべる]` / `[たべる (taberu)]`). */
   reading: string;
+  /** Hepburn romaji of `reading` — set on reading-prefix hits so the CLI can
+   * show (and bold) the romaji next to the kana; unset on meaning hits. */
+  romaji?: string;
+  /** gloss line: the matched sense gloss for meaning hits, the first gloss
+   * for reading hits. This is the text the CLI bolds overlaps into. */
   gloss: string;
+  /** reading-prefix hits only: true when the reading *equals* the query, so
+   * the CLI can tell genuine reading intent (take → たけ) from accidental
+   * ASCII prefix hits (eat → エアタオル "eataoru"). */
+  exact?: boolean;
 }
 
 function isKana(ch: string): boolean {
@@ -205,7 +214,7 @@ export function isKanaInput(input: string): boolean {
 }
 
 /** Lowercased [a-z0-9]+ tokens from a gloss query, dropping single characters. */
-function glossQueryTokens(query: string): string[] {
+export function glossQueryTokens(query: string): string[] {
   return (query.toLowerCase().match(/[a-z0-9]+/g) ?? []).filter((t) => t.length > 1);
 }
 
@@ -229,27 +238,136 @@ function glossWordIds(db: DB, expr: string): string[] {
 }
 
 /**
- * English-gloss search via the FTS5 `glosses_fts` index (unicode61), ordered
- * by word id. The query is split into tokens; ALL tokens must match, as
- * prefix terms, inside a single gloss text — `develop film` matches a gloss
- * containing a token starting with `develop` and one starting with `film`
- * (e.g. 現像's "development (of film)"), and `develop` alone also matches
- * "development". Tokens are [a-z0-9]+ (lowercased), so no FTS operator
- * escaping is needed; single-character tokens are ignored. One hit per word;
- * gloss shown is the first gloss.
+ * English-gloss (meaning) search over the FTS5 `glosses_fts` index
+ * (unicode61). The query is split into lowercased alphanumeric tokens
+ * (single characters dropped); a word matches when ONE of its senses
+ * contains every token — each as an exact gloss word or as a word prefix
+ * (`develop` matches a gloss containing "development"), in any order across
+ * that sense's glosses. Tokens split across different senses do NOT match
+ * (flexible containment means within one sense).
+ *
+ * Rows are ranked most-likely-first: senses whose match is strongest come
+ * first — (1) more exact-token terms, (2) prefix-only terms, (3) common
+ * words, (4) entry id. The gloss shown for a hit is the first gloss of the
+ * first covering sense that contains a matched term (not merely sense 1),
+ * which is what the CLI bolds.
+ *
+ * Candidate discovery per token uses the FTS index (`"tok"` for exact,
+ * `tok*` for prefix); words are then scored in JS against their loaded
+ * glosses.
  */
-export function searchGloss(db: DB, query: string): SearchHit[] {
+export function searchMeanings(db: DB, query: string): SearchHit[] {
   const tokens = glossQueryTokens(query);
   if (tokens.length === 0) return [];
-  const match = tokens.map((t) => `${t}*`).join(" AND ");
-  const out: SearchHit[] = [];
-  for (const wordId of glossWordIds(db, match)) {
-    const word = loadWord(db, wordId);
+
+  const glossWords = (text: string): string[] => text.toLowerCase().match(/[a-z0-9]+/g) ?? [];
+
+  interface Ranked {
+    word: LoadedWord;
+    display: string;
+    exactCount: number;
+    prefixCount: number;
+    /** position of the first sense that covers every token (0-based). */
+    sense: number;
+  }
+
+  const rank = (word: LoadedWord): Ranked | null => {
+    const exact = new Array<boolean>(tokens.length).fill(false);
+    const covered = new Array<boolean>(tokens.length).fill(false);
+    let display: string | null = null;
+    let firstSense: number | null = null;
+    for (let si = 0; si < word.senses.length; si++) {
+      const s = word.senses[si]!;
+      // Per-sense flags: does THIS sense contain every token?
+      const m = new Array<boolean>(tokens.length).fill(false);
+      const e = new Array<boolean>(tokens.length).fill(false);
+      for (const g of s.glosses) {
+        const ws = glossWords(g);
+        tokens.forEach((t, k) => {
+          if (ws.includes(t)) {
+            e[k] = true;
+            m[k] = true;
+          } else if (ws.some((w) => w.startsWith(t))) m[k] = true;
+        });
+      }
+      if (!m.every(Boolean)) continue; // this sense lacks some token
+      if (firstSense === null) firstSense = si;
+      e.forEach((v, k) => { if (v) exact[k] = true; });
+      m.forEach((v, k) => { if (v) covered[k] = true; });
+      if (display === null) {
+        for (const g of s.glosses) {
+          const ws = glossWords(g);
+          if (ws.some((w) => tokens.some((t) => w === t || w.startsWith(t)))) {
+            display = g;
+            break;
+          }
+        }
+      }
+    }
+    if (firstSense === null) return null; // no single sense contains all tokens
+    return {
+      word,
+      display: display ?? firstGloss(word),
+      exactCount: exact.filter(Boolean).length,
+      prefixCount: covered.filter(Boolean).length - exact.filter(Boolean).length,
+      sense: firstSense,
+    };
+  };
+
+  // Candidate pools via FTS: words where every token occurs as an exact gloss
+  // token, or (falling back) as a token prefix. Exact pools rank first.
+  const perToken = tokens.map((t) => ({
+    exact: new Set(glossWordIds(db, `"${t}"`)),
+    any: new Set(glossWordIds(db, `${t}*`)),
+  }));
+  const intersect = (sets: Set<string>[]): string[] => {
+    let cur: Set<string> | null = null;
+    for (const s of sets) {
+      if (cur === null) {
+        cur = s;
+        continue;
+      }
+      const next = new Set<string>();
+      for (const id of cur) if (s.has(id)) next.add(id);
+      cur = next;
+    }
+    return cur ? [...cur] : [];
+  };
+  const exactPool = intersect(perToken.map((p) => p.exact));
+  const anyPool = intersect(perToken.map((p) => p.any));
+  const exactSet = new Set(exactPool);
+  const ranked: Ranked[] = [];
+  const seen = new Set<string>();
+  for (const id of [...exactPool, ...anyPool.filter((i) => !exactSet.has(i)).slice(0, MEANING_POOL_LIMIT)]) {
+    if (seen.has(id)) continue;
+    seen.add(id);
+    const word = loadWord(db, id);
     if (!word) continue;
-    const { reading } = displayHeader(word);
-    out.push({ word, reading: reading ?? "", gloss: firstGloss(word) });
+    const r = rank(word);
+    if (r) ranked.push(r);
+  }
+  ranked.sort((a, b) =>
+    b.exactCount - a.exactCount ||
+    b.prefixCount - a.prefixCount ||
+    a.sense - b.sense ||
+    Number(b.word.common) - Number(a.word.common) ||
+    a.word.id.localeCompare(b.word.id, undefined, { numeric: true }),
+  );
+
+  const out: SearchHit[] = [];
+  for (const r of ranked) {
+    const { reading } = displayHeader(r.word);
+    out.push({ word: r.word, reading: reading ?? "", gloss: r.display });
   }
   return out;
+}
+
+/** Max prefix-only words scored per meaning search (beyond the exact pool). */
+const MEANING_POOL_LIMIT = 2000;
+
+/** ASCII-only input check (gloss + romaji paths). */
+export function isAsciiInput(s: string): boolean {
+  return /^[\x20-\x7e]+$/.test(s);
 }
 
 export interface ReadingSuggestion {
@@ -294,22 +412,44 @@ function escapeLike(s: string): string {
   return s.replace(/[\\%_]/g, (ch) => "\\" + ch);
 }
 
-/** Reading-prefix search (kana text or romaji column), ordered by word id. */
+/**
+ * Reading-prefix search over kana writings, matched against the kana text
+ * (kana input) or the stored romaji (ASCII input). Input spaces are ignored
+ * (`ta be ru` searches like `taberu`), so romaji typed one kana at a time
+ * still hits. Rows are ranked most-likely-first: an exact reading match
+ * wins, then common words, then the closest (shortest) reading, then entry
+ * id — one hit per word, showing its first matching kana writing.
+ */
 export function searchReadingPrefix(db: DB, prefix: string): SearchHit[] {
-  const col = isKanaInput(prefix) ? "text" : "romaji";
+  const q = prefix.trim();
+  const kana = isKanaInput(q);
+  const needle = (kana ? q : q.toLowerCase()).replace(/\s+/g, "");
+  if (!needle) return [];
+  const col = kana ? "text" : "romaji";
   const rows = db.prepare(
-    `SELECT word_id, text FROM writings WHERE kind = 'kana' AND ${col} LIKE ? ESCAPE '\\' ORDER BY word_id, id`,
-  ).all(`${escapeLike(prefix)}%`) as { word_id: string; text: string }[];
-  const out: SearchHit[] = [];
-  const seen = new Set<string>();
+    `SELECT word_id, text, romaji FROM writings WHERE kind = 'kana' AND ${col} LIKE ? ESCAPE '\\' ORDER BY id`,
+  ).all(`${escapeLike(needle)}%`) as { word_id: string; text: string; romaji: string | null }[];
+
+  // First matching kana writing per word (lowest writings.id), like the old
+  // word_id ordering — grouping happens before ranking.
+  const first = new Map<string, { text: string; romaji: string | null }>();
   for (const r of rows) {
-    if (seen.has(r.word_id)) continue;
-    seen.add(r.word_id);
-    const word = loadWord(db, r.word_id);
-    if (!word) continue;
-    out.push({ word, reading: r.text, gloss: firstGloss(word) });
+    if (!first.has(r.word_id)) first.set(r.word_id, r);
   }
-  return out;
+  const hits: SearchHit[] = [];
+  for (const [wordId, r] of first) {
+    const word = loadWord(db, wordId);
+    if (!word) continue;
+    const exact = kana ? r.text === needle : (r.romaji ?? "") === needle;
+    hits.push({ word, exact, reading: r.text, romaji: r.romaji ?? "", gloss: firstGloss(word) });
+  }
+  hits.sort((a, b) =>
+    Number(b.exact) - Number(a.exact) ||
+    Number(b.word.common) - Number(a.word.common) ||
+    a.reading.length - b.reading.length ||
+    a.word.id.localeCompare(b.word.id, undefined, { numeric: true }),
+  );
+  return hits;
 }
 
 // ---- kanji reading search --------------------------------------------------

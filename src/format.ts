@@ -11,7 +11,7 @@ import type {
   KanjiReadingHit,
   ThesaurusHit,
 } from "./lookup.js";
-import { displayHeader as lookupHeader, rubyFor } from "./lookup.js";
+import { displayHeader as lookupHeader, glossQueryTokens, isKanaInput, rubyFor } from "./lookup.js";
 
 export interface ConjRow {
   class: string;
@@ -225,22 +225,125 @@ function kanjiHitRow(k: KanjiReadingHit): string {
   return `  ${k.literal}  [${k.readings.join("  ")}]  ${k.meanings.join("; ")}`;
 }
 
+// ---- search rendering ------------------------------------------------------
+
+/** ANSI codes for bold (the only styling the search output uses). */
+const BOLD = "\u001b[1m";
+const BOLD_OFF = "\u001b[22m";
+
+/** Default per-section cap for `search` rows; raise with `--max N`. */
+export const SEARCH_MAX_DEFAULT = 30;
+
 /**
- * `search <query>` result list (render-goldens render_search). When `kanjiHits`
- * is non-empty, a "Kanji:" section is appended, mirroring how Tangorin shows
- * word and kanji results side by side.
+ * Wrap `ranges` (ascending [start, end) substrings of `text`) in bold when
+ * `color` is on; otherwise return `text` unchanged (pipes and tests stay
+ * plain). Ranges are clamped to the text and deduplicated.
  */
-export function renderSearch(query: string, hits: SearchHit[], kanjiHits: KanjiReadingHit[] = []): string {
+function applyBold(text: string, ranges: [number, number][], color: boolean): string {
+  if (!color || ranges.length === 0) return text;
+  let out = "";
+  let last = 0;
+  for (const [s, e] of ranges) {
+    if (e <= last) continue;
+    const start = Math.max(s, last);
+    if (start > last) out += text.slice(last, start);
+    out += BOLD + text.slice(start, e) + BOLD_OFF;
+    last = e;
+  }
+  return out + text.slice(last);
+}
+
+/**
+ * Bold the literal overlap of the query tokens inside a gloss: for each
+ * gloss word, the longest query token that prefixes it (case-insensitive)
+ * marks `token.length` chars at the word start (``develop`` bolds
+ * ``develop`` inside ``development``; an exact match bolds the whole word).
+ */
+function glossBoldRanges(text: string, tokens: string[]): [number, number][] {
+  const ranges: [number, number][] = [];
+  const re = /[a-z0-9]+/gi;
+  let m: RegExpExecArray | null;
+  while ((m = re.exec(text))) {
+    const word = m[0].toLowerCase();
+    let len = 0;
+    for (const t of tokens) {
+      if (word.startsWith(t) && t.length > len) len = t.length;
+    }
+    if (len > 0) ranges.push([m.index, m.index + len]);
+  }
+  return ranges;
+}
+
+/** One reading-section row: `text  [kana (romaji)]  gloss`, overlap bolded. */
+function readingRow(hit: SearchHit, needle: string, kanaQuery: boolean, color: boolean): string {
+  const { text } = lookupHeader(hit.word);
+  let reading = hit.reading;
+  let romaji = hit.romaji ?? "";
+  if (color && needle) {
+    if (kanaQuery) {
+      if (reading.startsWith(needle)) reading = applyBold(reading, [[0, needle.length]], true);
+    } else if (romaji.toLowerCase().startsWith(needle)) {
+      romaji = applyBold(romaji, [[0, needle.length]], true);
+    }
+  }
+  const bracket = romaji ? `${reading} (${romaji})` : reading;
+  return `  ${text}  [${bracket}]  ${hit.gloss}`;
+}
+
+/** One meaning-section row: `text  [reading]  gloss`, gloss overlap bolded. */
+function meaningRow(hit: SearchHit, tokens: string[], color: boolean): string {
+  const { text } = lookupHeader(hit.word);
+  const gloss = color ? applyBold(hit.gloss, glossBoldRanges(hit.gloss, tokens), true) : hit.gloss;
+  return `  ${text}  [${hit.reading}]  ${gloss}`;
+}
+
+/**
+ * `search <query>` result list. Word hits are split into two ranked
+ * sections — `Readings` (reading-prefix matches, shown with their romaji)
+ * and `Meanings` (gloss matches) — with kanji-by-reading matches in a
+ * trailing `Kanji` section. Sections are omitted when empty; each section
+ * shows at most `max` rows (default SEARCH_MAX_DEFAULT, `--max` raises it),
+ * with the remainder counted in the header and a trailing note. When
+ * `color` is on, literal query overlap is bolded (romaji/kana for reading
+ * hits, gloss words for meaning hits) — pipes and captures stay plain.
+ * Mirrors render-goldens.py `render_search`.
+ */
+export function renderSearch(
+  query: string,
+  readings: SearchHit[],
+  meanings: SearchHit[],
+  kanjiHits: KanjiReadingHit[] = [],
+  opts: { max?: number; color?: boolean } = {},
+): string {
+  const max = opts.max ?? SEARCH_MAX_DEFAULT;
+  const color = opts.color ?? false;
+  const kanaQuery = isKanaInput(query);
+  const needle = kanaQuery ? query.replace(/\s+/g, "") : query.toLowerCase().replace(/\s+/g, "");
+  const tokens = glossQueryTokens(query);
+
   const lines: string[] = [query, ""];
-  for (const hit of hits) {
-    const { text } = lookupHeader(hit.word);
-    lines.push(`  ${text}  [${hit.reading}]  ${hit.gloss}`);
+  let any = false;
+
+  const addSection = (title: string, rows: string[], total: number): void => {
+    if (total === 0) return;
+    if (any) lines.push("");
+    any = true;
+    lines.push(`${title} (${total}):`);
+    const shown = rows.slice(0, max);
+    lines.push(...shown);
+    if (total > max) lines.push(`  … and ${total - max} more`);
+  };
+
+  if (readings.length > 0) {
+    addSection("Readings", readings.map((h) => readingRow(h, needle, kanaQuery, color)), readings.length);
+  }
+  if (meanings.length > 0) {
+    addSection("Meanings", meanings.map((h) => meaningRow(h, tokens, color)), meanings.length);
   }
   if (kanjiHits.length > 0) {
-    lines.push("", "Kanji:");
-    for (const k of kanjiHits) lines.push(kanjiHitRow(k));
+    addSection("Kanji", kanjiHits.map(kanjiHitRow), kanjiHits.length);
   }
-  if (hits.length === 0 && kanjiHits.length === 0) lines.push("  (no results)");
+  if (!any) lines.push("  (no results)");
   return lines.join("\n") + "\n";
 }
 

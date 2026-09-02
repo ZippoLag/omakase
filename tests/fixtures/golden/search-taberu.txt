@@ -1,7 +1,8 @@
 たべ
 
-  食べる  [たべる]  to eat
-  食べ物  [たべもの]  food
+Readings (2):
+  食べる  [たべる (taberu)]  to eat
+  食べ物  [たべもの (tabemono)]  food
 
-Kanji:
+Kanji (1):
   食  [た.べる]  eat; food

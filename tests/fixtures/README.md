@@ -75,9 +75,13 @@ the test suite.
 
 ## Output contract notes (v1)
 
-- `search` ordering is **entry id ascending** in these goldens — deliberately
-  simple and deterministic. FTS5 bm25 relevance ranking is a later enhancement
-  and will update the goldens with a reviewed diff.
+- `search` goldens render the ranked sections (`Readings (N):` /
+  `Meanings (N):` / `Kanji (N):`) with rows most-likely-first: an exact
+  reading / exact gloss token beats a prefix match, then common words, then
+  entry id; meaning hits require every query token inside ONE sense (exact
+  gloss tokens rank above prefix matches). Sections are counted in their
+  header and capped at 30 rows with a `… and N more` note (mirrors
+  `format.ts`; bolding is terminal-only and never appears in goldens).
 - `word` shows all senses; `--limit N` truncates with a trailing
   `… and N more senses` line (see `word-suru-limit3.txt`).
 - **[G] gap-class goldens:** `conjugate-aru` (suppletive ない, blank

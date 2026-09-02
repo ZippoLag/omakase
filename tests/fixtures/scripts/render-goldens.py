@@ -451,18 +451,28 @@ def render_kanji(lit, kanji_data, word_entries):
             lines.append("  %s  [%s]  %s" % (writing, fg, gloss))
     return "\n".join(lines) + "\n"
 
-def render_search(query, rows, kanji_rows=None):
-    """Word hit rows, then a Kanji: section (kanji-by-reading matches)."""
-    kanji_rows = kanji_rows or []
+# Default per-section row cap for `search` (mirrors format.ts SEARCH_MAX_DEFAULT).
+SEARCH_MAX = 30
+
+def render_search(query, sections):
+    """Sectioned `search` output: query echo, then each non-empty ranked
+    section (`Readings (N):` / `Meanings (N):` / `Kanji (N):`) with up to
+    SEARCH_MAX rows and a remainder note. Mirrors src/format.ts renderSearch
+    (plain text — bolding is a terminal-only concern in the TS formatter)."""
     lines = [query, ""]
-    for writing, reading, gloss in rows:
-        lines.append("  %s  [%s]  %s" % (writing, reading, gloss))
-    if kanji_rows:
-        lines.append("")
-        lines.append("Kanji:")
-        for lit, readings, meanings in kanji_rows:
-            lines.append("  %s  [%s]  %s" % (lit, "  ".join(readings), "; ".join(meanings)))
-    if not rows and not kanji_rows:
+    emitted = False
+    for header, rows in sections:
+        if not rows:
+            continue
+        if emitted:
+            lines.append("")
+        lines.append("%s (%d):" % (header, len(rows)))
+        for row in rows[:SEARCH_MAX]:
+            lines.append(row)
+        if len(rows) > SEARCH_MAX:
+            lines.append("  … and %d more" % (len(rows) - SEARCH_MAX))
+        emitted = True
+    if not emitted:
         lines.append("  (no results)")
     return "\n".join(lines) + "\n"
 
@@ -580,30 +590,96 @@ def main():
                 hits.append((lit, matched, meanings))
         return hits
 
-    # --- search (exact word-token match on glosses; kana/romaji prefix on readings) ---
-    def gloss_tokens(w_):
-        toks = set()
-        for g in [g["text"] for s in w_["sense"] for g in s["gloss"]]:
-            for t in g.lower().replace("(", " ").replace(")", " ").replace(";", " ").replace(",", " ").split():
-                toks.add(t)
-        return toks
+    # --- search: ranked Readings / Meanings / Kanji sections ---
+    # (mirrors src/lookup.ts searchReadingPrefix + searchMeanings and the
+    # sectioned layout of src/format.ts renderSearch: exact matches first,
+    # then common words, then entry id; meanings require every query token
+    # inside ONE sense, exact gloss tokens ranking above prefix matches.)
 
-    eat = sorted([w(i) for i in entries if "eat" in gloss_tokens(w(i))], key=lambda x: int(x["id"]))
-    write("search-eat.txt", render_search("eat", [(display_header(x)[0], display_header(x)[1], first_gloss(x)) for x in eat], kanji_reading_hits("eat", False)))
+    def gloss_ws(text):
+        return re.findall(r"[a-z0-9]+", text.lower())
 
-    def prefix_rows(prefix, col="kana"):
+    def meaning_rank(w_, toks):
+        """(exact_count, prefix_count, sense_index, display_gloss) when one
+        sense covers all tokens, else None. Mirrors searchMeanings' per-sense
+        covering rule (sense_index = first covering sense, 0-based)."""
+        exact = [False] * len(toks)
+        covered = [False] * len(toks)
+        display = None
+        first_sense = None
+        for si, s in enumerate(w_["sense"]):
+            m = [False] * len(toks)
+            e = [False] * len(toks)
+            for g in s["gloss"]:
+                ws = gloss_ws(g["text"])
+                for k, t in enumerate(toks):
+                    if t in ws:
+                        e[k] = True
+                        m[k] = True
+                    elif any(x.startswith(t) for x in ws):
+                        m[k] = True
+            if not all(m):
+                continue
+            if first_sense is None:
+                first_sense = si
+            for k in range(len(toks)):
+                if e[k]:
+                    exact[k] = True
+                if m[k]:
+                    covered[k] = True
+            if display is None:
+                for g in s["gloss"]:
+                    ws = gloss_ws(g["text"])
+                    if any(any(x == t or x.startswith(t) for t in toks) for x in ws):
+                        display = g["text"]
+                        break
+        if first_sense is None:
+            return None
+        return (sum(exact), sum(covered) - sum(exact), first_sense, display)
+
+    def meaning_rows(query):
+        toks = [t for t in re.findall(r"[a-z0-9]+", query.lower()) if len(t) > 1]
         rows = []
+        for i in sorted(entries, key=int):
+            res = meaning_rank(entries[i], toks)
+            if res is None:
+                continue
+            exact_c, prefix_c, sense_i, display = res
+            text, reading, common = display_header(entries[i])
+            rows.append((text, reading or "", display, exact_c, prefix_c, sense_i, common, int(i)))
+        # exact beats prefix; then the earliest covering sense, then common, then id
+        rows.sort(key=lambda r: (-r[3], -r[4], r[5], -r[6], r[7]))
+        return ["  %s  [%s]  %s" % (r[0], r[1], r[2]) for r in rows]
+
+    def reading_rows(query, is_kana):
+        """Ranked reading-prefix rows: `text  [kana (romaji)]  gloss`."""
+        needle = re.sub(r"\s+", "", query if is_kana else query.lower())
+        cands = []
         for i in sorted(entries, key=int):
             w_ = entries[i]
             for k in w_.get("kana", []):
-                value = romaji(k["text"]) if col == "romaji" else k["text"]
-                if value.startswith(prefix):
-                    rows.append((display_header(w_)[0], k["text"], first_gloss(w_)))
-                    break
-        return rows
+                value = k["text"] if is_kana else romaji(k["text"])
+                if not value.startswith(needle):
+                    continue
+                text, _reading, common = display_header(w_)
+                cands.append((k["text"], romaji(k["text"]), first_gloss(w_), value == needle, common, int(i), text))
+                break
+        cands.sort(key=lambda r: (-r[3], -r[4], len(r[0]), r[5]))
+        return ["  %s  [%s (%s)]  %s" % (r[6], r[0], r[1], r[2]) for r in cands]
 
-    write("search-taberu.txt", render_search("たべ", prefix_rows("たべ"), kanji_reading_hits("たべ", True)))
-    write("search-taberu-romaji.txt", render_search("taberu", prefix_rows("taberu", "romaji"), kanji_reading_hits("taberu", False)))
+    def search_sections(read_rows, mean_rows, kanji):
+        sections = []
+        if read_rows:
+            sections.append(("Readings", read_rows))
+        if mean_rows:
+            sections.append(("Meanings", mean_rows))
+        if kanji:
+            sections.append(("Kanji", ["  %s  [%s]  %s" % (lit, "  ".join(rs), "; ".join(ms)) for lit, rs, ms in kanji]))
+        return sections
+
+    write("search-eat.txt", render_search("eat", search_sections([], meaning_rows("eat"), kanji_reading_hits("eat", False))))
+    write("search-taberu.txt", render_search("たべ", search_sections(reading_rows("たべ", True), [], kanji_reading_hits("たべ", True))))
+    write("search-taberu-romaji.txt", render_search("taberu", search_sections(reading_rows("taberu", False), meaning_rows("taberu"), kanji_reading_hits("taberu", False))))
 
     # --- radical ---
     write("radical-mizu.txt", render_radical("水", load(os.path.join(E, "radk-水.json"))))

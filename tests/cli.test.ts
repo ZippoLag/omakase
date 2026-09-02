@@ -253,22 +253,68 @@ test("kanji: literal page and reading search both work end-to-end", () => {
   }
 });
 
-test("search: gloss hit, kana prefix with Kanji section, and empty result", () => {
+test("search: meaning + reading sections, Kanji section, and empty result", () => {
   const { dbPath, dir } = buildFixtureDbFile();
   try {
     const gloss = runOnDb(["search", "eat"], dbPath);
     assert.equal(gloss.code, 0);
+    assert.ok(gloss.stdout.includes("Meanings (2):"));
     assert.ok(gloss.stdout.includes("食べる  [たべる]  to eat"));
+    assert.ok(!gloss.stdout.includes("Readings ("), "no reading hits for eat");
 
     const kana = runOnDb(["search", "たべ"], dbPath);
     assert.equal(kana.code, 0);
-    assert.ok(kana.stdout.includes("食べ物  [たべもの]"));
-    assert.ok(kana.stdout.includes("Kanji:"));
+    assert.ok(kana.stdout.includes("Readings (2):"));
+    assert.ok(kana.stdout.includes("食べ物  [たべもの (tabemono)]"));
+    assert.ok(kana.stdout.includes("Kanji (1):"));
     assert.ok(kana.stdout.includes("食  [た.べる]"));
 
     const empty = runOnDb(["search", "zqxjk"], dbPath);
     assert.equal(empty.code, 0);
     assert.ok(empty.stdout.includes("(no results)"));
+  } finally {
+    rmSync(dir, { recursive: true, force: true });
+  }
+});
+
+test("search --max/-max: caps a section (space, equals, and -max forms)", () => {
+  const { dbPath, dir } = buildFixtureDbFile();
+  try {
+    // たべ hits 2 readings; --max 1 shows the first and notes the remainder.
+    for (const argv of [["search", "たべ", "--max", "1"], ["search", "たべ", "--max=1"], ["search", "たべ", "-max", "1"]]) {
+      const { code, stdout } = runOnDb(argv, dbPath);
+      assert.equal(code, 0, `${argv.join(" ")} exit code`);
+      assert.ok(stdout.includes("Readings (2):"), `${argv.join(" ")} header counts the section`);
+      assert.ok(stdout.includes("食べる  [たべる (taberu)]"), `${argv.join(" ")} first row`);
+      assert.ok(stdout.includes("  … and 1 more"), `${argv.join(" ")} remainder note`);
+      assert.ok(!stdout.includes("食べ物"), `${argv.join(" ")} second row capped off`);
+    }
+
+    // An invalid cap is an error on stderr, no output.
+    const bad = runOnDb(["search", "たべ", "--max", "0"], dbPath);
+    assert.equal(bad.code, 0);
+    assert.equal(bad.stdout, "");
+    assert.ok(bad.stderr.includes("error: --max must be a positive integer"));
+  } finally {
+    rmSync(dir, { recursive: true, force: true });
+  }
+});
+
+test("search: a reading match and an English word both appear in ranked sections", () => {
+  // ``take`` is a romaji reading (たけ) — but no fixture word reads たけ, so
+  // the Readings section is absent; ``taberu`` lands in Readings with romaji.
+  const { dbPath, dir } = buildFixtureDbFile();
+  try {
+    const romaji = runOnDb(["search", "taberu"], dbPath);
+    assert.equal(romaji.code, 0);
+    assert.ok(romaji.stdout.includes("Readings (1):"));
+    assert.ok(romaji.stdout.includes("食べる  [たべる (taberu)]  to eat"));
+    assert.ok(!romaji.stdout.includes("Meanings ("), "no meaning hits for taberu");
+
+    // Spaced romaji (``ta be ru``) still matches the reading.
+    const spaced = runOnDb(["search", "ta be ru"], dbPath);
+    assert.equal(spaced.code, 0);
+    assert.ok(spaced.stdout.includes("食べる  [たべる (taberu)]"));
   } finally {
     rmSync(dir, { recursive: true, force: true });
   }
