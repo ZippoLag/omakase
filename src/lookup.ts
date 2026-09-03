@@ -641,43 +641,112 @@ function normalizeReading(s: string): string {
   return katakanaToHiragana(stripDots(s));
 }
 
+/** Katakana counterpart of a standard-range hiragana char (or null). */
+function katakanaOf(hira: string): string | null {
+  const code = hira.codePointAt(0)!;
+  return code >= 0x3041 && code <= 0x3096 ? String.fromCodePoint(code + 0x60) : null;
+}
+
 /**
  * Kanji whose on/kun/nanori reading starts with the query, ordered by literal.
  * Kana input matches kana (katakana readings normalized to hiragana; kun dot
  * separators ignored); ASCII input matches the Hepburn-ish romaji of each
  * reading (src/kana.ts). One entry per kanji, listing only the matched
  * readings, mirroring how the word search shows the matched reading.
+ *
+ * Candidate discovery is index-driven: a reading can match the prefix only
+ * if its first character normalizes to one of the kana that can START it —
+ * the needle's own first kana (hiragana + katakana form) for kana input, or
+ * every kana whose romaji begins with the needle's first letter for ASCII
+ * (the small-tsu geminate is added too, since っ-initial readings romanize
+ * to any consonant). kanji_readings.value carries idx_kanji_readings_value,
+ * so the candidates are fetched as one UNION ALL of per-variant value-range
+ * seeks; kanji_nanori has no value index, so it is a single filtered scan.
+ * The few surviving rows are verified exactly in JS (dots, kana script and
+ * full romaji prefix), and the per-kanji readings/meanings are fetched for
+ * the matched literals in a handful of chunked queries — not per kanji.
  */
 export function searchKanjiByReading(db: DB, query: string): KanjiReadingHit[] {
   const isKana = isKanaInput(query);
   const needle = isKana ? normalizeReading(query) : query.toLowerCase();
+  if (!needle) return [];
   const matches = (value: string): boolean => {
     const norm = normalizeReading(value);
     return isKana ? norm.startsWith(needle) : toRomaji(norm).startsWith(needle);
   };
 
+  const starts: string[] = [];
+  const addStart = (hira: string): void => {
+    starts.push(hira);
+    const kata = katakanaOf(hira);
+    if (kata) starts.push(kata);
+  };
+  if (isKana) {
+    addStart(needle[0]!);
+  } else {
+    for (let code = 0x3041; code <= 0x3096; code++) {
+      const hira = String.fromCodePoint(code);
+      if (toRomaji(hira).startsWith(needle[0]!)) addStart(hira);
+    }
+  }
+  addStart("っ"); // っ-initial readings romanize to any following consonant
+  if (starts.length === 0) return [];
+
+  // [first char, next codepoint) spans — `value LIKE 'X%'` equivalents that
+  // are pure range constraints, so the UNION branches can seek the index.
+  const spans = starts.map((ch) => {
+    const code = ch.codePointAt(0)!;
+    return [ch, String.fromCodePoint(code + 1)] as const;
+  });
+  const spansPh = spans.map(() => "(value >= ? AND value < ?)").join(" OR ");
+  const spanParams = spans.flat();
+
   const matched = new Set<string>();
-  const readings = db.prepare("SELECT kanji, value FROM kanji_readings ORDER BY kanji").all() as { kanji: string; value: string }[];
-  for (const r of readings) {
+  const readingRows = db.prepare(
+    spans.map(() => "SELECT kanji, value FROM kanji_readings WHERE value >= ? AND value < ?").join(" UNION ALL "),
+  ).all(...spanParams) as { kanji: string; value: string }[];
+  for (const r of readingRows) {
     if (matches(r.value)) matched.add(r.kanji);
   }
-  const nanori = db.prepare("SELECT kanji, value FROM kanji_nanori ORDER BY kanji").all() as { kanji: string; value: string }[];
-  for (const n of nanori) {
+  const nanoriRows = db.prepare(
+    `SELECT kanji, value FROM kanji_nanori WHERE ${spansPh}`,
+  ).all(...spanParams) as { kanji: string; value: string }[];
+  for (const n of nanoriRows) {
     if (matches(n.value)) matched.add(n.kanji);
   }
-
   if (matched.size === 0) return [];
+
+  const literals = [...matched].sort();
+  const per = new Map<string, { readings: string[]; nanori: string[]; meanings: string[] }>();
+  for (const literal of literals) per.set(literal, { readings: [], nanori: [], meanings: [] });
+
+  // Per-literal rows, chunked under SQLite's variable limit: matched readings
+  // (the rows shown), nanori, and English meanings, each in rowid order.
+  for (let i = 0; i < literals.length; i += 900) {
+    const batch = literals.slice(i, i + 900);
+    const ph = batch.map(() => "?").join(",");
+    const readRows = db.prepare(
+      `SELECT kanji, value FROM kanji_readings WHERE kanji IN (${ph}) ORDER BY kanji, rowid`,
+    ).all(...batch) as { kanji: string; value: string }[];
+    for (const r of readRows) {
+      if (matches(r.value)) per.get(r.kanji)!.readings.push(r.value);
+    }
+    const nanaRows = db.prepare(
+      `SELECT kanji, value FROM kanji_nanori WHERE kanji IN (${ph}) ORDER BY kanji, rowid`,
+    ).all(...batch) as { kanji: string; value: string }[];
+    for (const r of nanaRows) {
+      if (matches(r.value)) per.get(r.kanji)!.nanori.push(r.value);
+    }
+    const meanRows = db.prepare(
+      `SELECT kanji, value FROM kanji_meanings WHERE kanji IN (${ph}) AND lang = 'en' ORDER BY kanji, rowid`,
+    ).all(...batch) as { kanji: string; value: string }[];
+    for (const r of meanRows) per.get(r.kanji)!.meanings.push(r.value);
+  }
+
   const out: KanjiReadingHit[] = [];
-  for (const literal of [...matched].sort()) {
-    const hitReadings = (db.prepare("SELECT type, value FROM kanji_readings WHERE kanji = ? ORDER BY rowid").all(literal) as { type: string; value: string }[])
-      .filter((r) => matches(r.value))
-      .map((r) => r.value);
-    const hitNanori = (db.prepare("SELECT value FROM kanji_nanori WHERE kanji = ? ORDER BY rowid").all(literal) as { value: string }[])
-      .filter((n) => matches(n.value))
-      .map((n) => n.value);
-    const meanings = (db.prepare("SELECT value FROM kanji_meanings WHERE kanji = ? AND lang = 'en' ORDER BY rowid").all(literal) as { value: string }[])
-      .map((m) => m.value);
-    out.push({ literal, readings: [...hitReadings, ...hitNanori], meanings });
+  for (const literal of literals) {
+    const p = per.get(literal)!;
+    out.push({ literal, readings: [...p.readings, ...p.nanori], meanings: p.meanings });
   }
   return out;
 }
