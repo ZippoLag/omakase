@@ -5,6 +5,8 @@ a thesaurus — synonyms and antonyms — via `word`, kanji pages via `kanji`,
 and search the dictionary by kana, romaji, or English gloss via `search`, all
 against a local SQLite database — no network access at query time.
 
+> **Note from author:** Hi, I'm [Sebastián](https://github.com/zippolag), I love [tangorin](https://tangorin.com/), and if I could I would economically support them so their servers have all the oomph required to always reply in milliseconds, but sadly, I cannot. Hence, faced with the need to have a quick Japanese reference always available, and since I had access to [FREEBUFF](https://github.com/CodebuffAI/freebuff), I took the chance to iterate over my use cases and build just what I needed: a japanese reference app which I can access both as a CLI in my terminal and as a PWA in any device.
+
 ## Requirements
 
 - **Node.js 20–22** (see [Node version note](#node-version-note)). CI runs Node
