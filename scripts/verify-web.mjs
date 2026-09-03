@@ -326,6 +326,20 @@ async function main() {
     // search romaji readings
     p = await runLookup(page, "search", "taberu");
     check("search taberu → Readings", p.text.includes("Readings") && p.text.includes("食べる"), "search taberu");
+    // a single-kanji word row (the search “Kanji” section) also gets the
+    // word-lookup icon, while the writing kanji stays clickable
+    const singleKanjiTok = await page.evaluate(() => {
+      const pre = document.querySelector("#panes .pane:first-child pre");
+      return {
+        icons: [...pre.querySelectorAll(".tok-word")].map((b) => b.title),
+        kanji: [...pre.querySelectorAll(".tok-kanji")].map((b) => b.textContent),
+      };
+    });
+    check(
+      "tokens: single-kanji word row has word icon + kanji button",
+      singleKanjiTok.icons.includes("word 食") && singleKanjiTok.kanji.includes("食"),
+      JSON.stringify({ icons: singleKanjiTok.icons, kanji: singleKanjiTok.kanji }),
+    );
     // search english meanings
     p = await runLookup(page, "search", "eat");
     check("search eat → Meanings", p.text.includes("Meanings") && p.text.includes("to eat"), "search eat");

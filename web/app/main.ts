@@ -265,9 +265,9 @@ function wordIconButton(writing: string): HTMLButtonElement {
 /**
  * Render one output line as DOM nodes: every kanji becomes an individual
  * kanji-lookup button; on word rows the writing also gets a word-lookup icon
- * at its left when it is an actual dictionary word (contains kana or multiple
- * kanji — a standalone single kanji stays kanji-only). Bracket contents
- * (readings/ruby) are left plain apart from their own kanji being clickable.
+ * at its left when it is an actual dictionary word (contains kanji or kana —
+ * even a single character). Bracket contents (readings/ruby) are left plain
+ * apart from their own kanji being clickable.
  */
 function linkifyLine(line: string): (Node | string)[] {
   const out: (Node | string)[] = [];
@@ -276,8 +276,7 @@ function linkifyLine(line: string): (Node | string)[] {
   if (m) {
     const writingStart = m[1]!.length;
     const writing = m[2]!;
-    const hanCount = [...writing].filter((c) => KANJI_RE.test(c)).length;
-    if (KANA_RE.test(writing) || hanCount >= 2) {
+    if (KANJI_RE.test(writing) || KANA_RE.test(writing)) {
       out.push(line.slice(cursor, writingStart));
       out.push(wordIconButton(writing));
       cursor = writingStart;
