@@ -416,3 +416,92 @@ button.busy {
   border-color: var(--accent);
   color: var(--accent);
 }
+
+/* ---- footer: credits & attribution ---------------------------------------- */
+footer {
+  max-width: 860px;
+  margin: 0 auto;
+  padding: 4px 14px calc(28px + env(safe-area-inset-bottom));
+  display: flex;
+  align-items: flex-start;
+  gap: 10px;
+  color: var(--muted);
+  font-size: 12px;
+  line-height: 1.5;
+}
+
+.footer-credit {
+  margin: 0;
+  flex: 1;
+  min-width: 0;
+  overflow-wrap: anywhere;
+}
+
+.footer-credit a {
+  color: var(--muted);
+  text-decoration: underline;
+  text-underline-offset: 2px;
+}
+
+.footer-credit a:hover,
+.footer-credit a:focus-visible {
+  color: var(--accent);
+}
+
+/* The "i" button: a circular disclosure that reveals the full credits panel
+   (the panel opens upward so it never pushes the footer's neighbors). */
+.credits {
+  flex: none;
+  position: relative;
+}
+
+.credits summary {
+  list-style: none;
+  cursor: pointer;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 26px;
+  height: 26px;
+  padding: 0;
+  border: 1px solid var(--line);
+  border-radius: 50%;
+  background: var(--bg-pane);
+  color: var(--muted);
+  font: italic 700 14px/1 ui-monospace, "SF Mono", Menlo, Consolas, monospace;
+  user-select: none;
+  -webkit-tap-highlight-color: transparent;
+  touch-action: manipulation;
+}
+
+.credits summary::-webkit-details-marker { display: none; }
+
+.credits summary:hover,
+.credits summary:focus-visible,
+.credits[open] summary {
+  border-color: var(--accent);
+  color: var(--accent);
+}
+
+.credits-panel {
+  position: absolute;
+  right: 0;
+  bottom: calc(100% + 8px);
+  width: min(560px, calc(100vw - 28px));
+  max-height: 70vh;
+  overflow-y: auto;
+  padding: 14px 16px;
+  background: var(--bg-pane);
+  border: 1px solid var(--line);
+  border-radius: 12px;
+  box-shadow: 0 8px 24px rgba(0, 0, 0, 0.18);
+  color: var(--ink);
+  font-size: 12px;
+  line-height: 1.55;
+}
+
+.credits-panel p { margin: 0 0 10px; }
+.credits-panel p:last-child { margin-bottom: 0; }
+.credits-panel ul { margin: 0 0 10px; padding-left: 18px; }
+.credits-panel li { margin-bottom: 6px; }
+.credits-panel a { color: var(--accent); }

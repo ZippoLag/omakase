@@ -107,6 +107,11 @@ omakase <command> --help    show detailed help for a command
 
 - `omakase --help` or `omakase -h` — brief description and a list of all
   commands.
+- `omakase --license` (also `--licenses`) — prints the full license &
+  attribution text (MIT code license, every data-source and library license,
+  and the disclaimers). The text is embedded in the CLI itself, so it works
+  even when `omakase` is installed without the source tree (no `LICENSE.md`
+  on disk); it never opens the database.
 - `omakase <command> --help` or `omakase <command> -h` — detailed usage for
   that command (arguments, options, examples).
 
@@ -119,6 +124,7 @@ Japanese quick-reference CLI (100% offline)
 Usage:
   omakase <command> [args...]
   omakase --version           show the app and dictionary build versions
+  omakase --license           show the full license & attribution text
   omakase --help              show this overview
   omakase <command> --help    show help for a specific command
 
@@ -425,6 +431,38 @@ format byte-for-byte). The stroke-order data (KanjiVG, CC BY-SA 3.0) is
 fetched at build time into `dist/strokes/` and indexed by the `stroke_order`
 table (see `tangorin_sources.md` §2 and `tests/fixtures/README.md` for
 provenance).
+
+## Credits & licenses
+
+omakase is built **by [Sebastián R. Vansteenkiste](https://github.com/zippolag)
+via [DeepSeek V4 Flash](https://www.deepseek.com/) @
+[FREEBUFF](https://freebuff.com)**. It is an independent, from-scratch
+reimplementation inspired by [tangorin.com](https://tangorin.com/) (the free
+Japanese–English dictionary initially developed by Gregory Bober and now owned
+by Archie Preston) — no Tangorin code or data is included; all dictionary
+content comes from the upstream open projects below.
+
+The app code is MIT-licensed; the dictionary data it builds keeps the
+share-alike licences of its sources. Full license texts and disclaimers live in
+[`LICENSE.md`](LICENSE.md), every third-party source and library is listed with
+its copyright and license text in [`NOTICE.md`](NOTICE.md), and the
+source/license research is documented in
+[`tangorin_sources.md`](tangorin_sources.md). The same attribution shows up in
+`omakase --help`, behind the “i” button in the web app footer, and in full via
+`omakase --license` (the text is embedded in the CLI, so it prints even when
+the command is installed without the source tree).
+
+| What | Source | License |
+|---|---|---|
+| Word dictionary | [JMdict](https://www.edrdg.org/jmdict/edict_doc.html) (via [jmdict-simplified](https://github.com/scriptin/jmdict-simplified)) | CC BY-SA 4.0 © James W. Breen & EDRDG (NPM packages MIT) |
+| Kanji dictionary | [KANJIDIC2](https://www.edrdg.org/kanjidic/kanjd2index.html) | CC BY-SA 4.0 © James W. Breen & EDRDG |
+| Radical decomposition | kradfile-u / radkfile | CC BY-SA 4.0 (kradfile-u © Jim Rose, KanjiCafe.com) |
+| Ruby / furigana | [JmdictFurigana](https://github.com/Doublevil/JmdictFurigana) | MIT (data derived from JMdict, CC BY-SA 4.0) |
+| Stroke order | [KanjiVG](https://kanjivg.tagaini.net/) | CC BY-SA 3.0 © Ulrich Apel |
+| Example sentences | [Tatoeba](https://tatoeba.org/) | CC BY 2.0 FR (some CC0) |
+| SQLite engine (CLI) | [better-sqlite3](https://www.npmjs.com/package/better-sqlite3) | MIT |
+| SQLite engine (web) | [@sqlite.org/sqlite-wasm](https://sqlite.org/wasm) | Apache-2.0 (SQLite itself: public domain) |
+| Dev tooling | TypeScript, tsx, puppeteer-core, @types/* | Apache-2.0 / MIT |
 
 ## Node version note
 

@@ -13,6 +13,7 @@ import { spawnSync } from "node:child_process";
 import { dirname, join, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 import { fetchAll, fetchFile } from "./fetch.js";
+import { LICENSES_SUMMARY } from "./licenses.js";
 import { loadFurigana, loadJmdict, loadKanjidic2, loadKanjivg, loadKradfile, loadRadkfile, RELEASE_TAG } from "./parse.js";
 import { transform } from "./transform.js";
 import { buildDb, summarize } from "./buildDb.js";
@@ -94,6 +95,8 @@ async function main(): Promise<void> {
     dict_date: jmdict.dictDate,
     kanjidic_db: kanjidic2.databaseVersion,
     tags: JSON.stringify(jmdict.tags), // POS tag -> description map (CLI display)
+    // License / attribution provenance (see LICENSE.md for the full texts).
+    licenses: LICENSES_SUMMARY,
     // Version stamp of this build (`omakase --version` and the web ready
     // status read the `version` key; the rest is structured provenance).
     version: String(v.versionFull ?? "unknown"),
@@ -125,6 +128,7 @@ async function main(): Promise<void> {
     kanjidicDatabaseVersion: kanjidic2.databaseVersion,
     furigana: { source: FURIGANA_SOURCE, release: FURIGANA_RELEASE },
     strokes: { source: KANJIVG_SOURCE, release: KANJIVG_RELEASE, count: strokes.length },
+    licenses: LICENSES_SUMMARY,
     version: v.versionFull ?? null,
     build: v.build ?? null,
     commit: v.commit ?? null,

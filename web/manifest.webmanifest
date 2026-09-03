@@ -1,7 +1,7 @@
 {
   "name": "omakase — offline Japanese reference",
   "short_name": "omakase",
-  "description": "100% offline Japanese dictionary: word, kanji and search lookups against the local JMdict database.",
+  "description": "100% offline Japanese dictionary: word, kanji and search lookups against the local JMdict database. Built by Sebastián R. Vansteenkiste via DeepSeek V4 Flash @ FREEBUFF. Dictionary data © EDRDG (CC BY-SA 4.0) · KanjiVG (CC BY-SA 3.0) · Tatoeba (CC BY 2.0) — see NOTICE.md.",
   "start_url": "./",
   "scope": "./",
   "display": "standalone",

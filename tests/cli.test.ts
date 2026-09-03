@@ -10,10 +10,14 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
 import { copyFileSync, mkdirSync, readFileSync, readdirSync, mkdtempSync, rmSync } from "node:fs";
-import { join } from "node:path";
+import { join, dirname } from "node:path";
+import { fileURLToPath } from "node:url";
 import { tmpdir } from "node:os";
 import Database from "better-sqlite3";
 import { main } from "../src/cli.js";
+import { LICENSE_TEXT } from "../src/licenses.js";
+
+const ROOT = join(dirname(fileURLToPath(import.meta.url)), "..");
 import { transform } from "../data/build/transform.js";
 import { buildDb } from "../data/build/buildDb.js";
 
@@ -184,6 +188,24 @@ test("--version / -V: prints the app version without opening the DB", () => {
     assert.ok(stdout.includes("commits"), `${flag} shows git provenance`);
     assert.equal(stdout.trim().split("\n").length, 1, `${flag} app line only (no DB)`);
   }
+});
+
+test("--license / --licenses: prints the full embedded license without opening the DB", () => {
+  for (const flag of ["--license", "--licenses"]) {
+    const { code, stdout, stderr } = run([flag]); // bogus DB path — must not be opened
+    assert.equal(code, 0, `${flag} exit code`);
+    assert.equal(stderr, "", `${flag} writes no error`);
+    assert.ok(stdout.includes("Sebastián R. Vansteenkiste"), `${flag} has the author credit`);
+    assert.ok(stdout.includes("Permission is hereby granted"), `${flag} has the MIT text`);
+    assert.ok(stdout.includes("CC BY-SA 4.0"), `${flag} has the data licenses`);
+    assert.ok(stdout.includes("EDRDG"), `${flag} has the EDRDG attribution`);
+    assert.ok(stdout.includes("Disclaimer"), `${flag} has the disclaimers`);
+  }
+});
+
+test("the embedded license text matches LICENSE.md byte-for-byte", () => {
+  const file = readFileSync(join(ROOT, "LICENSE.md"), "utf8");
+  assert.equal(LICENSE_TEXT, file);
 });
 
 test("--version with a database: app line plus the dictionary build stamp", () => {

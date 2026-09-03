@@ -19,6 +19,9 @@ const PRECACHE = [
   "./style.css",
   "./manifest.webmanifest",
   "./icon.svg",
+  // attribution documents (linked from the footer)
+  "./LICENSE.md",
+  "./NOTICE.md",
   // emitted app modules
   "./web/app/main.js",
   "./web/app/worker.js",

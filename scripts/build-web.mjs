@@ -3,6 +3,7 @@
  * servable tree in dist/:
  *
  *   dist/index.html, sw.js, style.css, manifest.webmanifest, icon.svg  (shell)
+ *   dist/LICENSE.md, dist/NOTICE.md   attribution docs (linked from the footer)
  *   dist/web/app/*.js        emitted UI + worker modules
  *   dist/web/vendor/*        SQLite WASM engine (copied from web/vendor)
  *   dist/src/*.js            emitted shared query/render layer
@@ -45,6 +46,13 @@ if (run.status !== 0) {
 // Static shell files land at the docroot (dist/).
 for (const f of ["index.html", "style.css", "manifest.webmanifest", "icon.svg"]) {
   cpSync(join(root, "web", f), join(root, "dist", f));
+}
+
+// Attribution documents ship with the served app (served at the docroot, so
+// the footer's LICENSE.md / NOTICE.md links and the manifest description work
+// offline via the service worker's precache).
+for (const f of ["LICENSE.md", "NOTICE.md"]) {
+  cpSync(join(root, f), join(root, "dist", f));
 }
 
 // The service worker's cache name is derived from the freshly stamped build

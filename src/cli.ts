@@ -10,6 +10,7 @@ import { dirname, join } from "node:path";
 import Database from "better-sqlite3";
 import { DB_PATH } from "../data/build/config.js";
 import { VERSION_FULL } from "./version.js";
+import { LICENSE_TEXT } from "./licenses.js";
 import { strokeFrames } from "./strokes.js";
 import {
   displayHeader,
@@ -237,6 +238,7 @@ Japanese quick-reference CLI (100% offline)
 Usage:
   omakase <command> [args...]
   omakase --version           show the app and dictionary build versions
+  omakase --license           show the full license & attribution text
   omakase --help              show this overview
   omakase <command> --help    show help for a specific command
 
@@ -246,6 +248,9 @@ Commands:
   search  English gloss / kana / romaji search
 
 Run "omakase <command> --help" for details on a command.
+
+Credits: by Sebastián R. Vansteenkiste (https://github.com/zippolag) via DeepSeek V4 Flash (https://www.deepseek.com/) @ FREEBUFF (https://freebuff.com)
+Data: JMdict/KANJIDIC2/kradfile/radkfile (EDRDG, CC BY-SA 4.0) · KanjiVG (CC BY-SA 3.0) · Tatoeba (CC BY 2.0) — run "omakase --license" for the full text
 `;
 
 /** Detailed help per command, shown by `omakase <command> --help`. */
@@ -508,6 +513,13 @@ export function main(
   }
   if (command === "--version" || command === "-V") {
     stdout(versionLine(dbPath) + "\n");
+    return 0;
+  }
+  // The license text is embedded in the CLI itself (src/licenses.ts), so it
+  // prints even when omakase is installed without the source tree (no
+  // LICENSE.md on disk) — and never opens the database.
+  if (command === "--license" || command === "--licenses") {
+    stdout(LICENSE_TEXT);
     return 0;
   }
   if (!(COMMANDS as readonly string[]).includes(command)) {
