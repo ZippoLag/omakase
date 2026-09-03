@@ -90,8 +90,11 @@ async function runLookup(page, cmd, query) {
     const diag = await page.evaluate(() => ({
       status: document.querySelector("#status")?.textContent ?? "",
       panes: document.querySelectorAll("#panes .pane").length,
+      ariaBusy: document.querySelector("#lookup")?.getAttribute("aria-busy") ?? null,
+      wordDisabled: document.querySelector('button[data-cmd="word"]')?.disabled ?? null,
+      clearDisabled: document.querySelector("#clear")?.disabled ?? null,
     }));
-    throw new Error(`${e.message} | status=${diag.status} panes=${diag.panes} | console:\n${consoleLog.join("\n") || "(none)"}`);
+    throw new Error(`${e.message} | status=${diag.status} panes=${diag.panes} ariaBusy=${diag.ariaBusy} wordDisabled=${diag.wordDisabled} clearDisabled=${diag.clearDisabled} | console:\n${consoleLog.join("\n") || "(none)"}`);
   }
   const pane = await page.evaluate(() => {
     const first = document.querySelector("#panes .pane");
@@ -595,6 +598,237 @@ async function main() {
       JSON.stringify(clearState),
     );
     await page.setOfflineMode(false);
+
+    // ---- interactive hover / keyboard-focus feedback -----------------------
+    // Runs last so the pointer/focus probes can't disturb any later lookup.
+    // The suite runs under a mobile-touch viewport (hover: none), so the
+    // hover probes temporarily switch to a desktop pointer and restore the
+    // mobile viewport right after. Hovering a control emboldens it; untouched
+    // and disabled controls keep their resting weight; keyboard focus (Tab)
+    // gives the same emphasis as hover. Text inputs are the exception to the
+    // weight cue — their typed text never emboldens, and the accent ring
+    // marks their focused state instead.
+    const weight = (sel) => page.$eval(sel, (el) => getComputedStyle(el).fontWeight);
+    const hover = async (sel) => { // center the pointer over the element
+      for (let i = 0; i < 4; i++) {
+        const b = await page.$eval(sel, (el) => {
+          const r = el.getBoundingClientRect();
+          return { x: r.x, y: r.y, w: r.width, h: r.height };
+        });
+        await page.mouse.move(b.x + b.w / 2, b.y + b.h / 2, { steps: 4 });
+        await sleep(60);
+      }
+    };
+    await page.setViewport({ width: 420, height: 900, isMobile: false, hasTouch: false });
+    const cmdBtn = 'button[data-cmd="kanji"]';
+    await page.evaluate(() => document.activeElement?.blur?.());
+    await page.mouse.move(0, 0);
+    const cmdRest = await weight(cmdBtn);
+    await hover(cmdBtn);
+    const cmdHover = await weight(cmdBtn);
+    await page.mouse.move(0, 0);
+    const cmdAfter = await weight(cmdBtn);
+    check(
+      "hover emboldens a control, then returns to rest",
+      cmdRest === "600" && cmdHover === "700" && cmdAfter === "600",
+      `${cmdRest}→${cmdHover}→${cmdAfter}`,
+    );
+    // Text inputs are the exception to the weight cue: the query text is the
+    // user's own input, and emboldening it on hover would make the whole
+    // line jump. Hovering must leave the input's weight untouched.
+    const qWeightRest = await weight("#query");
+    await hover("#query");
+    const qWeightHover = await weight("#query");
+    await page.mouse.move(0, 0);
+    check(
+      "hover leaves the query input's weight untouched",
+      qWeightRest === "400" && qWeightHover === "400",
+      `${qWeightRest}→${qWeightHover}`,
+    );
+    // disabled controls are not interactive: no emphasis while hovered
+    await page.evaluate(() => {
+      document.querySelector('button[data-cmd="word"]').disabled = true;
+    });
+    await hover('button[data-cmd="word"]');
+    const disabledW = await weight('button[data-cmd="word"]');
+    await page.mouse.move(0, 0);
+    await page.evaluate(() => {
+      document.querySelector('button[data-cmd="word"]').disabled = false;
+    });
+    check("disabled controls ignore hover emphasis", disabledW === "600", disabledW);
+
+    // icon glyphs carry no text, so there is no font-weight to embolden: the
+    // magnifier word-lookup icon must show the same emphasis as a heavier
+    // stroke (it used to dim via opacity instead). Probe it over a pane that
+    // is guaranteed to carry word rows — a fresh kanji page lookup.
+    await runLookup(page, "kanji", "食");
+    const magSel = "#panes .pane:first-child pre .tok-word";
+    const magRest = await page.$eval(magSel, (el) => getComputedStyle(el.querySelector("svg")).strokeWidth);
+    await hover(magSel);
+    const magHover = await page.$eval(magSel, (el) => getComputedStyle(el.querySelector("svg")).strokeWidth);
+    await page.mouse.move(0, 0);
+    check(
+      "hover emphasizes the magnifier icon (heavier stroke, not translucency)",
+      magRest === "2.2px" && magHover === "3.6px",
+      `${magRest}→${magHover}`,
+    );
+    await page.setViewport({ width: 420, height: 900, isMobile: true, hasTouch: true });
+    // Switching isMobile/hasTouch forces Chrome to reload the page, so the app
+    // boots again (controls disabled until the worker reports ready). Wait for
+    // that before probing focus — otherwise every control is still disabled
+    // and Tab skips straight from the header to the pane buttons.
+    await waitFor(
+      page,
+      () => page.evaluate(() => {
+        const s = document.querySelector("#status")?.textContent ?? "";
+        return s.startsWith("ready") ? s : null;
+      }),
+      60000,
+      "feedback-section ready",
+    );
+    // Keyboard focus (Tab) emboldens like hover — but only controls with a
+    // real label. The app focuses the query input on ready, so blurring keeps
+    // the browser's tab start-point there and one Tab lands on the next
+    // top-level control (#max, a text input): it must keep its resting weight
+    // (no bolding of the user's typed text) and show the accent ring instead.
+    await page.evaluate(() => document.activeElement?.blur?.());
+    await page.keyboard.press("Tab");
+    const focusState = await page.evaluate(() => {
+      const el = document.activeElement;
+      if (!el) return null;
+      const s = getComputedStyle(el);
+      const accent = getComputedStyle(document.querySelector(".pane-del")).color;
+      return {
+        tag: el.tagName, id: el.id ?? "", weight: s.fontWeight,
+        outlineStyle: s.outlineStyle, outlineWidth: s.outlineWidth,
+        outlineColor: s.outlineColor, accent,
+      };
+    });
+    check(
+      "keyboard focus rings the max input without emboldening it",
+      focusState?.tag === "INPUT" && focusState.id === "max"
+        && focusState.weight === "400"
+        && focusState.outlineStyle === "solid" && focusState.outlineWidth === "2px"
+        && focusState.outlineColor === focusState.accent,
+      JSON.stringify(focusState),
+    );
+    // The control after the inputs is a real command button — keyboard focus
+    // must embolden it exactly like hover does.
+    await page.keyboard.press("Tab");
+    const btnState = await page.evaluate(() => {
+      const el = document.activeElement;
+      return el
+        ? { tag: el.tagName, id: el.id ?? "", cmd: el.dataset?.cmd ?? "", weight: getComputedStyle(el).fontWeight }
+        : null;
+    });
+    check(
+      "keyboard focus emboldens command buttons",
+      btnState?.tag === "BUTTON" && btnState.cmd === "kanji" && btnState.weight === "700",
+      JSON.stringify(btnState),
+    );
+    // The same focus must draw the shared accent ring — that is what makes
+    // keyboard focus visible on icon-only buttons (the header trashbin holds
+    // an svg, so the weight cue above cannot act on it). Walk Shift+Tab back
+    // from wherever the first Tab landed until the trashbin holds focus.
+    let onClear = false;
+    for (let i = 0; i < 10 && !onClear; i++) {
+      onClear = await page.evaluate(() => {
+        const a = document.activeElement;
+        return !!a && a.id === "clear" && a.tagName === "BUTTON";
+      });
+      if (!onClear) {
+        await page.keyboard.down("Shift");
+        await page.keyboard.press("Tab");
+        await page.keyboard.up("Shift");
+      }
+    }
+    const ringState = await page.evaluate(() => {
+      const el = document.activeElement;
+      if (!el) return null;
+      const s = getComputedStyle(el);
+      const accent = getComputedStyle(document.querySelector(".pane-del")).color;
+      return {
+        tag: el.tagName, id: el.id ?? "",
+        outlineStyle: s.outlineStyle, outlineWidth: s.outlineWidth, outlineColor: s.outlineColor,
+        accent,
+      };
+    });
+    check(
+      "keyboard focus draws the accent ring on icon buttons",
+      onClear && ringState?.tag === "BUTTON" && ringState.outlineStyle === "solid"
+        && ringState.outlineWidth === "2px" && ringState.outlineColor === ringState.accent,
+      JSON.stringify(ringState),
+    );
+    // The query input must show the identical ring — the same rule and shape
+    // as every other control — replacing its old accent border-color change.
+    // Tab until it holds focus (clear → query → max → …); while blurred,
+    // record its rest border so we can assert it is untouched, and log where
+    // focus actually lands so a failure shows the real tab order.
+    const inputRest = await page.evaluate(() => {
+      const q = document.querySelector("#query");
+      const s = getComputedStyle(q);
+      return {
+        borderColor: s.borderColor,
+        queryDisabled: q.disabled, maxDisabled: document.querySelector("#max").disabled,
+        kanjiDisabled: document.querySelector('button[data-cmd="kanji"]').disabled,
+        ariaBusy: document.querySelector("#lookup")?.getAttribute("aria-busy"),
+      };
+    });
+    const seen = [];
+    let inputRing = null;
+    for (let i = 0; i < 6 && inputRing === null; i++) {
+      await page.keyboard.press("Tab");
+      inputRing = await page.evaluate(() => {
+        const el = document.activeElement;
+        const s = getComputedStyle(el);
+        return el?.id === "query"
+          ? {
+              outlineStyle: s.outlineStyle, outlineWidth: s.outlineWidth,
+              outlineColor: s.outlineColor, borderColor: s.borderColor,
+              accent: getComputedStyle(document.querySelector(".pane-del")).color,
+            }
+          : null;
+      });
+      if (inputRing === null) {
+        seen.push(
+          await page.evaluate(() => {
+            const el = document.activeElement;
+            return el
+              ? { tag: el.tagName, id: el.id ?? "", type: el.type ?? "", cls: el.className ?? "", cmd: el.dataset?.cmd ?? "", disabled: el.disabled ?? null }
+              : null;
+          }),
+        );
+      }
+    }
+    check(
+      "query input gets the accent ring, not a border-color change",
+      inputRing?.outlineStyle === "solid" && inputRing.outlineWidth === "2px"
+        && inputRing.outlineColor === inputRing.accent
+        && inputRing.borderColor === inputRest.borderColor,
+      JSON.stringify({ rest: inputRest, focused: inputRing, seen }),
+    );
+    // keyboard focus rings + emboldens the inline result tokens too: keep
+    // tabbing (clear → query → max → kanji → word → search → pane → …) until
+    // a kanji token inside a result pane is focused.
+    let tokState = null;
+    for (let i = 0; i < 40 && tokState === null; i++) {
+      await page.keyboard.press("Tab");
+      tokState = await page.evaluate(() => {
+        const el = document.activeElement;
+        if (!el?.classList?.contains("tok-kanji")) return null;
+        const s = getComputedStyle(el);
+        return {
+          weight: s.fontWeight, text: el.textContent,
+          outlineStyle: s.outlineStyle, outlineWidth: s.outlineWidth,
+        };
+      });
+    }
+    check(
+      "keyboard focus rings and emboldens result tokens",
+      tokState?.weight === "700" && tokState.outlineStyle === "solid" && tokState.outlineWidth === "2px",
+      JSON.stringify(tokState),
+    );
+    await page.evaluate(() => document.activeElement?.blur?.());
 
     // OPFS VFS logs NotFound probes for sidecar files (journals) as errors; benign.
     const realErrors = consoleLog.filter(

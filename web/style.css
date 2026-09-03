@@ -172,7 +172,6 @@ h1 {
   opacity: 1;
 }
 
-#query:focus, #max:focus { border-color: var(--accent); }
 #query:disabled, #max:disabled { opacity: 0.55; }
 
 #buttons {
@@ -335,8 +334,14 @@ button.busy {
   color: var(--accent);
 }
 
-.tok-word:hover,
-.tok-word:focus-visible { opacity: 0.8; }
+/* The magnifier is an inline SVG glyph, so font-weight cannot embolden it.
+   Hover/focus gives it the same “weight” cue every other control gets —
+   as a heavier stroke — instead of the old translucency. */
+.tok-word svg { stroke-width: 2.2; }
+
+.tok-word:hover svg,
+.tok-word:focus svg,
+.tok-word:focus-visible svg { stroke-width: 3.6; }
 
 .pane.error pre { color: var(--accent); }
 
@@ -505,3 +510,57 @@ footer {
 .credits-panel ul { margin: 0 0 10px; padding-left: 18px; }
 .credits-panel li { margin-bottom: 6px; }
 .credits-panel a { color: var(--accent); }
+
+/* ---- interactive hover / keyboard focus ----------------------------------- */
+/* Every clickable element responds the same way when hovered (fine pointers)
+   or focused via the keyboard: its label is emboldened, on top of the accent
+   color / underline cues above. Disabled controls are excluded — they are not
+   interactive. The hover half is scoped to pointers that can hover so a touch
+   tap never leaves sticky emphasis behind; :focus-visible gives keyboard
+   users the same cue. Text inputs are the one exception: their “label” is the
+   user's own typed query, and emboldening it on hover or focus would make the
+   text jump every time — so #query/#max never change weight, and their active
+   state reads purely through the accent ring below. */
+@media (hover: hover) {
+  button:not(:disabled):hover,
+  a:hover,
+  summary:hover,
+  .pane pre button.tok:hover {
+    font-weight: 700;
+  }
+}
+
+button:not(:disabled):focus-visible,
+a:focus-visible,
+summary:focus-visible {
+  font-weight: 700;
+}
+
+/* Keyboard focus draws one consistent accent ring around every control.
+   The weight cue above cannot act on icon-only buttons (their label is an
+   svg or a glyph, not text), so the ring is what actually marks their
+   focused state — and it replaces the browser's per-element default outline
+   so a tabbed-to element reads the same whether it holds text or an icon.
+   Text inputs skip the weight cue, so the ring is their whole active state:
+   they report :focus-visible on any focus, which shows the ring rather than
+   the old border-color change. The outline applies on :focus-visible only, so a
+   mouse click that merely focuses a button does not leave a stray ring
+   behind. #query/#max keep an outline:none at rest, so their ring selectors
+   must be id-scoped to outrank that base rule. */
+button:not(:disabled):focus-visible,
+a:focus-visible,
+summary:focus-visible,
+#query:focus-visible,
+#max:focus-visible {
+  outline: 2px solid var(--accent);
+  outline-offset: 2px;
+}
+
+/* Result tokens embolden whenever they hold focus — keyboard (:focus-visible)
+   and pointer clicks (:focus) alike. Unlike the persistent controls above,
+   a token is a transient inline button: clicking one immediately runs its
+   lookup, so there is no sticky “selected” weight to worry about. */
+.pane pre button.tok:focus,
+.pane pre button.tok:focus-visible {
+  font-weight: 700;
+}
