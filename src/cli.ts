@@ -188,15 +188,27 @@ function strokeOrderBlock(
  * (`eat` → エアタオル “eataoru”, never an exact reading), the meaning hits
  * are what was asked for and the Readings section is dropped — katakana
  * loans no longer crowd out “to eat” words.
+ *
+ * Reading rows are ranked and capped at `max` inside the lookup (SQL LIMIT),
+ * so `search あ`-class prefixes never load every match; `readingsTotal`
+ * reports the full pre-cap count so the renderer can show the remainder.
  */
-export function cmdSearch(db: DB, query: string): { readings: SearchHit[]; meanings: SearchHit[] } {
+export function cmdSearch(
+  db: DB,
+  query: string,
+  max: number = SEARCH_MAX_DEFAULT,
+): { readings: SearchHit[]; readingsTotal: number; meanings: SearchHit[] } {
   const trimmed = query.trim();
-  const readings = searchReadingPrefix(db, trimmed);
+  const { hits: readings, total: readingsTotal } = searchReadingPrefix(db, trimmed, max);
   const meanings = isAscii(trimmed) ? searchMeanings(db, trimmed) : [];
   const keepReadings = isKanaInput(trimmed)
     || meanings.length === 0
     || readings.some((h) => h.exact);
-  return { readings: keepReadings ? readings : [], meanings };
+  return {
+    readings: keepReadings ? readings : [],
+    readingsTotal: keepReadings ? readingsTotal : 0,
+    meanings,
+  };
 }
 
 function isAscii(s: string): boolean {
@@ -471,12 +483,16 @@ export function runCommand(
       const trimmed = query.trim();
       const max = searchMax(flags, stderr);
       if (max === null) return "";
-      const { readings, meanings } = cmdSearch(db, trimmed);
+      const { readings, readingsTotal, meanings } = cmdSearch(db, trimmed, max);
       // Surface kanji whose readings start with the query too (Tangorin-style).
       const kanjiHits = isKanaInput(trimmed) || isAscii(trimmed)
         ? searchKanjiByReading(db, trimmed)
         : [];
-      const out = renderSearch(trimmed, readings, meanings, kanjiHits, { max, color: opts.color ?? false });
+      const out = renderSearch(trimmed, readings, meanings, kanjiHits, {
+        max,
+        color: opts.color ?? false,
+        totals: { readings: readingsTotal },
+      });
       // An ASCII search that found nothing (readings, meanings, kanji) gets a
       // "did you mean" hint pointing at the reading-prefix path — a reading is
       // almost always how the word is actually searched.

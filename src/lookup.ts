@@ -263,63 +263,62 @@ export interface KanjiWordHit {
  * the most distinct requested kanji first (all before subsets), then common
  * words, then entry id — capped at `max` shown, with the total reported.
  * One hit per word, showing the writing that carries the most requested
- * kanji, with furigana and first gloss (compounds-style row).
+ * kanji (the first one by writings.id when several tie), with furigana and
+ * first gloss (compounds-style row).
+ *
+ * Ranking and the `max` cap are pushed into SQL — windowed CTEs pick each
+ * word's best writing and rank the distinct words before a LIMIT — so only
+ * the top `max` words are ever loaded. A multi-kanji query like 制作者 can
+ * otherwise pull every compound of every character (plus per-word common
+ * flags, chunked under the variable limit) into JS just to rank and drop
+ * all but the top rows. `total` reports the pre-cap word count.
  */
 export function wordsContainingKanji(db: DB, literals: string[], max: number): { hits: KanjiWordHit[]; total: number } {
   const ph = literals.map(() => "?").join(",");
-  const totalRow = db.prepare(
-    `SELECT COUNT(DISTINCT word_id) AS n FROM kanji_words WHERE kanji IN (${ph})`,
-  ).get(...literals) as { n: number } | undefined;
-  const total = typeof totalRow?.n === "number" ? totalRow.n : 0;
-  if (total === 0) return { hits: [], total: 0 };
-
-  const raw = db.prepare(`
-    SELECT kw.word_id, w.text AS writing, COUNT(DISTINCT kw.kanji) AS matched
-    FROM kanji_words kw
-    JOIN writings w ON w.id = kw.writing_id
-    WHERE kw.kanji IN (${ph})
-    GROUP BY kw.word_id, kw.writing_id
-  `).all(...literals) as { word_id: string; writing: string; matched: number }[];
-
-  // One hit per word: keep the writing that carries the most requested kanji.
-  const best = new Map<string, { writing: string; matched: number }>();
-  for (const r of raw) {
-    const cur = best.get(r.word_id);
-    if (!cur || r.matched > cur.matched) best.set(r.word_id, { writing: r.writing, matched: r.matched });
-  }
-
-  const ids = [...best.keys()];
-  // common flag for the tie-break, fetched in chunks under SQLite's variable limit.
-  const commonById = new Map<string, boolean>();
-  for (let i = 0; i < ids.length; i += 900) {
-    const batch = ids.slice(i, i + 900);
-    const rows = db.prepare(
-      `SELECT id, common FROM words WHERE id IN (${batch.map(() => "?").join(",")})`,
-    ).all(...batch) as { id: string; common: number }[];
-    for (const r of rows) commonById.set(r.id, r.common === 1);
-  }
-
-  const ranked = ids
-    .map((id) => ({ id, writing: best.get(id)!.writing, matched: best.get(id)!.matched }))
-    .sort((a, b) =>
-      b.matched - a.matched ||
-      Number(commonById.get(b.id)) - Number(commonById.get(a.id)) ||
-      a.id.localeCompare(b.id, undefined, { numeric: true }),
-    );
+  // COUNT(*) OVER () runs over the ranked set (before the LIMIT), so one
+  // statement returns both the capped words and the pre-cap total.
+  const rows = db.prepare(`
+    WITH per_writing AS (
+      SELECT kw.word_id, kw.writing_id, w.text AS writing,
+             COUNT(DISTINCT kw.kanji) AS matched
+      FROM kanji_words kw
+      JOIN writings w ON w.id = kw.writing_id
+      WHERE kw.kanji IN (${ph})
+      GROUP BY kw.word_id, kw.writing_id
+    ),
+    best AS (
+      SELECT word_id, writing, matched,
+             ROW_NUMBER() OVER (
+               PARTITION BY word_id ORDER BY matched DESC, writing_id
+             ) AS rn
+      FROM per_writing
+    )
+    SELECT b.word_id, b.writing, b.matched, COUNT(*) OVER () AS total
+    FROM best b
+    JOIN words w ON w.id = b.word_id
+    WHERE b.rn = 1
+    ORDER BY b.matched DESC, w.common DESC, CAST(b.word_id AS INTEGER)
+    LIMIT ?
+  `).all(...literals, max) as {
+    word_id: string;
+    writing: string;
+    matched: number;
+    total: number;
+  }[];
 
   const hits: KanjiWordHit[] = [];
-  for (const c of ranked.slice(0, max)) {
-    const word = loadWord(db, c.id);
+  for (const r of rows) {
+    const word = loadWord(db, r.word_id);
     if (!word) continue;
     hits.push({
       word,
-      writing: c.writing,
-      ruby: word.furigana.get(c.writing) ?? c.writing,
+      writing: r.writing,
+      ruby: word.furigana.get(r.writing) ?? r.writing,
       gloss: firstGloss(word),
-      matched: c.matched,
+      matched: r.matched,
     });
   }
-  return { hits, total };
+  return { hits, total: rows.length === 0 ? 0 : Number(rows[0]!.total) };
 }
 
 interface LoadedKanjiRow {
@@ -565,6 +564,12 @@ function escapeLike(s: string): string {
   return s.replace(/[\\%_]/g, (ch) => "\\" + ch);
 }
 
+export interface ReadingPrefixResult {
+  hits: SearchHit[];
+  /** distinct words whose kana writing starts with the prefix, before `max`. */
+  total: number;
+}
+
 /**
  * Reading-prefix search over kana writings, matched against the kana text
  * (kana input) or the stored romaji (ASCII input). Input spaces are ignored
@@ -572,37 +577,51 @@ function escapeLike(s: string): string {
  * still hits. Rows are ranked most-likely-first: an exact reading match
  * wins, then common words, then the closest (shortest) reading, then entry
  * id — one hit per word, showing its first matching kana writing.
+ *
+ * Ranking and the `max` cap are pushed into SQL — one windowed statement
+ * picks each word's first matching kana writing (lowest writings.id), ranks
+ * the distinct words, and LIMITs before any word is loaded — so at most
+ * `max` words are loaded instead of every prefix match (short kana/romaji
+ * prefixes can otherwise match thousands). `max` is the LIMIT bound; a
+ * negative value means no cap, like SQLite. `total` reports the pre-cap
+ * count so callers can still render the ``… and N more`` remainder.
  */
-export function searchReadingPrefix(db: DB, prefix: string): SearchHit[] {
+export function searchReadingPrefix(db: DB, prefix: string, max: number): ReadingPrefixResult {
   const q = prefix.trim();
   const kana = isKanaInput(q);
   const needle = (kana ? q : q.toLowerCase()).replace(/\s+/g, "");
-  if (!needle) return [];
+  if (!needle) return { hits: [], total: 0 };
   const col = kana ? "text" : "romaji";
-  const rows = db.prepare(
-    `SELECT word_id, text, romaji FROM writings WHERE kind = 'kana' AND ${col} LIKE ? ESCAPE '\\' ORDER BY id`,
-  ).all(`${escapeLike(needle)}%`) as { word_id: string; text: string; romaji: string | null }[];
+  // COUNT(*) OVER () runs over the full ranked set (before the LIMIT), so
+  // one statement returns both the capped hits and the pre-cap total.
+  const rows = db.prepare(`
+    WITH firsts AS (
+      SELECT word_id, text, romaji,
+             ROW_NUMBER() OVER (PARTITION BY word_id ORDER BY id) AS rn
+      FROM writings
+      WHERE kind = 'kana' AND ${col} LIKE ? ESCAPE '\\'
+    )
+    SELECT f.word_id, f.text, f.romaji, COUNT(*) OVER () AS total
+    FROM firsts f
+    JOIN words w ON w.id = f.word_id
+    WHERE f.rn = 1
+    ORDER BY (f.${col} = ?) DESC, w.common DESC, LENGTH(f.text), CAST(f.word_id AS INTEGER)
+    LIMIT ?
+  `).all(`${escapeLike(needle)}%`, needle, max) as {
+    word_id: string;
+    text: string;
+    romaji: string | null;
+    total: number;
+  }[];
 
-  // First matching kana writing per word (lowest writings.id), like the old
-  // word_id ordering — grouping happens before ranking.
-  const first = new Map<string, { text: string; romaji: string | null }>();
-  for (const r of rows) {
-    if (!first.has(r.word_id)) first.set(r.word_id, r);
-  }
   const hits: SearchHit[] = [];
-  for (const [wordId, r] of first) {
-    const word = loadWord(db, wordId);
-    if (!word) continue;
+  for (const r of rows) {
+    const word = loadWord(db, r.word_id);
+    if (!word) continue; // words is writings' parent (FK), so unreachable
     const exact = kana ? r.text === needle : (r.romaji ?? "") === needle;
     hits.push({ word, exact, reading: r.text, romaji: r.romaji ?? "", gloss: firstGloss(word) });
   }
-  hits.sort((a, b) =>
-    Number(b.exact) - Number(a.exact) ||
-    Number(b.word.common) - Number(a.word.common) ||
-    a.reading.length - b.reading.length ||
-    a.word.id.localeCompare(b.word.id, undefined, { numeric: true }),
-  );
-  return hits;
+  return { hits, total: rows.length === 0 ? 0 : Number(rows[0]!.total) };
 }
 
 // ---- kanji reading search --------------------------------------------------

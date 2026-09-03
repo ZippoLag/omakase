@@ -116,7 +116,9 @@ export function kanjiStrokePages(db: DbLike, query: string): StrokePage[] {
 /** `search <query>` — ranked readings/meanings/kanji sections + did-you-mean hint. */
 export function runSearch(db: DbLike, query: string, max: number = 30): string {
   const trimmed = query.trim();
-  const readings = searchReadingPrefix(db, trimmed);
+  // Reading rows are ranked and capped at `max` inside the lookup (SQL
+  // LIMIT); `total` feeds renderSearch's header/remainder note.
+  const { hits: readings, total: readingsTotal } = searchReadingPrefix(db, trimmed, max);
   const meanings = isAscii(trimmed) ? searchMeanings(db, trimmed) : [];
   const keepReadings = isKanaInput(trimmed)
     || meanings.length === 0
@@ -125,7 +127,11 @@ export function runSearch(db: DbLike, query: string, max: number = 30): string {
   const kanjiHits = isKanaInput(trimmed) || isAscii(trimmed)
     ? searchKanjiByReading(db, trimmed)
     : [];
-  const out = renderSearch(trimmed, shownReadings, meanings, kanjiHits, { max, color: false });
+  const out = renderSearch(trimmed, shownReadings, meanings, kanjiHits, {
+    max,
+    color: false,
+    totals: { readings: keepReadings ? readingsTotal : 0 },
+  });
   if (shownReadings.length === 0 && meanings.length === 0 && kanjiHits.length === 0 && isAscii(trimmed)) {
     return out + webSearchHint(db, trimmed);
   }

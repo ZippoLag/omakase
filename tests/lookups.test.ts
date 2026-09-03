@@ -418,6 +418,57 @@ test("kanji compound ≡ one call per character, with a ranked Words section", (
   }
 });
 
+test("wordsContainingKanji: SQL rank+cap puts most-matched words first, total intact", () => {
+  const db = buildFixtureDb();
+  try {
+    // Synthetic word 9999001 with two kanji writings that BOTH carry 飲 and 食
+    // (飲食, the lower writings.id, wins the display tie over 飲食物).
+    const word = db.prepare("INSERT INTO words (id, common) VALUES ('9999001', 1)").run();
+    assert.equal(word.changes, 1);
+    const w1 = db.prepare(
+      "INSERT INTO writings (word_id, kind, text, common) VALUES ('9999001', 'kanji', '飲食', 1)",
+    ).run().lastInsertRowid;
+    const w2 = db.prepare(
+      "INSERT INTO writings (word_id, kind, text, common) VALUES ('9999001', 'kanji', '飲食物', 1)",
+    ).run().lastInsertRowid;
+    const s1 = db.prepare(
+      `INSERT INTO senses (word_id, position, part_of_speech, applies_to_kanji, applies_to_kana)
+       VALUES ('9999001', 1, '["n"]', '["*"]', '["*"]')`,
+    ).run().lastInsertRowid;
+    db.prepare("INSERT INTO glosses (sense_id, lang, type, gender, text) VALUES (?, 'eng', NULL, NULL, 'meal')").run(Number(s1));
+    // Both writings carry 飲 + 食: 飲食 (lower writing id) must be the word's
+    // displayed writing, winning the matched tie over 飲食物.
+    const kwi = db.prepare("INSERT INTO kanji_words (kanji, word_id, writing_id, position) VALUES (?, '9999001', ?, ?)");
+    for (const [kanji, wid, pos] of [["飲", w1, 0], ["食", w1, 1], ["飲", w2, 0], ["食", w2, 1]] as const) {
+      kwi.run(kanji, Number(wid), pos);
+    }
+
+    // 飲/食 now matches 5 fixture words + the synthetic 飲食 word, which
+    // carries BOTH literals and must rank above every single-match word.
+    const res = wordsContainingKanji(db, ["飲", "食"], 30);
+    assert.equal(res.total, 6, "pre-cap word count includes the synthetic word");
+    const top = res.hits[0]!;
+    assert.equal(top.word.id, "9999001");
+    assert.equal(top.matched, 2);
+    assert.equal(top.writing, "飲食", "lowest writing_id wins the matched tie");
+    // Ranking is non-increasing in matched: all-most-matched words lead.
+    for (let i = 1; i < res.hits.length; i++) {
+      assert.ok(res.hits[i]!.matched <= res.hits[i - 1]!.matched, "matched count never rises down the list");
+    }
+    // A cap keeps only the top word but still reports the full total.
+    const capped = wordsContainingKanji(db, ["飲", "食"], 1);
+    assert.deepEqual(capped.hits.map((h) => h.word.id), ["9999001"]);
+    assert.equal(capped.total, 6);
+    // A single literal matches the synthetic word too (its best writing 飲食).
+    const single = wordsContainingKanji(db, ["食"], 30);
+    assert.ok(single.hits.some((h) => h.word.id === "9999001" && h.writing === "飲食" && h.matched === 1));
+    // No matches: empty hits, zero total.
+    assert.deepEqual(wordsContainingKanji(db, ["無"], 5), { hits: [], total: 0 });
+  } finally {
+    db.close();
+  }
+});
+
 test("kanji -max caps compounds, words and reading results", () => {
   const db = buildFixtureDb();
   try {
@@ -603,16 +654,19 @@ test("renderWordBody omits the Furigana line when a kanji writing has no ruby", 
 
 const readings = (hits: { reading: string }[]) => hits.map((h) => h.reading);
 
+/** Uncapped reading-prefix hits (fixture prefixes match only a few words). */
+const prefixHits = (db: DB, prefix: string) => searchReadingPrefix(db, prefix, 100).hits;
+
 // 食べる -> たべる -> ``taberu``; 食べ物 -> たべもの -> ``tabemono``. They share
 // the romaji prefix ``tabe`` but diverge at position 5 (``taberu`` is not a
 // prefix of ``tabemono``), so ``taberu``/``tabem`` must select exactly one.
 test("romaji prefix search: exact-vs-shared-prefix readings", () => {
   const db = buildFixtureDb();
   try {
-    assert.deepEqual(readings(searchReadingPrefix(db, "taberu")), ["たべる"]);
-    assert.deepEqual(readings(searchReadingPrefix(db, "tabem")), ["たべもの"]);
+    assert.deepEqual(readings(prefixHits(db, "taberu")), ["たべる"]);
+    assert.deepEqual(readings(prefixHits(db, "tabem")), ["たべもの"]);
     // The shared ``tabe`` prefix matches both, ordered by word id.
-    assert.deepEqual(readings(searchReadingPrefix(db, "tabe")), ["たべる", "たべもの"]);
+    assert.deepEqual(readings(prefixHits(db, "tabe")), ["たべる", "たべもの"]);
   } finally {
     db.close();
   }
@@ -621,8 +675,8 @@ test("romaji prefix search: exact-vs-shared-prefix readings", () => {
 test("romaji prefix search is ASCII case-insensitive", () => {
   const db = buildFixtureDb();
   try {
-    assert.deepEqual(readings(searchReadingPrefix(db, "TABERU")), ["たべる"]);
-    assert.deepEqual(readings(searchReadingPrefix(db, "TaBe")), ["たべる", "たべもの"]);
+    assert.deepEqual(readings(prefixHits(db, "TABERU")), ["たべる"]);
+    assert.deepEqual(readings(prefixHits(db, "TaBe")), ["たべる", "たべもの"]);
   } finally {
     db.close();
   }
@@ -631,8 +685,8 @@ test("romaji prefix search is ASCII case-insensitive", () => {
 test("kana prefix search mirrors romaji prefix", () => {
   const db = buildFixtureDb();
   try {
-    assert.deepEqual(readings(searchReadingPrefix(db, "たべ")), ["たべる", "たべもの"]);
-    assert.deepEqual(readings(searchReadingPrefix(db, "たべる")), ["たべる"]);
+    assert.deepEqual(readings(prefixHits(db, "たべ")), ["たべる", "たべもの"]);
+    assert.deepEqual(readings(prefixHits(db, "たべる")), ["たべる"]);
   } finally {
     db.close();
   }
@@ -641,8 +695,8 @@ test("kana prefix search mirrors romaji prefix", () => {
 test("unmatched romaji prefix returns no kana fallback", () => {
   const db = buildFixtureDb();
   try {
-    assert.equal(searchReadingPrefix(db, "tabxyz").length, 0);
-    assert.equal(searchReadingPrefix(db, "食べ物ローマ字").length, 0);
+    assert.equal(prefixHits(db, "tabxyz").length, 0);
+    assert.equal(prefixHits(db, "食べ物ローマ字").length, 0);
   } finally {
     db.close();
   }
@@ -899,8 +953,33 @@ test("search: LIKE wildcards in the query are matched literally, not as SQL wild
     // A backslash in the query is literal too, not an escape for the engine.
     assert.equal(flat("tab\\eru").length, 0);
     // Ordinary prefixes still match after escaping.
-    assert.deepEqual(readings(searchReadingPrefix(db, "tabe")), ["たべる", "たべもの"]);
-    assert.deepEqual(readings(searchReadingPrefix(db, "たべ")), ["たべる", "たべもの"]);
+    assert.deepEqual(readings(prefixHits(db, "tabe")), ["たべる", "たべもの"]);
+    assert.deepEqual(readings(prefixHits(db, "たべ")), ["たべる", "たべもの"]);
+  } finally {
+    db.close();
+  }
+});
+
+test("searchReadingPrefix: SQL rank+cap keeps the top `max` and reports the pre-cap total", () => {
+  const db = buildFixtureDb();
+  try {
+    // たべ matches たべる + たべもの; uncapped (negative max) returns all.
+    const all = searchReadingPrefix(db, "たべ", -1);
+    assert.equal(all.total, 2);
+    assert.deepEqual(readings(all.hits), ["たべる", "たべもの"]);
+    // A positive cap trims hits to the ranked top (たべる is shorter) while
+    // total still reports the remainder for the “… N more” note.
+    const top = searchReadingPrefix(db, "たべ", 1);
+    assert.equal(top.total, 2);
+    assert.deepEqual(readings(top.hits), ["たべる"]);
+    // Exact hits rank first, so an exact match survives any cap ≥ 1.
+    const capped = searchReadingPrefix(db, "たべる", 1);
+    assert.equal(capped.total, 1);
+    assert.deepEqual(readings(capped.hits), ["たべる"]);
+    // No matches: empty hits and a zero total.
+    const miss = searchReadingPrefix(db, "zzzqq", 5);
+    assert.equal(miss.total, 0);
+    assert.deepEqual(miss.hits, []);
   } finally {
     db.close();
   }

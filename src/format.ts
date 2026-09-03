@@ -343,16 +343,26 @@ function meaningRow(hit: SearchHit, tokens: string[], color: boolean): string {
  * `color` is on, literal query overlap is bolded (romaji/kana for reading
  * hits, gloss words for meaning hits) — pipes and captures stay plain.
  * Mirrors render-goldens.py `render_search`.
+ *
+ * `totals` reports the full pre-cap size of a section whose rows were
+ * already capped by the caller (default: the section array length) — lets
+ * a lookup cap in SQL while the header and ``… and N more`` note still
+ * count every hit.
  */
 export function renderSearch(
   query: string,
   readings: SearchHit[],
   meanings: SearchHit[],
   kanjiHits: KanjiReadingHit[] = [],
-  opts: { max?: number; color?: boolean } = {},
+  opts: {
+    max?: number;
+    color?: boolean;
+    totals?: { readings?: number; meanings?: number; kanji?: number };
+  } = {},
 ): string {
   const max = opts.max ?? SEARCH_MAX_DEFAULT;
   const color = opts.color ?? false;
+  const totals = opts.totals ?? {};
   const kanaQuery = isKanaInput(query);
   const needle = kanaQuery ? query.replace(/\s+/g, "") : query.toLowerCase().replace(/\s+/g, "");
   const tokens = glossQueryTokens(query);
@@ -371,13 +381,13 @@ export function renderSearch(
   };
 
   if (readings.length > 0) {
-    addSection("Readings", readings.map((h) => readingRow(h, needle, kanaQuery, color)), readings.length);
+    addSection("Readings", readings.map((h) => readingRow(h, needle, kanaQuery, color)), totals.readings ?? readings.length);
   }
   if (meanings.length > 0) {
-    addSection("Meanings", meanings.map((h) => meaningRow(h, tokens, color)), meanings.length);
+    addSection("Meanings", meanings.map((h) => meaningRow(h, tokens, color)), totals.meanings ?? meanings.length);
   }
   if (kanjiHits.length > 0) {
-    addSection("Kanji", kanjiHits.map(kanjiHitRow), kanjiHits.length);
+    addSection("Kanji", kanjiHits.map(kanjiHitRow), totals.kanji ?? kanjiHits.length);
   }
   if (!any) lines.push("  (no results)");
   return lines.join("\n") + "\n";
