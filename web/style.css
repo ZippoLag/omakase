@@ -204,6 +204,7 @@ button.busy {
   display: flex;
   align-items: center;
   justify-content: center;
+  gap: 6px;
 }
 
 .spinner {
@@ -216,6 +217,18 @@ button.busy {
 }
 
 @keyframes spin { to { transform: rotate(360deg); } }
+
+/* Queue counter: how many panes are still to come while several lookups are
+   pending (sits beside the spinner on the busy button). */
+.queue-n {
+  font-size: 11px;
+  font-weight: 700;
+  line-height: 1;
+  padding: 3px 5px;
+  border-radius: 999px;
+  border: 1px solid color-mix(in srgb, var(--accent) 55%, var(--line));
+  color: var(--accent);
+}
 
 /* ---- result panes ---------------------------------------------------------- */
 #panes {

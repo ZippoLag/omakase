@@ -338,6 +338,24 @@ default 30) plays the role of the CLI's `-max`. Nothing is published
 anywhere: you serve the app from your own computer over your home Wi-Fi,
 once, to install it.
 
+Lookups are **queued, never dropped**: only one runs at a time, and any
+clicks that land while one is in flight (the interactive tokens below stay
+tappable) simply join the queue and still get their own pane, in click
+order, and while several lookups are pending the busy button shows a small
+counter with how many result panes are still to come (counting down as each
+lands). The boxes also expand a bit beyond the strict CLI one-query-one-run
+model — **word** with several comma- and/or space-separated words looks each
+word up separately (each pane is exactly what looking that word up alone
+returns), with repeats deduplicated (`水 水` → one 水 lookup, and
+`水, 水, 食事` → the 水 and 食事 panes only). Dedupe also reaches across
+actions: a lookup that is already pending — queued or in flight — is never
+enqueued again, so clicking the same kanji or word token twice in a row
+still yields a single pane. **kanji** ignores every
+non-kanji character in the box (`食べる` → 食, `制・作者` → 制作者), so the
+page for each individual kanji always comes back; kana/romaji boxes still
+run the kanji-by-reading search. **search** is unchanged — it always gets
+the raw query, verbatim.
+
 Result panes are interactive: every kanji character shown is individually
 tappable (equivalent to typing it alone and pressing **kanji**), and each
 dictionary word displayed in a list (compounds, multi-kanji “Words”, search

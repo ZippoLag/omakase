@@ -1,16 +1,34 @@
 /**
  * UI: a full-width single-line input with three buttons — kanji / word /
- * search. Every click runs the lookup in the DB worker and inserts a fresh
+ * search. Every action runs its lookup in the DB worker and inserts a fresh
  * results pane directly below the button row, pushing older panes down
- * (newest-first history). The input box, the last pressed command, the max
- * count and the result history are persisted to localStorage and restored on
- * reload; each pane (and the header) has a red trashbin to delete results.
+ * (newest-first history).
+ *
+ * Actions are queued, never dropped: any number of clicks — command buttons,
+ * Enter, or the per-character kanji / magnifier tokens inside result panes —
+ * enqueue their lookups, and only one is processed at a time, so rapid taps
+ * each still get their own pane. A `word` box holding several comma- and/or
+ * space-separated words looks each word up separately (identical to typing
+ * it alone and pressing word) but repeated words are looked up once — 水 水
+ * queues a single word-水 lookup, not two — and a lookup that is already
+ * pending (queued or in flight) is never enqueued again. A `kanji` box ignores every
+ * character that is not a kanji, so each kanji it contains still gets its
+ * page. The `search` action is unchanged.
+ *
+ * While several lookups are pending (more than one action in the queue) the
+ * busy button shows a small counter with how many result panes are still to
+ * come, counting down as each lands.
+ *
+ * The input box, the last pressed command, the max count and the result
+ * history are persisted to localStorage and restored on reload; each pane
+ * (and the header) has a red trashbin to delete results. The queue and busy
+ * chrome are wired so no user action can leave the UI stuck: a lookup that
+ * errors, a worker that crashes, or one that never answers all drain back to
+ * an idle, usable control row.
  */
 import type { Command, StrokePage, WorkerMessage, WorkerRequest } from "./worker-api.js";
 import { strokeWidgetFigure } from "./stroke-widget.js";
 import { VERSION, VERSION_FULL } from "../../src/version.js";
-
-const worker = new Worker(new URL("./worker.js", import.meta.url), { type: "module" });
 
 // ---- DOM -------------------------------------------------------------------
 const form = document.querySelector<HTMLFormElement>("#lookup")!;
@@ -27,13 +45,31 @@ const panes = document.querySelector<HTMLDivElement>("#panes")!;
 versionBadge.textContent = `v${VERSION}`;
 
 // ---- state -----------------------------------------------------------------
-/** Queue of lookups waiting for the worker (single in-flight at a time). */
-const queue: { id: number; command: Command; query: string; max: number }[] = [];
-let busy = false;
+/** One queued lookup. The queue is FIFO and only its head is ever sent to
+ * the worker, whose replies pair back by id — so actions run strictly one at
+ * a time no matter how many clicks land while one is in flight. */
+interface Pending {
+  id: number;
+  command: Command;
+  /** The exact text this lookup runs (captured when the action fired): a word
+   * action carries a single word, a kanji action the kanji-only query. */
+  query: string;
+  max: number;
+}
+
+const queue: Pending[] = [];
 let nextId = 1;
 /** Command run by the last button click — Enter repeats it. Default: search. */
 let lastCommand: Command = "search";
+/** The engine reported ready — lookups may be sent. */
 let ready = false;
+/** A lookup has been posted and its reply has not arrived yet. */
+let inFlight = false;
+/** The engine failed permanently (could not boot after retries) — the only
+ * state where lookups cannot run; the status bar says so and asks to reload. */
+let engineDead = false;
+/** Consecutive engine-downs without a ready in between (reset on ready). */
+let bootFailures = 0;
 
 // ---- persistent state (localStorage) ---------------------------------------
 /** One result pane as persisted/restored (the CLI text + how it was asked).
@@ -90,8 +126,90 @@ function fmtMB(n: number): string {
   return `${Math.max(0, Math.round(n / 1048576))} MB`;
 }
 
+// ---- query expansion -------------------------------------------------------
+/** CJK ideographs — every displayed kanji is individually clickable. */
+const KANJI_RE = /\p{Script=Han}/u;
+/** Separators between words in a `word` box: commas (ASCII `,`, full-width
+ * `，`, Japanese `、`) and any whitespace. */
+const WORD_SEP_RE = /[\s,，、]+/u;
+
+/** The individual words of a `word` box, in order (runs between separators). */
+function wordTokens(raw: string): string[] {
+  return raw.split(WORD_SEP_RE).filter((s) => s !== "");
+}
+
+/**
+ * The query a `kanji` click actually runs: when the box holds at least one
+ * kanji, every non-kanji character is ignored — 食べる → 食, 制・作者 →
+ * 制作者 — so the page for each individual kanji still comes back. A box
+ * with no kanji at all (kana or romaji, e.g. a reading search) is left
+ * untouched.
+ */
+function kanjiQuery(raw: string): string {
+  const literals = [...raw].filter((ch) => KANJI_RE.test(ch));
+  return literals.length > 0 ? literals.join("") : raw.trim();
+}
+
+// ---- queue -----------------------------------------------------------------
+/**
+ * Fire an action for the box's current contents (captured now, so later
+ * edits never retroactively change a queued lookup) and enqueue its lookups.
+ * Clicks always enqueue — they are never dropped while one lookup runs —
+ * and `drain` processes the queue one entry at a time. `word` splits a
+ * multi-word box into one lookup per word (each pane is exactly what looking
+ * that word up alone returns); `kanji` ignores non-kanji characters; the
+ * `search` action is sent verbatim.
+ */
+function submit(command: Command): void {
+  if (engineDead) return;
+  const raw = input.value;
+  const queries = command === "word"
+    ? wordTokens(raw)
+    : command === "kanji"
+      ? [kanjiQuery(raw)]
+      : [raw.trim()];
+  // Repeated lookups collapse before anything is enqueued — both repeats
+  // inside one action (a word box like 水 水 queues a single lookup) and
+  // lookups that are already pending: the queue's head stays in place until
+  // its result lands, so this also covers whatever is in flight. A token
+  // clicked twice in a row therefore gets one pane, not two. The dedupe key
+  // is command + normalized query, so kanji 食 and word 食 stay distinct.
+  const seen = new Set(queue.map((p) => `${p.command}\u0000${p.query}`));
+  const pending: string[] = [];
+  for (const q of queries) {
+    const key = `${command}\u0000${q}`;
+    if (q.length > 0 && !seen.has(key)) {
+      seen.add(key);
+      pending.push(q);
+    }
+  }
+  if (pending.length === 0) {
+    input.focus();
+    return;
+  }
+  lastCommand = command;
+  const max = parseMax();
+  for (const q of pending) queue.push({ id: nextId++, command, query: q, max });
+  saveState();
+  syncBusyUi();
+  input.select();
+  drain();
+}
+
+/** Send the head of the queue to the worker — the only place requests go out. */
+function drain(): void {
+  if (inFlight || !ready) return;
+  const item = queue[0];
+  if (!item) return;
+  inFlight = true;
+  syncBusyUi();
+  const req: WorkerRequest = { kind: "run", id: item.id, command: item.command, query: item.query, max: item.max };
+  worker.postMessage(req);
+  armWatchdog();
+}
+
 // ---- worker messages -------------------------------------------------------
-worker.onmessage = (ev: MessageEvent<WorkerMessage>) => {
+function onWorkerMessage(ev: MessageEvent<WorkerMessage>): void {
   const msg = ev.data;
   switch (msg.kind) {
     case "status":
@@ -105,67 +223,49 @@ worker.onmessage = (ev: MessageEvent<WorkerMessage>) => {
     }
     case "ready":
       ready = true;
+      engineDead = false;
+      bootFailures = 0;
       document.documentElement.style.setProperty("--progress", "100%");
       versionBadge.title = `omakase ${VERSION_FULL}${msg.dict ? ` · dictionary build: ${msg.dict}` : ""}`;
       setStatus(`ready — ${msg.words.toLocaleString()} words · v${VERSION_FULL} · SQLite ${msg.version} (100% offline)`);
-      setControlsDisabled(false);
-      input.focus();
+      syncBusyUi();
       drain();
+      if (queue.length === 0) input.focus();
       break;
-    case "result": {
-      const head = queue.shift();
-      busy = false;
-      const item = head && head.id === msg.id ? head : null;
-      if (msg.text !== null) addPane(item?.command ?? "result", item?.query ?? "", msg.text, false, msg.strokes);
-      else if (msg.error !== null) addPane(item?.command ?? "result", item?.query ?? "", msg.error, true);
-      clearBusy();
-      setControlsDisabled(false);
-      drain();
+    case "result":
+      handleResult(msg);
       break;
-    }
     case "fatal":
-      clearBusy();
-      setStatus(`⚠ ${msg.message}`, "error");
-      setControlsDisabled(true);
+      engineDown(msg.message);
       break;
   }
-};
-
-worker.onerror = (ev: ErrorEvent) => {
-  clearBusy();
-  setStatus(`⚠ worker crashed: ${ev.message ?? "unknown error"}`, "error");
-  setControlsDisabled(true);
-};
-
-// ---- queue -----------------------------------------------------------------
-function drain(): void {
-  if (busy || !ready) return;
-  const item = queue[0];
-  if (!item) return;
-  busy = true;
-  const req: WorkerRequest = { kind: "run", id: item.id, command: item.command, query: item.query, max: item.max };
-  worker.postMessage(req);
 }
 
-function submit(command: Command): void {
-  if (busy) return; // one operation at a time — the busy UI blocks new input anyway
-  const query = input.value;
-  if (!query.trim()) {
-    input.focus();
-    return;
+/**
+ * A lookup answered. The worker replies strictly in queue order, so the head
+ * is ours; anything else is a stray from a dead engine and is ignored rather
+ * than trusted. Whatever the outcome, the busy chrome and queue are synced
+ * afterwards, so the UI always returns to a usable state.
+ */
+function handleResult(msg: Extract<WorkerMessage, { kind: "result" }>): void {
+  disarmWatchdog();
+  const item = queue[0] ?? null;
+  inFlight = false;
+  if (item && item.id === msg.id) {
+    queue.shift();
+    try {
+      if (msg.text !== null) addPane(item.command, item.query, msg.text, false, msg.strokes);
+      else if (msg.error !== null) addPane(item.command, item.query, msg.error, true);
+    } catch (err) {
+      // A pane must never wedge the queue: report and keep draining.
+      console.error("could not render result pane:", err);
+    }
   }
-  lastCommand = command;
-  queue.push({ id: nextId++, command, query, max: parseMax() });
-  saveState();
-  beginBusy(command);
-  input.select();
+  syncBusyUi();
   drain();
 }
 
-// ---- busy state -------------------------------------------------------------
-/** Command whose lookup is in flight (null when idle) — its label is a spinner. */
-let busyCommand: Command | null = null;
-
+// ---- busy chrome -----------------------------------------------------------
 function buttonFor(command: Command): HTMLButtonElement | null {
   for (const b of buttons) {
     if (b.dataset.cmd === command) return b;
@@ -179,40 +279,150 @@ function setLastCommand(command: Command): void {
   for (const b of buttons) b.classList.toggle("primary", b.dataset.cmd === command);
 }
 
-/** Disable everything and swap the pressed button's label for a spinner. */
-function beginBusy(command: Command): void {
-  busyCommand = command;
-  form.setAttribute("aria-busy", "true");
-  setControlsDisabled(true);
-  const b = buttonFor(command);
-  if (b) {
-    b.dataset.label = b.textContent ?? "";
-    b.textContent = "";
-    b.classList.add("busy");
-    const spin = document.createElement("span");
-    spin.className = "spinner";
-    spin.setAttribute("aria-hidden", "true");
-    b.appendChild(spin);
+/** Button currently showing the spinner (its label is hidden). */
+let spinnerOn: HTMLButtonElement | null = null;
+
+/** Remove the spinner from whatever button carries it (restores the label). */
+function removeSpinner(): void {
+  if (!spinnerOn) return;
+  const b = spinnerOn;
+  b.classList.remove("busy");
+  b.textContent = b.dataset.label ?? "";
+  delete b.dataset.label;
+  spinnerOn = null;
+}
+
+/**
+ * Keep the busy chrome consistent with the queue: while lookups are pending
+ * the form is aria-busy, the inputs and command buttons are disabled, and
+ * the spinner sits on the button of the lookup at the head of the queue (it
+ * hops buttons when the next queued lookup uses another command). Every path
+ * out of a lookup — reply, engine failure, timeout — funnels back through
+ * here, so once the queue drains the controls are always re-enabled and the
+ * pressed button's label is always restored.
+ */
+function syncBusyUi(): void {
+  const head = queue[0] ?? null;
+  const button = head ? buttonFor(head.command) : null;
+  if (button !== spinnerOn) {
+    removeSpinner();
+    if (button && head) {
+      button.dataset.label = button.textContent ?? "";
+      button.textContent = "";
+      button.classList.add("busy");
+      const spin = document.createElement("span");
+      spin.className = "spinner";
+      spin.setAttribute("aria-hidden", "true");
+      button.appendChild(spin);
+      spinnerOn = button;
+    }
+  }
+  // Small queue counter: while more than one lookup is pending (the queue
+  // holds the in-flight head plus anything queued behind it) the busy button
+  // shows how many panes are still to come, counting down as each lands.
+  if (spinnerOn) {
+    const pendingCount = queue.length;
+    let counter = spinnerOn.querySelector<HTMLSpanElement>(".queue-n");
+    if (pendingCount > 1) {
+      if (!counter) {
+        counter = document.createElement("span");
+        counter.className = "queue-n";
+        counter.setAttribute("aria-hidden", "true");
+        spinnerOn.appendChild(counter);
+      }
+      counter.textContent = String(pendingCount);
+    } else if (counter) {
+      counter.remove();
+    }
+  }
+  if (head) form.setAttribute("aria-busy", "true");
+  else form.removeAttribute("aria-busy");
+  setControlsDisabled(!!head || !ready);
+}
+
+/** The engine is down — worker crashed, a lookup timed out, or a boot
+ * failed. Whatever lookup was in flight will never be answered: it is
+ * surfaced as an error pane and dropped, the engine is restarted, and the
+ * rest of the queue drains once the fresh engine reports ready. Only after
+ * several consecutive failures does the app give up (the environment cannot
+ * run the engine) — it then settles into a clear error state instead of
+ * spinning forever, and reloading the page restarts it. */
+function engineDown(message: string): void {
+  disarmWatchdog();
+  const lost = inFlight ? (queue[0] ?? null) : null;
+  inFlight = false;
+  if (lost) {
+    queue.shift();
+    try {
+      addPane(lost.command, lost.query, `engine error — ${message}`, true);
+    } catch {
+      /* never wedge on a pane */
+    }
+  }
+  ready = false;
+  bootFailures++;
+  if (bootFailures >= MAX_BOOT_FAILURES) {
+    engineDead = true;
+    while (queue.length > 0) {
+      const item = queue.shift()!;
+      try {
+        addPane(item.command, item.query, `engine error — ${message}`, true);
+      } catch {
+        /* never wedge on a pane */
+      }
+    }
+    removeSpinner();
+    form.removeAttribute("aria-busy");
+    setControlsDisabled(true);
+    setStatus(`⚠ ${message} — reload the page to restart the app`, "error");
+    return;
+  }
+  setStatus(`⚠ engine hiccup — restarting…`, "busy");
+  worker.terminate();
+  worker = makeWorker();
+  syncBusyUi();
+  drain(); // no-op until the fresh engine reports ready
+}
+
+// ---- watchdog --------------------------------------------------------------
+/** A lookup should never hang the UI: if the worker stops answering, treat
+ * it as an engine failure (drops the stuck lookup with an error pane and
+ * restarts the engine). Generous — the first cold lookup after the
+ * dictionary import can take a while on slow devices. */
+const LOOKUP_TIMEOUT_MS = 120000;
+let watchdog: ReturnType<typeof setTimeout> | null = null;
+
+function armWatchdog(): void {
+  disarmWatchdog();
+  watchdog = setTimeout(() => engineDown("a lookup took too long"), LOOKUP_TIMEOUT_MS);
+}
+
+function disarmWatchdog(): void {
+  if (watchdog !== null) {
+    clearTimeout(watchdog);
+    watchdog = null;
   }
 }
 
-/** Put the button label back and mark the form idle (does not touch disabled). */
-function clearBusy(): void {
-  if (busyCommand !== null) {
-    const b = buttonFor(busyCommand);
-    if (b) {
-      b.classList.remove("busy");
-      b.textContent = b.dataset.label ?? "";
-      delete b.dataset.label;
-    }
-    busyCommand = null;
-  }
-  form.removeAttribute("aria-busy");
+// ---- worker lifecycle ------------------------------------------------------
+function onWorkerError(ev: ErrorEvent): void {
+  engineDown(ev.message ? `engine crashed (${ev.message})` : "engine crashed");
+}
+
+/** Consecutive engine failures before giving up (reset on every ready). */
+const MAX_BOOT_FAILURES = 3;
+
+/** The engine worker — recreated on crash so the app keeps working. */
+let worker = makeWorker();
+
+function makeWorker(): Worker {
+  const w = new Worker(new URL("./worker.js", import.meta.url), { type: "module" });
+  w.onmessage = onWorkerMessage;
+  w.onerror = onWorkerError;
+  return w;
 }
 
 // ---- interactive tokens -----------------------------------------------------
-/** CJK ideographs — every displayed kanji is individually clickable. */
-const KANJI_RE = /\p{Script=Han}/u;
 /** Hiragana/katakana — a writing containing kana is a word, not a lone kanji. */
 const KANA_RE = /[\p{Script=Hiragana}\p{Script=Katakana}]/u;
 
