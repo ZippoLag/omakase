@@ -21,6 +21,10 @@ tests/fixtures/
     radk-<radical>.json          radkfile radical slices (水 食 口)
     furigana-jmdict.json         JmdictFurigana snapshots (writing+reading →
                                  ruby segments) for every fixture kanji writing
+  strokes/                        KanjiVG stroke-order svgs (exact release
+                                 snapshots: 食 098df.svg, 水 06c34.svg) — for
+                                 the stroke-pipeline unit tests (readZip /
+                                 loadKanjivg / the braille frame renderer)
   meta/tags.json                 JMdict tag → description map (for POS display)
   sentences/sentence-*.json      real curated Tatoeba JA–EN pairs
   conjugations/<name>.json       per-class conjugation tables: upstream-verified
@@ -40,6 +44,7 @@ tests/fixtures/
 | Data | Source | License |
 |---|---|---|
 | `entries/*` (words, kanji, radicals) | **jmdict-simplified 3.6.2+20260824122934** — exact snapshots; download sha256 pinned in `manifest.json` | CC BY-SA 4.0 (EDRDG) |
+| `strokes/*.svg` | **KanjiVG r20260714** (`kanjivg-20260714-main.zip`, sha256 pinned in `data/build/config.ts`) — exact file snapshots | CC BY-SA 3.0 (Ulrich Apel) |
 | `meta/tags.json` | same release | CC BY-SA 4.0 |
 | `conjugations/{taberu,kuru,suru,yoi,ii}.json` | **jkindrix/japanese-language-data** `data/grammar/conjugations.json` (fetched 2026-08-28; provenance in `_provenance.json`) | CC BY-SA 4.0 |
 | `conjugations/{aru,shokuji,kanzuru,shisu,aisuru,ou,kentou}.json` | **hand-derived [G] gap classes** per `conjugation-engine.md` §4.5/4.7 — v5r-i bare ある, vs suru noun 食事, vz 感ずる, vs-c 死す, vs-s 愛する, v5uru 覆う and vs-a 検討 (last two are **synthetic** — no entry in the pinned release carries those tags; the first four are real entries). Not present in the upstream dataset (checked 2026-09-02); each file carries a `provenance` field. **`pnpm run validate:conjugations` diffs these against the engine** (the engine is the only ground truth for these classes) | CC BY-SA 4.0 (our derivation) |
@@ -77,6 +82,17 @@ the test suite.
    These tolerate the weekly JMdict drift.
 3. **`--update` flag:** regenerates goldens from the current formatter output
    for review; the diff is the review surface (never merge un-reviewed).
+
+## Stroke-order tests
+
+`tests/strokes.test.ts` covers the stroke pipeline offline: the minimal zip
+reader (`data/build/unzip.ts`) against a synthetic in-memory zip, the KanjiVG
+loader's file filter (`loadKanjivg`), and `src/strokes.ts` — path parsing,
+flattening, and the braille stroke-frame renderer. The frame output of the
+real 食 / 水 fixture SVGs is pinned byte-for-byte inside the test, so any
+change to the renderer's rasterization shows up as a deliberate diff.
+The `kanji <literal> --strokes` CLI end-to-end tests (`tests/cli.test.ts`)
+seed `stroke_order` rows and copy the fixture SVGs next to their temp DB.
 
 ## Output contract notes (v1)
 

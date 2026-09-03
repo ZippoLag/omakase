@@ -4,11 +4,21 @@
  * (see tests/fixtures/manifest.json which is generated from the same pins).
  */
 export const SOURCE = "scriptin/jmdict-simplified";
-export const RELEASE = "3.6.2+20260824122934";
+export const RELEASE = "3.6.2+20260824122934";/**
+ * KanjiVG release pin (KanjiVG/kanjivg, CC BY-SA 3.0 — attribution to Ulrich
+ * Apel required). The `-main` zip holds one SVG per kanji (no variant
+ * forms), each named by its Unicode codepoint (e.g. kanji/098df.svg for 食),
+ * covering the Jōyō + Jinmeiyō core. sha256 is the release asset digest.
+ */
+export const KANJIVG_SOURCE = "KanjiVG/kanjivg";
+export const KANJIVG_RELEASE = "r20260714";
+export const KANJIVG_ASSET = "kanjivg-20260714-main.zip";
+export const KANJIVG_SHA256 = "b5df6cd2bc249dd49b8041eb99e38ba9f8dc6b9ea57962a80084b4a315d1a7fc";
 
 /**
  * JmdictFurigana release pin (Doublevil/JmdictFurigana, MIT; data derived from
- * JMdict, CC BY-SA 4.0). Rebuilt monthly from the same upstream JMdict that
+ * JMdict, CC BY-SA 4.0).
+ Rebuilt monthly from the same upstream JMdict that
  * jmdict-simplified mirrors, so the release dates track each other. The repo
  * ships a plain JSON and a .tar.gz of the same file; we pin the .tar.gz so the
  * existing tar loader applies unchanged. The inner JSON is UTF-8 with a BOM.
@@ -61,3 +71,10 @@ export const RAW_DIR = "data/raw";
 export const DIST_DIR = "dist";
 export const DB_PATH = "dist/kanji.db";
 export const META_PATH = "dist/meta.json";
+
+/** KanjiVG SVGs land here (loose files, referenced by the stroke_order table). */
+export const STROKES_DIR = "dist/strokes";
+
+/** GitHub release asset URL for the pinned KanjiVG main zip. */
+export const KANJIVG_URL =
+  `https://github.com/KanjiVG/kanjivg/releases/download/${KANJIVG_RELEASE}/${KANJIVG_ASSET}`;

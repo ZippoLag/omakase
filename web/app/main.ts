@@ -6,7 +6,8 @@
  * count and the result history are persisted to localStorage and restored on
  * reload; each pane (and the header) has a red trashbin to delete results.
  */
-import type { Command, WorkerMessage, WorkerRequest } from "./worker-api.js";
+import type { Command, StrokePage, WorkerMessage, WorkerRequest } from "./worker-api.js";
+import { strokeWidgetFigure } from "./stroke-widget.js";
 import { VERSION, VERSION_FULL } from "../../src/version.js";
 
 const worker = new Worker(new URL("./worker.js", import.meta.url), { type: "module" });
@@ -35,12 +36,15 @@ let lastCommand: Command = "search";
 let ready = false;
 
 // ---- persistent state (localStorage) ---------------------------------------
-/** One result pane as persisted/restored (the CLI text + how it was asked). */
+/** One result pane as persisted/restored (the CLI text + how it was asked).
+ * `strokes` (kanji literal pages only) records the stroke-order svg file
+ * behind each page character, so restored panes can re-mount the widgets. */
 interface PaneRecord {
   command: string;
   query: string;
   text: string;
   error: boolean;
+  strokes?: StrokePage[];
 }
 
 interface StoredState {
@@ -112,7 +116,7 @@ worker.onmessage = (ev: MessageEvent<WorkerMessage>) => {
       const head = queue.shift();
       busy = false;
       const item = head && head.id === msg.id ? head : null;
-      if (msg.text !== null) addPane(item?.command ?? "result", item?.query ?? "", msg.text, false);
+      if (msg.text !== null) addPane(item?.command ?? "result", item?.query ?? "", msg.text, false, msg.strokes);
       else if (msg.error !== null) addPane(item?.command ?? "result", item?.query ?? "", msg.error, true);
       clearBusy();
       setControlsDisabled(false);
@@ -332,14 +336,36 @@ function renderPane(rec: PaneRecord): HTMLElement {
 }
 
 /** Add a fresh result pane (newest first) and persist the history. */
-function addPane(command: string, query: string, text: string, isError: boolean): void {
-  const rec: PaneRecord = { command, query, text, error: isError };
+function addPane(
+  command: string,
+  query: string,
+  text: string,
+  isError: boolean,
+  strokes?: StrokePage[],
+): void {
+  const rec: PaneRecord = { command, query, text, error: isError, ...(strokes && strokes.length > 0 ? { strokes } : {}) };
   history.unshift(rec);
   updateClearButton();
   const pane = renderPane(rec);
   panes.prepend(pane); // newest pane sits directly below the button row
+  attachStrokeWidgets(pane, rec.strokes);
   pane.scrollIntoView({ block: "start", behavior: "smooth" });
   saveState();
+}
+
+/**
+ * Stroke-order widgets live between a pane's header and its text: one figure
+ * per page character (kanji 制作者 gets three). Widgets fetch their svg
+ * lazily and remove themselves when no diagram is available, so this is a
+ * pure enhancement — the text pane renders regardless.
+ */
+function attachStrokeWidgets(pane: HTMLElement, strokes: StrokePage[] | undefined): void {
+  if (!strokes || strokes.length === 0) return;
+  const strip = document.createElement("div");
+  strip.className = "stroke-strip";
+  for (const page of strokes) strip.appendChild(strokeWidgetFigure(page));
+  const pre = pane.querySelector("pre");
+  if (pre) pane.insertBefore(strip, pre);
 }
 
 /** The header trashbin is enabled only while there is history to delete. */
@@ -383,11 +409,26 @@ function restoreState(): void {
         && typeof (rec as PaneRecord).text === "string"
       ) {
         const r = rec as PaneRecord;
-        history.push({ command: r.command, query: r.query, text: r.text, error: !!r.error });
+        const strokes: StrokePage[] | undefined = Array.isArray(r.strokes)
+          ? r.strokes.filter(
+              (s) => s && typeof s.literal === "string" && typeof s.svgFile === "string",
+            )
+          : undefined;
+        history.push({
+          command: r.command,
+          query: r.query,
+          text: r.text,
+          error: !!r.error,
+          ...(strokes && strokes.length > 0 ? { strokes } : {}),
+        });
       }
     }
     // history is newest-first; appending in order reproduces the DOM order.
-    for (const rec of history) panes.append(renderPane(rec));
+    for (const rec of history) {
+      const pane = renderPane(rec);
+      panes.append(pane);
+      attachStrokeWidgets(pane, rec.strokes);
+    }
   }
   updateClearButton();
 }

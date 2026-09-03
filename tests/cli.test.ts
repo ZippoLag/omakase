@@ -9,7 +9,7 @@
  */
 import { test } from "node:test";
 import assert from "node:assert/strict";
-import { readFileSync, readdirSync, mkdtempSync, rmSync } from "node:fs";
+import { copyFileSync, mkdirSync, readFileSync, readdirSync, mkdtempSync, rmSync } from "node:fs";
 import { join } from "node:path";
 import { tmpdir } from "node:os";
 import Database from "better-sqlite3";
@@ -85,9 +85,19 @@ function buildFixtureDbFile(): { dbPath: string; dir: string } {
       });
     }) as () => void;
     tx();
+    // stroke_order rows + svg files (from the fixture strokes) so the
+    // `kanji <lit> --strokes` end-to-end tests resolve a real diagram.
+    const strokeIns = db.prepare("INSERT INTO stroke_order (kanji, svg_file) VALUES (?, ?)");
+    strokeIns.run("食", "098df.svg");
+    strokeIns.run("水", "06c34.svg");
   } finally {
     db.close();
   }
+  // Copy the stroke diagrams next to the DB (the CLI resolves dist/strokes
+  // relative to the database path).
+  mkdirSync(join(dir, "strokes"), { recursive: true });
+  copyFileSync(join(FIXTURES, "strokes", "098df.svg"), join(dir, "strokes", "098df.svg"));
+  copyFileSync(join(FIXTURES, "strokes", "06c34.svg"), join(dir, "strokes", "06c34.svg"));
   return { dbPath, dir };
 }
 
@@ -256,6 +266,57 @@ test("missing query: word/kanji/search each write an error to stderr", () => {
       assert.equal(stdout, "");
       assert.ok(stderr.includes(message), `${argv.join(" ")} stderr: expected ${message}`);
     }
+  } finally {
+    rmSync(dir, { recursive: true, force: true });
+  }
+});
+
+test("kanji --strokes: braille stroke-order frames lead the page", () => {
+  const { dbPath, dir } = buildFixtureDbFile();
+  try {
+    const { code, stdout, stderr } = runOnDb(["kanji", "水", "--strokes"], dbPath);
+    assert.equal(code, 0);
+    assert.equal(stderr, "");
+    // The stroke block comes first (art on top), then the normal page.
+    assert.ok(stdout.startsWith("Stroke order (水, 4 strokes):\n"), stdout.slice(0, 60));
+    // One labelled frame per stroke, with the kvg stroke type.
+    for (const [label, type] of [["1/4", "㇚"], ["2/4", "㇇"], ["3/4", "㇒"], ["4/4", "㇏"]] as const) {
+      assert.ok(stdout.includes(`\n  ${label} (${type})\n`), `frame label ${label}`);
+    }
+    // Frames are braille rows (each grid row starts with a U+2800+ cell).
+    const frameRows = stdout.split("\n").filter((l) => /^  [\u2800-\u28ff]+$/.test(l));
+    assert.ok(frameRows.length >= 80, `braille rows present (${frameRows.length})`);
+    // The page follows after the frames.
+    assert.ok(stdout.includes("\n\n水  [4 strokes]\n"), "page follows the block");
+    assert.ok(stdout.includes("Meanings: water"), "page body intact");
+    // Deterministic: identical input renders identical output.
+    const again = runOnDb(["kanji", "水", "--strokes"], dbPath);
+    assert.equal(again.stdout, stdout);
+  } finally {
+    rmSync(dir, { recursive: true, force: true });
+  }
+});
+
+test("kanji --strokes: errors for multi-literal, reading queries, and no diagram", () => {
+  const { dbPath, dir } = buildFixtureDbFile();
+  try {
+    // Multi-literal: one kanji at a time.
+    const multi = runOnDb(["kanji", "飲食", "--strokes"], dbPath);
+    assert.equal(multi.code, 0);
+    assert.equal(multi.stdout, "");
+    assert.ok(multi.stderr.includes("error: --strokes needs a single kanji literal"), multi.stderr);
+    // Reading query (kana): no page to draw.
+    const reading = runOnDb(["kanji", "たべ", "--strokes"], dbPath);
+    assert.equal(reading.stdout, "");
+    assert.ok(reading.stderr.includes("error: --strokes needs a single kanji literal"), reading.stderr);
+    // 喰 has a kanji page but no stroke_order row in the fixtures.
+    const none = runOnDb(["kanji", "喰", "--strokes"], dbPath);
+    assert.equal(none.code, 0);
+    assert.equal(none.stdout, "");
+    assert.ok(none.stderr.includes('no stroke-order data for "喰"'), none.stderr);
+    // A plain page (no flag) never mentions strokes and stays byte-identical.
+    const plain = runOnDb(["kanji", "水"], dbPath);
+    assert.ok(!plain.stdout.includes("Stroke order"));
   } finally {
     rmSync(dir, { recursive: true, force: true });
   }

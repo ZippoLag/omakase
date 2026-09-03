@@ -203,6 +203,21 @@ makase
   委  [まかせ]  committee; entrust to; leave to; devote; discard
 ```
 
+A kanji page can also **draw its stroke order in the terminal**: add
+`--strokes` to a single-literal page and the KanjiVG stroke diagram is
+rendered as one braille frame per stroke (each frame shows the glyph drawn
+so far, labelled `1/N`…`N/N` with the stroke type), above the normal page —
+for characters the shipped KanjiVG set covers:
+
+```
+$ omakase kanji 食 --strokes | head -5
+Stroke order (食, 9 strokes):
+
+  1/9 (㇒)
+  ⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⢠⣦⠀⠀…
+  ⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⢀⣼⣟⠀⠀⠀⠀…
+```
+
 ### `search` — readings and meanings, ranked
 
 Results come back in up to three ranked sections (each capped at 30 rows by
@@ -321,6 +336,13 @@ dictionary word displayed in a list (compounds, multi-kanji “Words”, search
 hits, thesaurus rows) carries a small magnifier icon at its left that looks
 the whole word up (equivalent to typing it and pressing **word**).
 
+Kanji pages also get a **stroke-order animation**: the pane opens with a
+widget per page character (so `kanji 制作者` shows three) that draws the
+character's strokes in order, with a ↻ button to replay. The diagrams come
+from the same KanjiVG svg files the CLI's `--strokes` uses — they are fetched
+lazily (a few KB each, cached by the service worker on first view), so the
+first kanji page you open adds nothing to the one-time dictionary import.
+
 ### Build & run once on your computer
 
 ```bash
@@ -372,11 +394,17 @@ when you (re)install or update.
   this.
 - The dictionary occupies ~300 MB of phone storage (it lives in the
   browser's private origin storage, so iOS may evict it only under extreme
-  storage pressure; re-opening the app re-imports if it is gone).
+  storage pressure; re-opening the app re-imports if it is gone). Stroke
+  diagrams are separate small files (~6.4k KanjiVG svgs, ~40 MB in `dist/`,
+  CC BY-SA 3.0 © Ulrich Apel): only the ones you actually view are fetched
+  and cached, on top of the dictionary import.
 - Updating the app = rebuild + re-serve, then open the app once online; the
   service worker cache version is stamped from the build version at
   `web:build` time, so it bumps automatically on every build (old caches are
-  purged on the next visit).
+  purged on the next visit). A rebuilt **dictionary** reaches existing
+  installs the same way: the worker compares the build stamp in OPFS with
+  the one served in `dist/meta.json` and re-imports the new file when they
+  differ (you see the import progress bar again).
 - `web/vendor/` holds the pinned sqlite-wasm engine (see its README) so the
   web app builds and serves without `node_modules`.
 
@@ -391,7 +419,10 @@ pnpm run validate:conjugations # conjugations diff + gap fixtures
 Data sources, the relational schema, and the CLI output format contract are
 documented in [`data-model.md`](data-model.md) and
 [`architecture.md`](architecture.md) (the golden tests encode the exact output
-format byte-for-byte).
+format byte-for-byte). The stroke-order data (KanjiVG, CC BY-SA 3.0) is
+fetched at build time into `dist/strokes/` and indexed by the `stroke_order`
+table (see `tangorin_sources.md` §2 and `tests/fixtures/README.md` for
+provenance).
 
 ## Node version note
 

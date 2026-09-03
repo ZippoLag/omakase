@@ -22,6 +22,7 @@ import {
   loadWord,
   searchKanjiByReading,
   searchReadingPrefix,
+  strokeFileFor,
   wordThesaurus,
   wordsContainingKanji,
 } from "../src/lookup.js";
@@ -439,6 +440,27 @@ test("kanji -max caps compounds, words and reading results", () => {
     assert.equal(rows(mi).length, 2);
     assert.ok(mi.includes("… and 1 more"), mi);
     assert.ok(!cmdKanji(db, "mi", 30)!.includes("… and "));
+  } finally {
+    db.close();
+  }
+});
+
+test("strokeFileFor: stroke_order index resolves svg files per literal", () => {
+  const db = buildFixtureDb();
+  try {
+    // Fixtures seed no stroke_order rows: every kanji reports no diagram.
+    assert.equal(loadKanji(db, "食")!.strokeFile, null);
+    assert.equal(strokeFileFor(db, "食"), null);
+    assert.equal(loadKanji(db, "喰")!.strokeFile, null);
+    // With a row (as build:db writes for KanjiVG-covered kanji), loadKanji
+    // surfaces it — the page text stays byte-identical to the goldens.
+    db.prepare("INSERT INTO stroke_order (kanji, svg_file) VALUES (?, ?)").run("食", "098df.svg");
+    assert.equal(strokeFileFor(db, "食"), "098df.svg");
+    assert.equal(loadKanji(db, "食")!.strokeFile, "098df.svg");
+    assert.equal(cmdKanji(db, "食"), golden("kanji-shoku.txt"), "page text ignores stroke rows");
+    // Characters KanjiVG has no diagram for (喰) still load, with no file.
+    assert.equal(loadKanji(db, "喰")!.strokeFile, null);
+    assert.equal(strokeFileFor(db, "不存在"), null);
   } finally {
     db.close();
   }

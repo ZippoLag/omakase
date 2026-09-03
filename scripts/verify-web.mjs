@@ -247,9 +247,50 @@ async function main() {
     // kanji (page)
     p = await runLookup(page, "kanji", "食");
     check("kanji 食 page renders", p.text.includes("strokes") && p.text.includes("On:") && p.text.includes("eat"), "kanji page");
+    // ---- stroke-order widget --------------------------------------------
+    // The kanji pane mounts a widget per page character: it fetches the
+    // KanjiVG svg (dist/strokes/098df.svg for 食), renders its 9 stroke
+    // paths, labels them, and enables a replay button.
+    const strokeWidget = await waitFor(
+      page,
+      () => page.evaluate(() => {
+        const pane = document.querySelector("#panes .pane:first-child");
+        const fig = pane?.querySelector(".stroke-widget");
+        const svg = fig?.querySelector("svg.stroke-svg");
+        if (!fig || !svg) return null;
+        const paths = svg.querySelectorAll("path");
+        const replay = fig.querySelector(".stroke-replay");
+        return paths.length > 0 && !replay.disabled
+          ? { paths: paths.length, label: fig.querySelector(".stroke-label")?.textContent ?? "" }
+          : null;
+      }),
+      30000,
+      "stroke-order widget",
+    );
+    check(
+      "kanji pane: stroke-order widget with 9 strokes + replay",
+      strokeWidget?.paths === 9 && strokeWidget.label === "食 · 9 strokes",
+      JSON.stringify(strokeWidget),
+    );
+    // replay redraws the sequence without breaking the strokes
+    const replayWidget = await page.evaluate(() => {
+      const fig = document.querySelector("#panes .pane:first-child .stroke-widget");
+      const before = fig.querySelectorAll("path").length;
+      fig.querySelector(".stroke-replay").click();
+      const after = fig.querySelectorAll("path").length;
+      return { before, after };
+    });
+    check(
+      "stroke widget replay keeps all strokes",
+      replayWidget.before === 9 && replayWidget.after === 9,
+      JSON.stringify(replayWidget),
+    );
     // kanji (reading search)
     p = await runLookup(page, "kanji", "makase");
     check("kanji reading search hits", p.text.includes("任") || p.text.includes("委"), p.text.slice(0, 60));
+    const noWidget = await page.evaluate(() =>
+      !document.querySelector("#panes .pane:first-child .stroke-widget"));
+    check("kanji reading search has no stroke widgets", noWidget, "list results are not kanji pages");
     // multi-kanji: 制作者 = ranked Words section (all three kanji first),
     // then one page per character identical to looking each up alone
     const kanjiParts = [];
@@ -263,6 +304,24 @@ async function main() {
       wordsFirst && p.text.includes("制作者  [") && kanjiParts.every((t) => p.text.includes(t))
         && p.text.endsWith(kanjiParts[2]),
       `${p.text.length}B singles=${kanjiParts.map((t) => t.length).join(",")}B`,
+    );
+    // one stroke-order widget per page character (制・作・者)
+    const multiWidgets = await waitFor(
+      page,
+      () => page.evaluate(() => {
+        const figs = [...document.querySelectorAll("#panes .pane:first-child .stroke-widget")];
+        return figs.length === 3 && figs.every((f) => f.querySelectorAll("svg path").length > 0)
+          ? figs.map((f) => f.querySelector(".stroke-label")?.textContent ?? "")
+          : null;
+      }),
+      30000,
+      "multi-kanji stroke widgets",
+    );
+    check(
+      "multi-kanji pane: one stroke widget per page character",
+      Array.isArray(multiWidgets) && multiWidgets.length === 3
+        && ["制", "作", "者"].every((c) => multiWidgets.some((l) => l.startsWith(`${c} ·`))),
+      JSON.stringify(multiWidgets),
     );
     // search romaji readings
     p = await runLookup(page, "search", "taberu");

@@ -1,9 +1,11 @@
 /**
- * Typed loaders for jmdict-simplified release archives (tgz of a single JSON).
- * Field names match @scriptin/jmdict-simplified-types exactly.
+ * Typed loaders for jmdict-simplified release archives (tgz of a single JSON)
+ * and the KanjiVG stroke-order zip. Field names match
+ * @scriptin/jmdict-simplified-types exactly.
  */
 import { gunzipSync } from "node:zlib";
 import { RELEASE } from "./config.js";
+import { readZip } from "./unzip.js";
 
 export interface JmdictKanji {
   common: boolean;
@@ -150,6 +152,37 @@ export function loadKradfile(buf: Buffer): KradfileFile {
 }
 export function loadRadkfile(buf: Buffer): RadkfileFile {
   return loadJson<RadkfileFile>(buf);
+}
+
+// ---- KanjiVG (stroke order) ------------------------------------------------
+
+export interface KanjivgEntry {
+  /** the svg file name, e.g. '098df.svg' (Unicode codepoint in hex). */
+  file: string;
+  /** the kanji literal the file draws (from its codepoint), e.g. '食'. */
+  literal: string;
+  /** raw SVG text (stroke paths, stroke numbers, kvg attributes). */
+  text: string;
+}
+
+/** KanjiVG zip entries are flat files named kanji/<5-hex-codepoint>.svg. */
+const KANJIVG_FILE_RE = /^kanji\/([0-9a-f]{5})\.svg$/;
+
+/**
+ * Load the KanjiVG `-main` zip: one SVG per kanji (no variant forms), each
+ * named by its codepoint, e.g. kanji/098df.svg for 食 (U+98DF). Entries for
+ * characters outside the CJK ideograph range (symbols, kana, …) are kept
+ * here too — the build drops them when no kanji row matches the literal.
+ */
+export function loadKanjivg(buf: Buffer): KanjivgEntry[] {
+  const out: KanjivgEntry[] = [];
+  for (const entry of readZip(buf)) {
+    const m = KANJIVG_FILE_RE.exec(entry.name);
+    if (!m) continue;
+    const literal = String.fromCodePoint(parseInt(m[1]!, 16));
+    out.push({ file: `${m[1]}.svg`, literal, text: entry.data.toString("utf8") });
+  }
+  return out;
 }
 
 export const RELEASE_TAG = RELEASE;

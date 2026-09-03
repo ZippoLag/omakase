@@ -339,3 +339,80 @@ button.busy {
 .tok-word:focus-visible { opacity: 0.8; }
 
 .pane.error pre { color: var(--accent); }
+
+/* ---- stroke-order widgets -------------------------------------------------- */
+/* One figure per kanji page character, between the pane header and the text:
+   a square svg the strokes draw themselves into, then a small bar with the
+   stroke count and a ↻ replay button. The svg is always on a light surface
+   so the dark kanji strokes read the same in both color schemes. */
+.stroke-strip {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 10px;
+  padding: 12px 14px 2px;
+  border-bottom: 1px solid var(--line);
+  background: color-mix(in srgb, var(--bg-pane) 60%, var(--bg));
+}
+
+.stroke-widget {
+  margin: 0;
+  display: flex;
+  flex-direction: column;
+  align-items: stretch;
+  width: clamp(120px, 32vw, 168px);
+}
+
+.stroke-svg {
+  display: block;
+  width: 100%;
+  height: auto;
+  aspect-ratio: 1 / 1;
+  background: #ffffff;
+  border: 1px solid var(--line);
+  border-radius: 10px;
+}
+
+.stroke-draw path {
+  fill: none;
+  stroke: #26282c;
+  stroke-width: 3.4;
+  stroke-linecap: round;
+  stroke-linejoin: round;
+  paint-order: stroke;
+}
+
+.stroke-bar {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 6px;
+  margin-top: 5px;
+  font-size: 12px;
+  color: var(--muted);
+}
+
+.stroke-label {
+  font-weight: 600;
+  color: var(--ink);
+}
+
+.stroke-replay {
+  flex: none;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 30px;
+  height: 30px;
+  padding: 0;
+  font-size: 15px;
+  font-weight: 400;
+  border-radius: 999px;
+  color: var(--ink);
+  background: var(--bg-pane);
+}
+
+.stroke-replay:hover:not(:disabled),
+.stroke-replay:focus-visible {
+  border-color: var(--accent);
+  color: var(--accent);
+}

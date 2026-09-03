@@ -2,6 +2,13 @@
 
 export type Command = "word" | "kanji" | "search";
 
+/** One kanji page rendered by a `kanji` result that has a stroke-order svg.
+ * The UI fetches `./strokes/<svgFile>` to animate it. */
+export interface StrokePage {
+  literal: string;
+  svgFile: string;
+}
+
 /** One lookup request, tagged with the caller's id so replies can pair up. */
 export interface RunRequest {
   kind: "run";
@@ -23,7 +30,9 @@ export type WorkerMessage =
    * dictionary's own build stamp from DB meta (null for pre-versioning DBs). */
   | { kind: "ready"; version: string; words: number; dict: string | null }
   /** Lookup completed: `text` renders the result; `error` (mutually
-   * exclusive) carries the CLI-style "no entry" message. */
-  | { kind: "result"; id: number; text: string | null; error: string | null }
+   * exclusive) carries the CLI-style "no entry" message. `strokes` (kanji
+   * literal pages only) lists the stroke-order svg files behind each page,
+   * so the UI can mount the per-character animation widgets. */
+  | { kind: "result"; id: number; text: string | null; error: string | null; strokes?: StrokePage[] }
   /** Fatal: engine could not start (unsupported browser / missing headers). */
   | { kind: "fatal"; message: string };

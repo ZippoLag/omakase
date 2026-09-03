@@ -5,9 +5,12 @@
  * text produced by src/format.ts — byte-identical to the golden files.
  */
 import { pathToFileURL } from "node:url";
+import { readFileSync } from "node:fs";
+import { dirname, join } from "node:path";
 import Database from "better-sqlite3";
 import { DB_PATH } from "../data/build/config.js";
 import { VERSION_FULL } from "./version.js";
+import { strokeFrames } from "./strokes.js";
 import {
   displayHeader,
   exampleSentences,
@@ -110,6 +113,64 @@ export function cmdKanji(db: DB, query: string, max: number = KANJI_MAX_DEFAULT)
   const hits = searchKanjiByReading(db, query);
   if (hits.length === 0) return null;
   return renderKanjiReadingSearch(query, hits, max);
+}
+
+/**
+ * `kanji <literal> --strokes`: braille stroke-order frames — one frame per
+ * stroke, each showing the glyph accumulated so far — rendered from the
+ * KanjiVG svg that the stroke_order table points at (resolved under
+ * `strokesDir`, the directory holding the database). The kvg stroke type
+ * (e.g. ㇒) labels each frame when the svg carries one.
+ *
+ * Returns null (after writing an error to stderr) when the query is not a
+ * single literal, the character has no stroke diagram, or its svg cannot be
+ * read — the run then fails like any other kanji miss (no page, error on
+ * stderr), since the flag made the query specific about what it wanted.
+ */
+function strokeOrderBlock(
+  db: DB,
+  query: string,
+  strokesDir: string | undefined,
+  stderr: (s: string) => void,
+): string | null {
+  const literals = kanjiLiterals(db, query);
+  if (!literals || literals.length !== 1) {
+    stderr(
+      "error: --strokes needs a single kanji literal — e.g. `omakase kanji 食 --strokes`\n",
+    );
+    return null;
+  }
+  const literal = literals[0]!;
+  const kanji = loadKanji(db, literal);
+  if (!kanji || !kanji.strokeFile) {
+    stderr(`no stroke-order data for "${literal}"\n`);
+    return null;
+  }
+  if (!strokesDir) {
+    stderr("error: stroke svg directory unavailable\n");
+    return null;
+  }
+  const svgPath = join(strokesDir, "strokes", kanji.strokeFile);
+  let svg: string;
+  try {
+    svg = readFileSync(svgPath, "utf8");
+  } catch (err) {
+    stderr(`error: cannot read stroke svg ${svgPath}: ${(err as Error).message}\n`);
+    return null;
+  }
+  const { strokes, frames } = strokeFrames(svg);
+  if (strokes.length === 0 || frames.length !== strokes.length) {
+    stderr(`error: no stroke paths parsed from ${svgPath}\n`);
+    return null;
+  }
+  const lines: string[] = [`Stroke order (${literal}, ${strokes.length} strokes):`, ""];
+  frames.forEach((frame, i) => {
+    const type = strokes[i]!.type;
+    lines.push(`  ${i + 1}/${strokes.length}${type ? ` (${type})` : ""}`);
+    for (const row of frame.split("\n")) lines.push("  " + row);
+    lines.push("");
+  });
+  return lines.join("\n");
 }
 
 /**
@@ -230,6 +291,9 @@ Options:
   -max N / --max N   cap words / compounds / reading results at N rows
                      (default ${KANJI_MAX_DEFAULT}; also accepts --max=N or
                      -max N)
+  --strokes          render the stroke order of a single kanji literal as
+                     braille frames (one frame per stroke, each showing the
+                     glyph drawn so far) from its KanjiVG diagram
 
 Examples:
   omakase kanji 食
@@ -237,6 +301,7 @@ Examples:
   omakase kanji 制作者 --max 5
   omakase kanji まか
   omakase kanji makase
+  omakase kanji 食 --strokes
 `,
   search: `Usage:
   omakase search <query> [--max N]
@@ -354,7 +419,7 @@ export function runCommand(
   query: string | undefined,
   flags: Map<string, string | null>,
   stderr: (s: string) => void,
-  opts: { color?: boolean } = {},
+  opts: { color?: boolean; strokesDir?: string } = {},
 ): string | null {
   const tags = loadTags(db);
   switch (command) {
@@ -383,6 +448,13 @@ export function runCommand(
       if (!out) {
         stderr(`no kanji "${query}"\n`);
         return "";
+      }
+      if (flags.has("strokes")) {
+        const block = strokeOrderBlock(db, query, opts.strokesDir, stderr);
+        if (block === null) return "";
+        // Stroke-order art first (the flag asks to see the drawing); the
+        // page follows below it.
+        return block + "\n" + out;
       }
       return out;
     }
@@ -460,7 +532,10 @@ export function main(
   }
 
   try {
-    const out = runCommand(db, command, args[0], flags, stderr, opts);
+    const out = runCommand(
+      db, command, args[0], flags, stderr,
+      { color: opts.color, strokesDir: dirname(dbPath) },
+    );
     if (out === null) return 2;
     if (out !== "") stdout(out);
     return 0;

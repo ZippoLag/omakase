@@ -154,6 +154,9 @@ export interface LoadedKanji {
   compounds: { wordId: string; writing: string; ruby: string; gloss: string }[];
   /** Distinct words containing this kanji, before the compounds cap. */
   compoundTotal: number;
+  /** stroke-order SVG file name (e.g. '098df.svg') or null when KanjiVG has
+   * no diagram for this character (stroke_order table row absent). */
+  strokeFile: string | null;
 }
 
 function firstGlossById(db: DB, id: string): string {
@@ -163,6 +166,23 @@ function firstGlossById(db: DB, id: string): string {
     if (g) return g.text;
   }
   return "";
+}
+
+/**
+ * Load a kanji page (radical breakdown, readings, meanings, nanori,
+ * compounds) by literal. `radicals` are the kradfile component radicals in
+ * kradfile order (a radical kanji lists itself first, e.g. 見 → 見 目 儿).
+ * `maxCompounds` caps the compounds list (the page still reports how many
+ * compounds exist via LoadedKanji.compoundTotal).
+ */
+/**
+ * Stroke-order SVG file for a kanji literal (stroke_order index), or null
+ * when KanjiVG has no diagram for it. Browser-portable (no filesystem IO —
+ * callers resolve the file name to a path or URL).
+ */
+export function strokeFileFor(db: DB, literal: string): string | null {
+  const row = db.prepare("SELECT svg_file FROM stroke_order WHERE kanji = ?").get(literal) as { svg_file: string } | undefined;
+  return row?.svg_file ?? null;
 }
 
 /**
@@ -220,6 +240,7 @@ export function loadKanji(db: DB, literal: string, maxCompounds?: number): Loade
     meanings,
     compounds,
     compoundTotal,
+    strokeFile: strokeFileFor(db, literal),
   };
 }
 

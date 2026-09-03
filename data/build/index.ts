@@ -12,8 +12,8 @@ import { statSync } from "node:fs";
 import { spawnSync } from "node:child_process";
 import { dirname, join, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
-import { fetchAll } from "./fetch.js";
-import { loadFurigana, loadJmdict, loadKanjidic2, loadKradfile, loadRadkfile, RELEASE_TAG } from "./parse.js";
+import { fetchAll, fetchFile } from "./fetch.js";
+import { loadFurigana, loadJmdict, loadKanjidic2, loadKanjivg, loadKradfile, loadRadkfile, RELEASE_TAG } from "./parse.js";
 import { transform } from "./transform.js";
 import { buildDb, summarize } from "./buildDb.js";
 import {
@@ -24,6 +24,12 @@ import {
   FURIGANA_ASSET,
   FURIGANA_RELEASE,
   FURIGANA_SOURCE,
+  KANJIVG_ASSET,
+  KANJIVG_RELEASE,
+  KANJIVG_SHA256,
+  KANJIVG_SOURCE,
+  KANJIVG_URL,
+  STROKES_DIR,
 } from "./config.js";
 
 const ROOT = resolve(dirname(fileURLToPath(import.meta.url)), "../..");
@@ -62,12 +68,24 @@ async function main(): Promise<void> {
   const kradfile = loadKradfile(blobs.get(ASSETS[2]!.name)!);
   const radkfile = loadRadkfile(blobs.get(ASSETS[3]!.name)!);
   const furigana = loadFurigana(blobs.get(FURIGANA_ASSET)!);
+  // Stroke-order SVGs (KanjiVG main zip) — a separate repo/release from the
+  // jmdict-simplified assets above, so it fetches through its own URL.
+  const kanjivg = loadKanjivg(await fetchFile(KANJIVG_ASSET, KANJIVG_URL, KANJIVG_SHA256, force));
 
   console.log("parsed: %d words, %d kanji, %d radicals, %d furigana pairs",
     jmdict.words.length, kanjidic2.characters.length, Object.keys(radkfile.radicals).length, furigana.length);
+  console.log("kanjivg: %d svg files (%s)", kanjivg.length, KANJIVG_RELEASE);
 
   console.log("transforming…");
   const rows = transform(jmdict, kanjidic2, kradfile, radkfile, furigana);
+
+  // Stroke order rows: every KanjiVG svg whose codepoint matches a kanji in
+  // the dictionary. Kept out of transform() because the svg files are loose
+  // assets, not DB rows — the DB only indexes them.
+  const kanjiSet = new Set(rows.kanji.map((k) => k.literal));
+  const strokes = kanjivg.filter((e) => kanjiSet.has(e.literal));
+  console.log("stroke_order: %d kanji have a stroke svg (of %d in the kanji table)",
+    strokes.length, rows.kanji.length);
 
   console.log("building %s…", "dist/kanji.db");
   const db = buildDb(rows, {
@@ -84,8 +102,20 @@ async function main(): Promise<void> {
     commits: String(v.commits ?? ""),
     commit: String(v.commit ?? ""),
   });
+
+  // stroke_order index rows + the loose svg files under dist/strokes/.
+  const insertStroke = db.prepare("INSERT INTO stroke_order (kanji, svg_file) VALUES (?, ?)");
+  const strokeTx = db.transaction(() => {
+    for (const s of strokes) insertStroke.run(s.literal, s.file);
+  });
+  strokeTx();
+  mkdirSync(STROKES_DIR, { recursive: true });
+  for (const s of strokes) {
+    writeFileSync(join(STROKES_DIR, s.file), s.text);
+  }
   db.close();
   const summary = summarize(rows, statSync(DB_PATH).size);
+  summary.strokes = strokes.length;
 
   mkdirSync(DIST_DIR, { recursive: true });
   writeFileSync(META_PATH, JSON.stringify({
@@ -94,6 +124,7 @@ async function main(): Promise<void> {
     dictDate: jmdict.dictDate,
     kanjidicDatabaseVersion: kanjidic2.databaseVersion,
     furigana: { source: FURIGANA_SOURCE, release: FURIGANA_RELEASE },
+    strokes: { source: KANJIVG_SOURCE, release: KANJIVG_RELEASE, count: strokes.length },
     version: v.versionFull ?? null,
     build: v.build ?? null,
     commit: v.commit ?? null,
@@ -107,6 +138,7 @@ async function main(): Promise<void> {
   console.log("  kanji=%d readings=%d meanings=%d nanori=%d", summary.kanji, summary.kanjiReadings, summary.kanjiMeanings, summary.kanjiNanori);
   console.log("  radicals=%d kanji_radicals=%d kanji_words=%d conjugations=%d",
     summary.radicals, summary.kanjiRadicals, summary.kanjiWords, summary.conjugations);
+  console.log("  stroke_order=%d (KanjiVG %s)", summary.strokes, KANJIVG_RELEASE);
   console.log("  furigana=%d (JmdictFurigana %s)", summary.furigana, FURIGANA_RELEASE);
   console.log("  thesaurus_links=%d (forward + reverse + 2-hop)", summary.thesaurusLinks);
   const conjugatedWordIds = new Set(rows.conjugations.map((c) => c.word_id));

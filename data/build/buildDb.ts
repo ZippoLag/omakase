@@ -32,6 +32,8 @@ export interface BuildSummary {
   conjugations: number;
   furigana: number;
   thesaurusLinks: number;
+  /** stroke_order rows (kanji with a KanjiVG svg), added after buildDb. */
+  strokes: number;
   dbBytes: number;
 }
 
@@ -51,6 +53,7 @@ export function summarize(rows: Transformed, dbBytes: number): BuildSummary {
     conjugations: rows.conjugations.length,
     furigana: rows.furigana.length,
     thesaurusLinks: rows.thesaurusLinks.length,
+    strokes: 0, // populated by the build entrypoint after the svg files are written
     dbBytes,
   };
 }

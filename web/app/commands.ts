@@ -15,12 +15,14 @@ import {
   loadKanji,
   radicalChar,
   searchKanjiByReading,
+  strokeFileFor,
   wordsContainingKanji,
   searchMeanings,
   searchReadingPrefix,
   suggestReading,
   wordThesaurus,
 } from "../../src/lookup.js";
+import type { StrokePage } from "./worker-api.js";
 import {
   KANJI_MAX_DEFAULT,
   renderExamples,
@@ -92,6 +94,23 @@ export function runKanji(db: DbLike, query: string, max: number = KANJI_MAX_DEFA
   const hits = searchKanjiByReading(db, query);
   if (hits.length === 0) return null;
   return renderKanjiReadingSearch(query, hits, max);
+}
+
+/**
+ * Stroke-order pages behind a `kanji` query: when the query is one or more
+ * kanji literals (so `runKanji` renders a page per character), return the
+ * stroke_order svg file for each character that has one — the UI animates
+ * these on the pane. Reading searches render no pages, so they get [].
+ */
+export function kanjiStrokePages(db: DbLike, query: string): StrokePage[] {
+  const literals = kanjiLiterals(db, query);
+  if (!literals) return [];
+  const pages: StrokePage[] = [];
+  for (const literal of literals) {
+    const svgFile = strokeFileFor(db, literal);
+    if (svgFile) pages.push({ literal, svgFile });
+  }
+  return pages;
 }
 
 /** `search <query>` — ranked readings/meanings/kanji sections + did-you-mean hint. */

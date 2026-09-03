@@ -1,13 +1,15 @@
 /**
  * DB worker: the only place sqlite-wasm runs (OPFS is worker-only). Boots
- * the engine, ensures the 289 MB dictionary is present in OPFS (fetching it
- * from the server once, chunked through OpfsDb.importDb), opens it read-only
- * through the statement shim, and answers `run` requests by rendering the
- * same text as the `omakase` CLI.
+ * the engine, ensures the dictionary is present in OPFS and current
+ * (fetching it from the server once — and re-importing when the served
+ * build's stamp differs from the copy in OPFS, so rebuilt dictionaries
+ * reach existing installs), opens it read-only through the statement shim,
+ * and answers `run` requests by rendering the same text as the `omakase`
+ * CLI.
  */
 import sqlite3InitModule, { type OpfsDatabase, type Sqlite3Static } from "../vendor/index.mjs";
 import { WasmDb } from "./shim.js";
-import { loadTags, runKanji, runSearch, runWord } from "./commands.js";
+import { kanjiStrokePages, loadTags, runKanji, runSearch, runWord } from "./commands.js";
 import type { WorkerMessage, WorkerRequest } from "./worker-api.js";
 
 /** OPFS path of the dictionary (also its URL on the server). */
@@ -29,14 +31,55 @@ async function ensureDb(engine: Sqlite3Static): Promise<OpfsDatabase> {
       + "browser (Chrome 108+/Safari 17+).",
     );
   }
-  // Already imported on a previous visit?
+
+  // The served dictionary's build stamp comes from dist/meta.json at the
+  // docroot. Best effort: offline (fetch failure) we keep whatever OPFS
+  // already holds — the app must still boot from cache.
+  let serverStamp: string | null = null;
   try {
-    return new OpfsDb(DB_PATH, "r");
+    const metaRes = await fetch("./meta.json");
+    if (metaRes.ok) {
+      const meta = (await metaRes.json()) as { version?: unknown };
+      serverStamp = typeof meta.version === "string" ? meta.version : null;
+    }
   } catch {
-    /* fall through to import */
+    /* offline — no update check */
   }
 
-  send({ kind: "status", text: "Downloading dictionary into device storage…" });
+  // Already imported on a previous visit? Read its build stamp to detect a
+  // newer served dictionary (rebuilt DBs carry new tables/rows — e.g. the
+  // stroke_order index — that old OPFS copies lack).
+  let localStamp: string | null = null;
+  try {
+    const existing = new OpfsDb(DB_PATH, "r");
+    try {
+      const probe = new WasmDb(existing);
+      const row = probe.prepare("SELECT value FROM meta WHERE key = 'version'").get() as { value?: string } | undefined;
+      localStamp = row?.value ?? null;
+    } finally {
+      existing.close();
+    }
+  } catch {
+    /* no dictionary in OPFS yet — first visit */
+  }
+
+  if (localStamp !== null && serverStamp !== null && serverStamp !== localStamp) {
+    send({ kind: "status", text: "Newer dictionary build found — updating…" });
+    return importDictionary(OpfsDb, "Updating dictionary into device storage…");
+  }
+  if (localStamp !== null) return new OpfsDb(DB_PATH, "r");
+  return importDictionary(OpfsDb, "Downloading dictionary into device storage…");
+}
+
+/** The subset of the sqlite-wasm OpfsDb class the import path needs. */
+type OpfsDbCtor = {
+  importDb(filename: string, data: () => Promise<Uint8Array | ArrayBuffer | undefined>): Promise<number>;
+  new (filename: string, flags: string): OpfsDatabase;
+};
+
+/** Stream the served kanji.db into OPFS (importDb truncates any old file). */
+async function importDictionary(OpfsDb: OpfsDbCtor, status: string): Promise<OpfsDatabase> {
+  send({ kind: "status", text: status });
   const res = await fetch(DB_PATH);
   if (!res.ok || !res.body) {
     throw new Error(`Cannot fetch ${DB_PATH} (HTTP ${res.status}). Is the server serving the built dictionary?`);
@@ -99,6 +142,7 @@ function handleRun(req: WorkerRequest & { kind: "run" }): WorkerMessage {
           id: req.id,
           text: out,
           error: out === null ? `no kanji "${q}"` : null,
+          strokes: out === null ? undefined : kanjiStrokePages(db, q),
         };
       }
       case "search":
