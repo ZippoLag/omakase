@@ -10,8 +10,8 @@
  * was produced from.
  *
  * src/version.ts is the single source of truth for both the CLI and the web
- * app — they import it, so `omakase --version` and the web status bar always
- * agree. The build counter itself lives in the gitignored .build-number file;
+ * app — they import it, so `omakase --version` and the web app's header
+ * badge always agree. The build counter itself lives in the gitignored
  * it never goes backwards because the counter is floored at the BUILD already
  * committed in src/version.ts.
  *

@@ -40,6 +40,10 @@ const input = document.querySelector<HTMLInputElement>("#query")!;
 const maxInput = document.querySelector<HTMLInputElement>("#max")!;
 const buttons = document.querySelectorAll<HTMLButtonElement>("button[data-cmd]");
 const status = document.querySelector<HTMLDivElement>("#status")!;
+/** The status line's message text (the % readout below is a sibling span). */
+const statusMsg = document.querySelector<HTMLSpanElement>("#status .status-msg")!;
+/** Live “x%” readout shown next to the status while the engine boots. */
+const pctEl = document.querySelector<HTMLSpanElement>("#status .pct")!;
 const versionBadge = document.querySelector<HTMLSpanElement>("#version")!;
 const clearBtn = document.querySelector<HTMLButtonElement>("#clear")!;
 const panes = document.querySelector<HTMLDivElement>("#panes")!;
@@ -122,12 +126,43 @@ function parseMax(): number {
 }
 
 function setStatus(text: string, extraClass = ""): void {
-  status.textContent = text;
+  statusMsg.textContent = text;
   status.className = extraClass;
 }
 
 function fmtMB(n: number): string {
   return `${Math.max(0, Math.round(n / 1048576))} MB`;
+}
+
+// ---- boot progress ---------------------------------------------------------
+/** Latest boot progress %, monotonic — the divider bar under the controls
+ * only ever fills (a tiny dot at 0%, the full line at 100% = ready). The
+ * worker announces each startup stage as it completes (see worker.ts), so
+ * the bar tracks real milestones; the CSS width transition smooths the jumps
+ * between them. */
+let bootPct = 0;
+/** Last integer % written to the readout (skip redundant DOM writes). */
+let lastPctText = -1;
+
+function setBootPct(pct: number): void {
+  if (!Number.isFinite(pct) || pct < bootPct) return; // stale/restart — never backwards
+  bootPct = Math.min(pct, 100);
+  pctEl.hidden = false;
+  const shown = Math.round(bootPct);
+  if (shown !== lastPctText) {
+    lastPctText = shown;
+    pctEl.textContent = `${shown}%`;
+  }
+  document.documentElement.style.setProperty("--progress", `${bootPct}%`);
+}
+
+/** Boot is over (or the engine died): hide the readout, park the bar. */
+function endBootProgress(): void {
+  bootPct = 0;
+  lastPctText = -1;
+  pctEl.textContent = "";
+  pctEl.hidden = true;
+  document.documentElement.style.setProperty("--progress", "0%");
 }
 
 // ---- query expansion -------------------------------------------------------
@@ -232,19 +267,28 @@ function onWorkerMessage(ev: MessageEvent<WorkerMessage>): void {
     case "status":
       setStatus(msg.text);
       break;
+    case "boot":
+      setBootPct(msg.pct);
+      break;
     case "progress": {
-      const pct = msg.totalBytes > 0 ? Math.round((msg.loadedBytes / msg.totalBytes) * 100) : 0;
-      setStatus(`Importing dictionary… ${pct}% (${fmtMB(msg.loadedBytes)} / ${fmtMB(msg.totalBytes)})`, "busy");
-      document.documentElement.style.setProperty("--progress", `${pct}%`);
+      setBootPct(msg.pct);
+      // The % lives in the readout next to the message; the text carries the
+      // byte counts for scale (the readout is the overall boot %, not the
+      // dictionary's download %).
+      setStatus(`Importing dictionary… ${fmtMB(msg.loadedBytes)} / ${fmtMB(msg.totalBytes)}`, "busy");
       break;
     }
     case "ready":
       ready = true;
       engineDead = false;
       bootFailures = 0;
-      document.documentElement.style.setProperty("--progress", "100%");
       versionBadge.title = `omakase ${VERSION_FULL}${msg.dict ? ` · dictionary build: ${msg.dict}` : ""}`;
-      setStatus(`ready — ${msg.words.toLocaleString()} words · v${VERSION_FULL} · SQLite ${msg.version} (100% offline)`);
+      // The full stamp (build, commits, SQLite version) lives in the header
+      // badge's hover tooltip — the status bar just says it's ready.
+      setStatus(`ready — ${msg.words.toLocaleString()} words (100% offline)`);
+      endBootProgress(); // hide the % readout…
+      // …and leave the divider as the full line (its resting look).
+      document.documentElement.style.setProperty("--progress", "100%");
       syncBusyUi();
       drain();
       if (queue.length === 0) input.focus();
@@ -376,6 +420,9 @@ function engineDown(message: string): void {
       /* never wedge on a pane */
     }
   }
+  // The engine is restarting from scratch: park the progress gauge — the
+  // fresh worker reports a new boot ladder from 0.
+  endBootProgress();
   ready = false;
   bootFailures++;
   if (bootFailures >= MAX_BOOT_FAILURES) {
@@ -693,3 +740,6 @@ clearBtn.innerHTML = TRASH_ICON_SVG;
 restoreState(); // input, max, last command and pane history from localStorage
 setControlsDisabled(true);
 setStatus("starting engine…", "busy");
+// The divider starts as a dot: from here the worker's boot milestones drive
+// it (and the % readout) to the full line at ready.
+setBootPct(0);

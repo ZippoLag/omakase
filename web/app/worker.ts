@@ -15,9 +15,53 @@ import type { WorkerMessage, WorkerRequest } from "./worker-api.js";
 /** OPFS path of the dictionary (also its URL on the server). */
 const DB_PATH = "/kanji.db";
 
+/**
+ * Startup progress ladder (0–100), monotonically rising until `ready`. Each
+ * stage announces its own floor as it finishes and the UI fills toward it,
+ * so the divider bar doubles as the boot gauge: a dot at 0% that grows to
+ * the full line at 100%.
+ *
+ * Only two stages can dominate a boot on a phone: the sqlite engine init
+ * (which exposes no measurable sub-progress — see `bootProgress`) and the
+ * dictionary import (byte-accurate). Everything between them is sub-second,
+ * so it simply snaps up when it finishes.
+ */
+const BOOT_ENGINE_PCT = 30; // engine init — the biggest unmeasured share
+/** Byte-accurate import maps into [IMPORT_PCT_BASE, IMPORT_PCT_TOP]. */
+const IMPORT_PCT_BASE = 34;
+const IMPORT_PCT_TOP = 92;
+/** Tail floors (no-import boots; an import already sits above these). */
+const BOOT_OPEN_PCT = 55; // dictionary open (OPFS probe + open done)
+const BOOT_TAGS_PCT = 78; // tag/index rows loaded
+const BOOT_TAIL_PCT = 96; // final word-count / meta reads
+
 const send = (msg: WorkerMessage): void => {
   (postMessage as (m: WorkerMessage) => void)(msg);
 };
+
+/**
+ * Resolve `p` while easing the boot bar toward `ceiling` (the stage's
+ * weight): engine init exposes no internal progress, so without this the
+ * bar would sit still for the whole stage — indistinguishable from a hang.
+ * The approach is asymptotic and capped just below `ceiling`, so the bar
+ * keeps moving for as long as the stage actually takes and the ceiling is
+ * only claimed by the next milestone.
+ */
+function bootProgress<T>(p: Promise<T>, ceiling: number): Promise<T> {
+  let pct = 0;
+  const iv = setInterval(() => {
+    pct += (ceiling - pct) * 0.15;
+    send({ kind: "boot", pct: Math.min(Math.round(pct * 10) / 10, ceiling - 1.05) });
+  }, 150);
+  p.then(() => clearInterval(iv), () => clearInterval(iv));
+  return p;
+}
+
+/** Map an import byte fraction onto its stage of the boot ladder. */
+function importPct(loaded: number, total: number): number {
+  if (total <= 0) return IMPORT_PCT_TOP;
+  return IMPORT_PCT_BASE + ((IMPORT_PCT_TOP - IMPORT_PCT_BASE) * loaded) / total;
+}
 
 let db: WasmDb | null = null;
 let tags: Record<string, string> = {};
@@ -77,7 +121,9 @@ type OpfsDbCtor = {
   new (filename: string, flags: string): OpfsDatabase;
 };
 
-/** Stream the served kanji.db into OPFS (importDb truncates any old file). */
+/** Stream the served kanji.db into OPFS (importDb truncates any old file).
+ * Each chunk reports byte-accurate progress mapped onto the boot ladder, so
+ * the divider bar and % readout keep moving for the whole download. */
 async function importDictionary(OpfsDb: OpfsDbCtor, status: string): Promise<OpfsDatabase> {
   send({ kind: "status", text: status });
   const res = await fetch(DB_PATH);
@@ -90,11 +136,13 @@ async function importDictionary(OpfsDb: OpfsDbCtor, status: string): Promise<Opf
   await OpfsDb.importDb(DB_PATH, async () => {
     const { done, value } = await reader.read();
     if (done) {
-      send({ kind: "progress", loadedBytes: loaded, totalBytes: total });
+      send({ kind: "progress", pct: importPct(loaded, total), loadedBytes: loaded, totalBytes: total });
       return undefined;
     }
     loaded += value.byteLength;
-    if (total > 0) send({ kind: "progress", loadedBytes: loaded, totalBytes: total });
+    if (total > 0) {
+      send({ kind: "progress", pct: importPct(loaded, total), loadedBytes: loaded, totalBytes: total });
+    }
     return value;
   });
   return new OpfsDb(DB_PATH, "r");
@@ -102,10 +150,19 @@ async function importDictionary(OpfsDb: OpfsDbCtor, status: string): Promise<Opf
 
 async function boot(): Promise<void> {
   try {
-    const engine = await sqlite3InitModule();
+    // sqlite engine init: no measurable sub-progress — bootProgress keeps the
+    // gauge moving while it runs (see the ladder comment above).
+    const engine = await bootProgress(sqlite3InitModule(), BOOT_ENGINE_PCT);
+    // Dictionary check + import (byte-accurate progress) or plain open. After
+    // an import the ladder already sits past these floors, so the main thread
+    // ignores them (its gauge only ever moves forward); on a no-import boot
+    // they are the real milestones.
     const raw = await ensureDb(engine);
+    send({ kind: "boot", pct: BOOT_OPEN_PCT });
     db = new WasmDb(raw);
     tags = loadTags(db);
+    send({ kind: "boot", pct: BOOT_TAGS_PCT });
+    send({ kind: "boot", pct: BOOT_TAIL_PCT });
     const n = db.prepare("SELECT COUNT(*) AS n FROM words").get() as { n: number } | undefined;
     const row = db.prepare("SELECT value FROM meta WHERE key = 'version'").get() as { value: string } | undefined;
     send({

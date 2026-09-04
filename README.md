@@ -316,9 +316,10 @@ dictionary build: 0.1.0-build.10 (22 commits, 9f3c2b1)
 ```
 
 `omakase --version` (also `-V`) needs no database for the app line; the
-`dictionary build:` line appears when the DB carries a stamp. The web app
-shows the same version in its header badge and status bar (the badge's
-hover tooltip adds the dictionary build).
+`dictionary build:` line appears when the DB carries a stamp. In the web app
+the version lives in the header badge (hovering it shows the full stamp and
+the dictionary build); the status bar keeps startup progress while the
+engine boots and then a terse `ready — 218,577 words (100% offline)`.
 
 ## Phone web app (fully offline)
 

@@ -61,14 +61,35 @@ h1 {
   align-self: center;
 }
 
+/* Status line: the message ellipsizes before the boot % readout, which is a
+   flex-none sibling pinned at the line's end so a long message can never
+   clip it. */
 #status {
   font-size: 12px;
   color: var(--muted);
+  display: flex;
+  align-items: baseline;
+  justify-content: flex-end;
+  gap: 6px;
+  min-width: 0;
+  flex: 1;
+}
+
+#status .status-msg {
+  min-width: 0;
   overflow: hidden;
   text-overflow: ellipsis;
   white-space: nowrap;
-  flex: 1;
-  text-align: right;
+}
+
+/* Live boot progress readout — “x%” next to the status message while the
+   engine starts / dictionary imports; hidden once ready. The gauge it
+   mirrors is the divider line under the controls (#lookup::after). */
+#status .pct {
+  flex: none;
+  color: var(--accent);
+  font-weight: 700;
+  font-variant-numeric: tabular-nums;
 }
 
 /* Header trashbin: deletes every result pane (clears the persisted history). */
@@ -99,7 +120,16 @@ h1 {
   cursor: default;
 }
 
-#status.error { color: var(--accent); white-space: normal; text-align: left; }
+#status.error {
+  color: var(--accent);
+  justify-content: flex-start;
+  white-space: normal;
+}
+
+#status.error .status-msg {
+  white-space: normal;
+  overflow: visible;
+}
 
 /* ---- control row ----------------------------------------------------------- */
 #lookup {
@@ -114,13 +144,17 @@ h1 {
   box-shadow: 0 1px 0 rgba(0, 0, 0, 0.03);
 }
 
-#lookup::after { /* import progress, thin bar under the controls */
+#lookup::after { /* boot progress: the divider under the controls doubles as
+                     the startup gauge — a tiny dot at 0% that fills to the
+                     full line (100%) once the engine reports ready */
   content: "";
   display: block;
   position: absolute;
   left: 0;
   bottom: 0;
   height: 2px;
+  min-width: 2px; /* even at 0% the gauge's start reads as a dot */
+  border-radius: 1px;
   width: var(--progress);
   background: var(--accent);
   transition: width 0.3s ease;

@@ -24,8 +24,16 @@ export type WorkerRequest = RunRequest;
 /** Worker -> main thread notifications. */
 export type WorkerMessage =
   | { kind: "status"; text: string }
-  /** First import of the dictionary into OPFS is underway. */
-  | { kind: "progress"; loadedBytes: number; totalBytes: number }
+  /** A boot milestone: the overall startup progress (0–100) the engine has
+   * reached, monotonic until `ready`. The UI drives its divider progress bar
+   * and the % readout from these — see worker.ts for how each stage lands on
+   * the ladder (stages with no measurable sub-progress ease toward their
+   * floor so the bar never freezes while one runs). */
+  | { kind: "boot"; pct: number }
+  /** Dictionary import into OPFS is underway. `pct` is the same overall boot
+   * progress as `boot`, mapped over the import stage (byte-accurate);
+   * `loadedBytes`/`totalBytes` feed the MB readout. */
+  | { kind: "progress"; pct: number; loadedBytes: number; totalBytes: number }
   /** Engine + dictionary are open and queries can be served. `dict` is the
    * dictionary's own build stamp from DB meta (null for pre-versioning DBs). */
   | { kind: "ready"; version: string; words: number; dict: string | null }

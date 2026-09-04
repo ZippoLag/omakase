@@ -135,6 +135,23 @@ async function main() {
 
     console.log("→ first visit (imports dictionary into OPFS)…");
     await page.goto(URL, { waitUntil: "load", timeout: 60000 });
+    // While the engine starts / dictionary imports, boot must report itself:
+    // a live % readout next to the status message and the divider gauge under
+    // the controls, starting from its 0% dot. Sampled right after load — the
+    // 289 MB import below guarantees a long boot window still ahead.
+    const bootProbe = await page.evaluate(() => {
+      const pct = document.querySelector("#status .pct");
+      const pctText = pct?.textContent ?? "";
+      return {
+        pctVisible: !!pct && !pct.hidden && /\d+%/.test(pctText),
+        prog: getComputedStyle(document.documentElement).getPropertyValue("--progress").trim(),
+      };
+    });
+    check(
+      "boot: % readout next to the status, gauge below 100%",
+      bootProbe.pctVisible && bootProbe.prog !== "100%",
+      JSON.stringify(bootProbe),
+    );
     const statusText = await waitFor(
       page,
       () => page.evaluate(() => {
@@ -144,12 +161,17 @@ async function main() {
       180000,
       "worker ready (dictionary import)",
     );
-    check("engine ready, dictionary in OPFS", statusText.includes("ready"), statusText);
-    check("word count reported", /ready — \d/.test(statusText), statusText.split("ready")[1]?.trim());
+    check("engine ready, dictionary in OPFS", statusText.startsWith("ready —"), statusText);
+    // The ready status is deliberately terse — word count + the offline note.
+    // The build provenance (v<ver>-build.<n>, commits, SQLite version) lives
+    // in the header badge's hover tooltip instead (checked below). The count
+    // may use any locale grouping (218.577 vs 218,577), so only the shape is
+    // pinned.
+    const terseReady = /^ready — [\d.,\s]+ words \(100% offline\)$/.test(statusText);
     check(
-      "status reports the app version (v<ver>-build.<n>)",
-      /v\d+\.\d+\.\d+-build\.\d+/.test(statusText),
-      statusText.split("ready")[1]?.trim(),
+      "ready status: word count + offline note only (no build stamp)",
+      terseReady && !statusText.includes("-build.") && !statusText.includes("SQLite") && !statusText.includes("·"),
+      statusText,
     );
     const badge = await page.evaluate(() => {
       const el = document.querySelector("#version");
@@ -159,6 +181,21 @@ async function main() {
       "header badge shows the app version and (on ready) the dictionary stamp",
       /^v\d+\.\d+\.\d+-build\.\d+/.test(badge.text) && badge.title.includes("dictionary build:"),
       JSON.stringify(badge),
+    );
+    // Loading is done: the % readout is gone and the divider gauge sits at the
+    // full line (100%) — its resting look as the divider under the controls.
+    const readyProgress = await page.evaluate(() => {
+      const pct = document.querySelector("#status .pct");
+      return {
+        pctHidden: !!pct && pct.hidden,
+        pctText: pct?.textContent ?? "",
+        prog: getComputedStyle(document.documentElement).getPropertyValue("--progress").trim(),
+      };
+    });
+    check(
+      "ready: % readout gone, divider gauge full",
+      readyProgress.pctHidden && readyProgress.pctText === "" && readyProgress.prog === "100%",
+      JSON.stringify(readyProgress),
     );
 
     // default command highlight is search (before anything is clicked)
