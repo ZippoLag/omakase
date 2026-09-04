@@ -1106,3 +1106,70 @@ test("renderSearch: each section caps at max rows with a count + trailing note",
   assert.ok(!wide.includes("more"), "no truncation note under the cap");
   assert.equal(wide.split("\n").filter((l) => l.startsWith("  たべる  [たべる (taberu)]")).length, 35);
 });
+
+// ---- lookup performance guards ---------------------------------------------
+// loadWord reads a loaded word's furigana ruby through `furigana WHERE
+// word_id = ?` (src/lookup.ts). The full dictionary has 225k furigana rows;
+// while word_id was unindexed every loadWord full-scanned the table — ~0.5 s
+// per kanji page natively (a page loads 30 compound words) and tens of
+// seconds per lookup in the sqlite-wasm web worker (gloss searches load
+// hundreds of words). These guards keep the index in place (schema v3) and
+// prove the query planner actually uses it at full-dictionary scale.
+
+test("furigana word_id lookups use an index (schema v3, no full scan)", () => {
+  const db = buildFixtureDb();
+  try {
+    const idx = db.prepare(
+      "SELECT name FROM sqlite_master WHERE type = 'index' AND name = 'idx_furigana_word'",
+    ).get() as { name: string } | undefined;
+    assert.ok(idx, "schema carries idx_furigana_word on furigana(word_id)");
+    // The exact statement loadWord runs must seek the index, not scan.
+    const plan = db.prepare(
+      "EXPLAIN QUERY PLAN SELECT writing, segments FROM furigana WHERE word_id = ?",
+    ).all("1358280") as { detail: string }[];
+    const detail = plan.map((r) => r.detail).join(" | ");
+    assert.ok(detail.includes("USING INDEX idx_furigana_word"), detail);
+    assert.ok(!detail.includes("SCAN furigana"), detail);
+  } finally {
+    db.close();
+  }
+});
+
+test("loadWord answers in index time at full-size furigana scale", () => {
+  // 250k synthetic words, each with one furigana row (the real table is
+  // 225k). The probe word sits at the END of the table — an unindexed scan
+  // must visit every row before it, which costs hundreds of ms; the index
+  // path is microseconds. Kanji pages call loadWord 30 times per page.
+  const N = 250000;
+  const rows = transform(
+    { words: [] } as never,
+    { characters: [] } as never,
+    { version: "", kanji: {} } as KradfileFile,
+    { version: "", radicals: {} } as RadkfileFile,
+    [],
+  );
+  const db = buildDb(rows, { tags: "{}" }, { dbPath: ":memory:" });
+  try {
+    const insWord = db.prepare("INSERT INTO words (id, common) VALUES (?, 0)");
+    const insFuri = db.prepare(
+      "INSERT INTO furigana (word_id, writing, reading, segments) VALUES (?, '木', 'き', '木[き]')",
+    );
+    db.transaction(() => {
+      for (let i = 1; i <= N; i++) {
+        insWord.run(String(i));
+        insFuri.run(String(i));
+      }
+    })();
+    const t0 = performance.now();
+    const word = loadWord(db, String(N));
+    const ms = performance.now() - t0;
+    assert.ok(word != null);
+    assert.equal(word.furigana.get("木"), "木[き]");
+    assert.ok(
+      ms < 150,
+      `loadWord over ${N} furigana rows took ${ms.toFixed(1)} ms — idx_furigana_word missing?`,
+    );
+  } finally {
+    db.close();
+  }
+});

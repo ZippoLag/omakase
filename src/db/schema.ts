@@ -2,7 +2,7 @@
  * SQLite schema for the offline dictionary DB.
  * Mirrors data-model.md §3. Schema version must bump on any DDL change.
  */
-export const SCHEMA_VERSION = 2;
+export const SCHEMA_VERSION = 3;
 
 export const DDL = `
 PRAGMA foreign_keys = ON;
@@ -139,6 +139,7 @@ CREATE TABLE furigana (
   reading  TEXT NOT NULL,
   segments TEXT NOT NULL
 );
+CREATE INDEX idx_furigana_word ON furigana(word_id);
 
 CREATE TABLE sentences (
   id       INTEGER PRIMARY KEY,

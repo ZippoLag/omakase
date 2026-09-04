@@ -52,7 +52,7 @@ function check(name, ok, detail = "") {
   if (!ok) failures++;
 }
 
-async function waitFor(page, fn, timeoutMs, what) {
+async function waitFor(page, fn, timeoutMs, what, intervalMs = 250) {
   const start = Date.now();
   for (;;) {
     try {
@@ -60,7 +60,7 @@ async function waitFor(page, fn, timeoutMs, what) {
       if (v) return v;
     } catch { /* retry */ }
     if (Date.now() - start > timeoutMs) throw new Error(`timeout waiting for ${what}`);
-    await sleep(250);
+    await sleep(intervalMs);
   }
 }
 
@@ -81,8 +81,8 @@ async function runLookup(page, cmd, query) {
         return first && lastRun === q && !st.startsWith("starting") ? { text: first.querySelector("pre")?.textContent ?? "", err: first.classList.contains("error"), q: lastRun } : null;
       }, query),
       // The first lookup after the OPFS import reads a cold 318 MB DB
-      // (gloss FTS scoring loads hundreds of words through the async proxy
-      // and can take ~40 s before the page cache warms up).
+      // before the OS page cache warms up — generous ceiling (a warm lookup
+      // is expected to answer in well under a second; see the perf section).
       120000,
       "lookup result",
     );
@@ -294,34 +294,89 @@ async function main() {
     const noWidget = await page.evaluate(() =>
       !document.querySelector("#panes .pane:first-child .stroke-widget"));
     check("kanji reading search has no stroke widgets", noWidget, "list results are not kanji pages");
-    // multi-kanji: 制作者 = ranked Words section (all three kanji first),
-    // then one page per character identical to looking each up alone
+    // multi-kanji: a box holding several kanji resolves one kanji at a time
+    // as separate lookups — one pane per character, byte-identical to looking
+    // the character up alone. The panes stream in: the first renders while
+    // the later lookups are still queued (never after the whole batch), which
+    // is exactly what one-request-per-kanji buys on slow devices.
     const kanjiParts = [];
     for (const ch of ["制", "作", "者"]) {
       kanjiParts.push((await runLookup(page, "kanji", ch)).text);
     }
-    p = await runLookup(page, "kanji", "制作者");
-    const wordsFirst = /^Words \(\d+\):\n  制作者  \[/.test(p.text);
+    // Watch a multi-item lookup land: trace the pane count at ~10 ms
+    // granularity (a fast batch must not slip between checks) until every
+    // expected pane is up and the queue has drained.
+    const streamPanes = async (cmd, value, expect) => {
+      const base = await page.$$eval("#panes .pane", (els) => els.length);
+      const t0 = Date.now();
+      await page.evaluate(([c, v]) => {
+        const input = document.querySelector("#query");
+        input.value = v;
+        document.querySelector(`button[data-cmd="${c}"]`).click();
+      }, [cmd, value]);
+      const trace = [];
+      for (;;) {
+        const st = await page.evaluate((b) => {
+          const els = [...document.querySelectorAll("#panes .pane")];
+          const busy = document.querySelector("#lookup").hasAttribute("aria-busy");
+          // counter is shown while more than one lookup is still pending
+          const counter = document.querySelector("button[data-cmd] .queue-n")?.textContent ?? null;
+          return {
+            count: els.length - b,
+            busy,
+            counter,
+            topQ: els[0]?.querySelector(".pane-query")?.textContent ?? "",
+          };
+        }, base);
+        trace.push(st);
+        if (st.count >= expect.length && !st.busy) break;
+        if (Date.now() - t0 > 60000) throw new Error(`timeout streaming ${cmd} "${value}"`);
+        await sleep(10);
+      }
+      const panes = await page.evaluate(([b, n]) => [...document.querySelectorAll("#panes .pane")]
+        .slice(0, n).map((pn) => ({
+          q: pn.querySelector(".pane-query")?.textContent ?? "",
+          badge: pn.querySelector(".badge")?.textContent ?? "",
+          error: pn.classList.contains("error"),
+          text: pn.querySelector("pre")?.textContent ?? "",
+        })), [base, expect.length]);
+      return { trace, panes, totalMs: Date.now() - t0 };
+    };
+    // 制作者 box → three kanji lookups (制, then 作, then 者). Lookups are
+    // serialized, so the first pane lands while the queue still holds 作 + 者:
+    // count === 1 with the counter still visible proves progressive rendering.
+    const km = await streamPanes("kanji", "制作者", ["制", "作", "者"]);
+    const kmFirst = km.trace.find((t) => t.count === 1);
     check(
-      "multi-kanji: ranked Words section first, then one page per character",
-      wordsFirst && p.text.includes("制作者  [") && kanjiParts.every((t) => p.text.includes(t))
-        && p.text.endsWith(kanjiParts[2]),
-      `${p.text.length}B singles=${kanjiParts.map((t) => t.length).join(",")}B`,
+      "multi-kanji streams: 制 pane lands while 作 + 者 are still queued",
+      kmFirst?.topQ === "制" && kmFirst?.busy && kmFirst?.counter === "2",
+      JSON.stringify(kmFirst ?? km.trace),
     );
-    // one stroke-order widget per page character (制・作・者)
+    check(
+      "multi-kanji: 制作者 box → one pane per kanji, byte-equal to each standalone page",
+      km.panes.length === 3
+        && km.panes.map((d) => d.badge).join(",") === "kanji,kanji,kanji"
+        && km.panes.every((d) => !d.error)
+        && km.panes[0].text === kanjiParts[2]
+        && km.panes[1].text === kanjiParts[1]
+        && km.panes[2].text === kanjiParts[0],
+      `top-down ${km.panes.map((d) => d.q).join(",")} in ${km.totalMs} ms`,
+    );
+    // one stroke-order widget per pane — each per-kanji pane mounts its own
     const multiWidgets = await waitFor(
       page,
       () => page.evaluate(() => {
-        const figs = [...document.querySelectorAll("#panes .pane:first-child .stroke-widget")];
-        return figs.length === 3 && figs.every((f) => f.querySelectorAll("svg path").length > 0)
-          ? figs.map((f) => f.querySelector(".stroke-label")?.textContent ?? "")
+        const panes = [...document.querySelectorAll("#panes .pane")].slice(0, 3);
+        const figs = panes.map((pn) => pn.querySelectorAll(".stroke-widget svg.stroke-svg path").length);
+        return figs.length === 3 && figs.every((n) => n > 0)
+          ? panes.map((pn) => pn.querySelector(".stroke-label")?.textContent ?? "")
           : null;
       }),
       30000,
-      "multi-kanji stroke widgets",
+      "per-kanji stroke widgets",
     );
     check(
-      "multi-kanji pane: one stroke widget per page character",
+      "multi-kanji: each per-kanji pane mounts its own stroke widget (制, 作, 者)",
       Array.isArray(multiWidgets) && multiWidgets.length === 3
         && ["制", "作", "者"].every((c) => multiWidgets.some((l) => l.startsWith(`${c} ·`))),
       JSON.stringify(multiWidgets),
@@ -430,9 +485,12 @@ async function main() {
       !!tokKanjiPane && tokKanjiPane.includes("strokes"),
       tokKanjiPane ? tokKanjiPane.slice(0, 40) : "(none)",
     );
-    // multi-kanji Words row: the ranked word gets an icon, each character a button
-    p = await runLookup(page, "kanji", "制作者");
-    const multiTok = await page.evaluate(() => {
+    // A search result list is one two-space word row per hit: the exact
+    // reading せいさくしゃ matches 制作者 alone, and that row carries the
+    // word icon + keeps its kanji clickable — a `word 制作者` magnifier
+    // target for the queued-action probes below.
+    p = await runLookup(page, "search", "せいさくしゃ");
+    const seisakushaTok = await page.evaluate(() => {
       const pre = document.querySelector("#panes .pane:first-child pre");
       return {
         icons: [...pre.querySelectorAll(".tok-word")].map((b) => b.title),
@@ -440,32 +498,10 @@ async function main() {
       };
     });
     check(
-      "tokens: multi-kanji Words row icon + per-char buttons",
-      multiTok.icons.includes("word 制作者")
-        && ["制", "作", "者"].every((c) => multiTok.kanji.includes(c)),
-      JSON.stringify({ icons: multiTok.icons.slice(0, 3), kanji: [...new Set(multiTok.kanji)].slice(0, 8) }),
-    );
-    // click the word icon on 制作者 → `word 制作者` in the box
-    await page.evaluate(() => {
-      const b = [...document.querySelectorAll("#panes .pane:first-child pre .tok-word")]
-        .find((x) => x.title === "word 制作者");
-      b.click();
-    });
-    const tokSeisakusha = await waitFor(
-      page,
-      () => page.evaluate(() => {
-        const first = document.querySelector("#panes .pane");
-        return first && first.querySelector(".badge")?.textContent === "word"
-          && first.querySelector(".pane-query")?.textContent === "制作者"
-          ? first.querySelector("pre")?.textContent : null;
-      }),
-      30000,
-      "word icon click (制作者)",
-    );
-    check(
-      "tokens: word icon click → word 制作者 pane",
-      !!tokSeisakusha && tokSeisakusha.includes("Writings"),
-      tokSeisakusha ? tokSeisakusha.slice(0, 40) : "(none)",
+      "tokens: search hit row has the word icon + clickable kanji (word 制作者)",
+      seisakushaTok.icons.includes("word 制作者")
+        && ["制", "作", "者"].every((c) => seisakushaTok.kanji.includes(c)),
+      JSON.stringify({ icons: seisakushaTok.icons.slice(0, 3), kanji: [...new Set(seisakushaTok.kanji)].slice(0, 8) }),
     );
 
     // ---- queued actions: clicks during a lookup enqueue, never drop ------
@@ -741,17 +777,18 @@ async function main() {
         && kan.text.includes("On:") && kan.text.includes("eat"),
       kan ? `${kan.text.slice(0, 40)}…` : "(none)",
     );
-    // 制・作者 strips to 制作者: the exact multi-kanji run (ranked Words
-    // section first, then one page per character — same output as the typed
-    // 制作者 verified above).
-    kan = await onePane("kanji", "制・作者", "制作者");
+    // 制・作者 ignores the punctuation and looks up each kanji separately —
+    // the same three per-kanji panes the plain 制作者 box produced above.
+    const km2 = await streamPanes("kanji", "制・作者", ["制", "作", "者"]);
     check(
-      "kanji: 制・作者 → punctuation ignored, one page per individual kanji",
-      kan?.badge === "kanji" && !kan.error
-        && /^Words \(\d+\):\n  制作者  \[/.test(kan.text)
-        && kanjiParts.every((t) => kan.text.includes(t))
-        && kan.text.endsWith(kanjiParts[2]),
-      kan ? `${kan.text.length}B pages=${kanjiParts.map((t) => t.length).join(",")}B` : "(none)",
+      "kanji: 制・作者 → punctuation ignored, one pane per individual kanji",
+      km2.panes.length === 3
+        && km2.panes.map((d) => d.badge).join(",") === "kanji,kanji,kanji"
+        && km2.panes.every((d) => !d.error)
+        && km2.panes[0].text === kanjiParts[2]
+        && km2.panes[1].text === kanjiParts[1]
+        && km2.panes[2].text === kanjiParts[0],
+      `top-down ${km2.panes.map((d) => d.q).join(",")} in ${km2.totalMs} ms`,
     );
     // A box with no kanji at all is left untouched: the reading search still
     // runs (kana/romaji queries must not be stripped to nothing).
@@ -903,6 +940,50 @@ async function main() {
     );
     await page.setOfflineMode(false);
 
+    // ---- lookup performance: every flow answers within budget ---------------
+    // Regression guard for the dictionary query layer. The ruby for a loaded
+    // word is read through `furigana WHERE word_id = ?`; while that column was
+    // unindexed every loadWord paid a full scan of the 225k-row furigana
+    // table — ~0.5 s per kanji page natively and tens of seconds per lookup
+    // in the WASM worker (kanji pages load 30 words, gloss searches hundreds).
+    // Each flow below must answer well within budget on warm caches, and
+    // multi-item flows must stream one pane at a time instead of rendering
+    // after the whole batch.
+    await page.evaluate(() => document.querySelector("#clear").click());
+    const timed = async (cmd, value) => {
+      const r = await streamPanes(cmd, value, [value]);
+      return { ms: r.totalMs, pane: r.panes[0] };
+    };
+    // warm every path once (page cache for kanji.db + worker code paths)
+    await timed("search", "water");
+    const tk = await timed("kanji", "木");
+    check(
+      "perf: single kanji 木 answers quickly (furigana word lookups indexed)",
+      !tk.pane.error && tk.ms < 5000,
+      `${tk.ms} ms`,
+    );
+    const tw = await timed("word", "走る");
+    check(
+      "perf: single word 走る answers quickly (thesaurus + ruby included)",
+      !tw.pane.error && tw.ms < 5000,
+      `${tw.ms} ms`,
+    );
+    const ts = await timed("search", "develop");
+    check(
+      "perf: English search develop answers quickly (no full scans)",
+      !ts.pane.error && ts.ms < 8000,
+      `${ts.ms} ms`,
+    );
+    // multi-word box streams too: 水's pane lands while 食事 is still queued
+    const wstream = await streamPanes("word", "水 食事", ["食事", "水"]);
+    const wFirst = wstream.trace.find((t) => t.count === 1);
+    check(
+      "perf: multi-word box streams — 水 lands while 食事 is still queued",
+      wFirst?.topQ === "水" && wFirst?.busy
+        && wstream.panes.length === 2 && wstream.totalMs < 8000,
+      `batch ${wstream.totalMs} ms; trace ${wstream.trace.map((t) => `${t.count}${t.busy ? "b" : "i"}`).join(",")}`,
+    );
+
     // ---- interactive hover / keyboard-focus feedback -----------------------
     // Runs last so the pointer/focus probes can't disturb any later lookup.
     // The suite runs under a mobile-touch viewport (hover: none), so the
@@ -915,6 +996,10 @@ async function main() {
     const weight = (sel) => page.$eval(sel, (el) => getComputedStyle(el).fontWeight);
     const hover = async (sel) => { // center the pointer over the element
       for (let i = 0; i < 4; i++) {
+        // Bring the target to viewport center first: panes land under the
+        // sticky header when a lookup smooth-scrolls them in, so a probe that
+        // hovers the top row's icon without scrolling would hover the header.
+        await page.$eval(sel, (el) => el.scrollIntoView({ block: "center", inline: "nearest" }));
         const b = await page.$eval(sel, (el) => {
           const r = el.getBoundingClientRect();
           return { x: r.x, y: r.y, w: r.width, h: r.height };

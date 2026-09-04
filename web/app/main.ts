@@ -13,7 +13,11 @@
  * queues a single word-水 lookup, not two — and a lookup that is already
  * pending (queued or in flight) is never enqueued again. A `kanji` box ignores every
  * character that is not a kanji, so each kanji it contains still gets its
- * page. The `search` action is unchanged.
+ * page — and each kanji a box holds becomes its own lookup (制・作者 queues
+ * kanji 制, kanji 作, kanji 者), so a multi-kanji box resolves one kanji at
+ * a time: every pane is exactly what looking that character up alone
+ * returns, and each appears as soon as its own lookup finishes instead of
+ * after the whole batch. The `search` action is unchanged.
  *
  * While several lookups are pending (more than one action in the queue) the
  * busy button shows a small counter with how many result panes are still to
@@ -150,6 +154,19 @@ function kanjiQuery(raw: string): string {
   return literals.length > 0 ? literals.join("") : raw.trim();
 }
 
+/**
+ * The lookups a `kanji` click enqueues, in box order: when the box holds
+ * kanji, ONE lookup per kanji literal — 制・作者 → 制, 作, 者 — so each
+ * character's page is its own lookup, landing (and rendering) one at a time
+ * instead of after the whole batch, byte-identical to looking it up alone.
+ * A box with no kanji at all (kana or romaji, e.g. a reading search) stays a
+ * single query, unchanged.
+ */
+function kanjiQueries(raw: string): string[] {
+  const stripped = kanjiQuery(raw);
+  return KANJI_RE.test(stripped) ? [...stripped] : [stripped];
+}
+
 // ---- queue -----------------------------------------------------------------
 /**
  * Fire an action for the box's current contents (captured now, so later
@@ -166,7 +183,7 @@ function submit(command: Command): void {
   const queries = command === "word"
     ? wordTokens(raw)
     : command === "kanji"
-      ? [kanjiQuery(raw)]
+      ? kanjiQueries(raw)
       : [raw.trim()];
   // Repeated lookups collapse before anything is enqueued — both repeats
   // inside one action (a word box like 水 水 queues a single lookup) and

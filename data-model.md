@@ -196,6 +196,7 @@ CREATE TABLE furigana (
   reading  TEXT NOT NULL,              -- the paired kana reading
   segments TEXT NOT NULL               -- ruby-marked string, e.g. '食[た]べる'
 );
+CREATE INDEX idx_furigana_word ON furigana(word_id);  -- ruby lookup per word (loadWord)
 
 -- ============ Enrichment: sentences (curated Tatoeba) ============
 CREATE TABLE sentences (
@@ -275,6 +276,7 @@ CREATE VIRTUAL TABLE glosses_fts USING fts5(
 | Thesaurus fallback (words with no links) | one quoted `glosses_fts MATCH` per distinctive gloss token, scored ln(1 + N/df), same coarse POS preferred | FTS5 unicode61 |
 | Stroke order for a kanji | `stroke_order WHERE kanji = ?` | PK |
 | Romaji input | `writings.romaji` prefix | `idx_writings_romaji` |
+| Furigana ruby for a loaded word | `furigana WHERE word_id = ?` | `idx_furigana_word` |
 
 ---
 

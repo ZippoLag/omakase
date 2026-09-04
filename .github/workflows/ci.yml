@@ -32,6 +32,9 @@ jobs:
       - name: Typecheck
         run: pnpm run typecheck
 
+      # Golden tests also carry the node-level perf guards (schema v3
+      # idx_furigana_word + the 250k-row loadWord timing budget in
+      # tests/lookups.test.ts) — both fail on the unindexed schema.
       - name: Golden tests
         run: pnpm test
 
@@ -52,3 +55,86 @@ jobs:
 
       - name: Conjugation validation (3,511-table diff + [G] gap fixtures)
         run: pnpm run validate:conjugations
+
+  # Web e2e suite against the REAL dictionary: builds dist/kanji.db from the
+  # pinned sources, assembles dist/, and drives the installed Chrome headless
+  # through scripts/verify-web.mjs. Besides the 70+ functional checks this
+  # runs the lookup perf budgets — single kanji / word / English search must
+  # answer within wall-clock budgets in the sqlite-wasm worker, and multi-item
+  # flows must stream one pane at a time — so a query-layer regression (like
+  # the unindexed furigana table) fails the build. The node-level perf guards
+  # run in `pnpm test` above; this job guards the full WASM-in-browser path.
+  web-e2e:
+    runs-on: ubuntu-latest
+    timeout-minutes: 40
+    steps:
+      - uses: actions/checkout@v4
+
+      # Same Node constraint as the test job (better-sqlite3 native binding).
+      - uses: actions/setup-node@v4
+        with:
+          node-version-file: .nvmrc
+          cache: pnpm
+
+      - name: Enable corepack
+        run: corepack enable
+
+      - name: Install dependencies
+        run: pnpm install --frozen-lockfile
+
+      # Pinned source releases (~170 MB under data/raw) download once per pin.
+      # data/build/fetch.ts re-verifies every sha256 even on cache hits, so a
+      # stale or corrupted cache re-downloads instead of building from bad
+      # data. Keyed on config.ts, which carries all the pins.
+      - name: Cache dictionary sources (data/raw)
+        id: sources
+        uses: actions/cache@v4
+        with:
+          path: data/raw
+          key: omakase-raw-${{ hashFiles('data/build/config.ts') }}
+
+      # The built dictionary (320 MB kanji.db + stroke SVGs + meta) is the
+      # expensive output; repeat runs restore it and skip the multi-minute
+      # transform. The key covers every input that changes the DB bytes:
+      # source pins, the schema, and the build/parse code.
+      - name: Cache built dictionary (dist/)
+        id: db
+        uses: actions/cache@v4
+        with:
+          path: |
+            dist/kanji.db
+            dist/meta.json
+            dist/strokes
+          key: omakase-db-${{ hashFiles('data/build/config.ts', 'data/build/fetch.ts', 'data/build/parse.ts', 'data/build/transform.ts', 'data/build/buildDb.ts', 'src/db/schema.ts') }}
+
+      - name: Build dictionary (dist/kanji.db)
+        if: steps.db.outputs.cache-hit != 'true'
+        run: pnpm run build:db
+
+      - name: Build web app (dist/)
+        run: pnpm run web:build
+
+      # verify-web serves dist/ over https (OPFS/service worker need a secure
+      # context), but the runner has no mkcert CA — so mint a throwaway
+      # self-signed cert. Chrome launches with --ignore-certificate-errors
+      # (already in verify-web.mjs), so no trust-store setup is needed.
+      - name: Generate TLS cert for the e2e https server
+        run: |
+          mkdir -p web/.certs
+          openssl req -x509 -newkey rsa:2048 -nodes \
+            -keyout web/.certs/key.pem -out web/.certs/cert.pem \
+            -days 2 -subj "/CN=127.0.0.1" \
+            -addext "subjectAltName=IP:127.0.0.1,DNS:localhost" 2>/dev/null
+
+      # verify-web drives the *installed* browser (puppeteer-core, no bundled
+      # download) — point it at whichever Chrome/Chromium the runner ships.
+      - name: Locate Chrome/Chromium
+        run: |
+          for c in /usr/bin/google-chrome /usr/bin/google-chrome-stable /usr/bin/chromium /usr/bin/chromium-browser; do
+            if [ -x "$c" ]; then echo "CHROME_PATH=$c" >> "$GITHUB_ENV"; echo "Using $c"; exit 0; fi
+          done
+          echo "::error::verify-web.mjs needs an installed Chrome/Chromium (puppeteer-core) — none found on this runner"
+          exit 1
+
+      - name: Run e2e verification incl. lookup perf budgets
+        run: pnpm run web:verify

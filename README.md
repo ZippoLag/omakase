@@ -350,11 +350,20 @@ returns), with repeats deduplicated (`水 水` → one 水 lookup, and
 `水, 水, 食事` → the 水 and 食事 panes only). Dedupe also reaches across
 actions: a lookup that is already pending — queued or in flight — is never
 enqueued again, so clicking the same kanji or word token twice in a row
-still yields a single pane. **kanji** ignores every
-non-kanji character in the box (`食べる` → 食, `制・作者` → 制作者), so the
-page for each individual kanji always comes back; kana/romaji boxes still
-run the kanji-by-reading search. **search** is unchanged — it always gets
-the raw query, verbatim.
+still yields a single pane. **kanji** ignores every non-kanji character in
+the box (`食べる` → 食) and then looks up **each kanji it contains as its own
+lookup** — `制・作者` → `kanji 制` + `kanji 作` + `kanji 者`, one per
+character — so every individual kanji page comes back, each byte-identical
+to looking the character up alone and each rendered as soon as its own
+lookup finishes (a multi-kanji box resolves one kanji at a time instead of
+freezing until the whole batch is ready); kana/romaji boxes still run the
+kanji-by-reading search. **search** is unchanged — it always gets the raw
+query, verbatim.
+
+Lookups are fast because the shared query layer never full-scans: every
+word a kanji page or a search loads reads its furigana ruby through the
+indexed `furigana(word_id)` lookup (`idx_furigana_word`, schema v3), which
+kept a single kanji page in the WASM engine from taking seconds on a phone.
 
 Result panes are interactive: every kanji character shown is individually
 tappable (equivalent to typing it alone and pressing **kanji**), and each
@@ -362,9 +371,10 @@ dictionary word displayed in a list (compounds, multi-kanji “Words”, search
 hits, thesaurus rows) carries a small magnifier icon at its left that looks
 the whole word up (equivalent to typing it and pressing **word**).
 
-Kanji pages also get a **stroke-order animation**: the pane opens with a
-widget per page character (so `kanji 制作者` shows three) that draws the
-character's strokes in order, with a ↻ button to replay. The diagrams come
+Kanji pages also get a **stroke-order animation**: each kanji pane opens
+with a widget for its character that draws the strokes in order, with a ↻
+button to replay (a multi-kanji box yields one such pane per character, so
+`kanji 制作者` mounts three widgets across its three panes). The diagrams come
 from the same KanjiVG svg files the CLI's `--strokes` uses — they are fetched
 lazily (a few KB each, cached by the service worker on first view), so the
 first kanji page you open adds nothing to the one-time dictionary import.
