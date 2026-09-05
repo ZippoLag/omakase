@@ -19,9 +19,17 @@
  * returns, and each appears as soon as its own lookup finishes instead of
  * after the whole batch. The `search` action is unchanged.
  *
- * While several lookups are pending (more than one action in the queue) the
- * busy button shows a small counter with how many result panes are still to
- * come, counting down as each lands.
+ * Every lookup streams: the pane (header + skeleton rows) appears the moment
+ * its lookup starts, the worker posts each rendered section as it completes
+ * (entry body → thesaurus → examples for word, Readings → Meanings → Kanji
+ * for search, the page for kanji), and the pane body fills in as sections
+ * land — the divider bar under the controls shows the current operation's
+ * completion (ladder floors per section, real counted % inside the long
+ * meaning search), and the % readout sits next to the status message.
+ *
+ * While several lookups are pending, each command button shows a small badge
+ * with how many panes of ITS kind are still queued behind the one in flight
+ * (the spinner marks the running lookup), counting down as each lands.
  *
  * The input box, the last pressed command, the max count and the result
  * history are persisted to localStorage and restored on reload; each pane
@@ -30,6 +38,7 @@
  * errors, a worker that crashes, or one that never answers all drain back to
  * an idle, usable control row.
  */
+import { OP_LADDERS } from "./worker-api.js";
 import type { Command, StrokePage, WorkerMessage, WorkerRequest } from "./worker-api.js";
 import { strokeWidgetFigure } from "./stroke-widget.js";
 import { VERSION, VERSION_FULL } from "../../src/version.js";
@@ -78,6 +87,23 @@ let inFlight = false;
 let engineDead = false;
 /** Consecutive engine-downs without a ready in between (reset on ready). */
 let bootFailures = 0;
+
+// ---- per-operation streaming + progress -------------------------------------
+/** Skeleton panes keyed by the in-flight request id (created at drain). */
+const paneByOpId = new Map<number, HTMLElement>();
+/** Raw section texts per request, concatenated into the final pane text. */
+const opTexts = new Map<number, string[]>();
+/** The request whose sections/progress currently drive the divider bar. */
+let opActiveId: number | null = null;
+let opCommand: Command | null = null;
+/** Last ladder label claimed by a streamed section (drives the next eased target). */
+let lastSectionClaimed: string | null = null;
+/** Monotonic progress floor of the current operation (0–100, never backwards). */
+let opFloor = 0;
+/** Eased creep between sections (the bar keeps moving during sync stretches). */
+let opTicker: ReturnType<typeof setInterval> | null = null;
+/** Word count from the ready message, for restoring the idle status line. */
+let readyWords = 0;
 
 // ---- persistent state (localStorage) ---------------------------------------
 /** One result pane as persisted/restored (the CLI text + how it was asked).
@@ -163,6 +189,142 @@ function endBootProgress(): void {
   pctEl.textContent = "";
   pctEl.hidden = true;
   document.documentElement.style.setProperty("--progress", "0%");
+}
+
+// ---- per-operation progress (the divider bar + % readout during lookups) ---
+/** A lookup started: reset the bar to its dot and ease toward the first floor. */
+function startOpProgress(item: Pending): void {
+  endOpProgress();
+  opActiveId = item.id;
+  opCommand = item.command;
+  lastSectionClaimed = null;
+  // Reset the shared monotonic driver (boot is long over by now).
+  bootPct = 0;
+  lastPctText = -1;
+  pctEl.hidden = false;
+  setOpPct(0);
+  setStatus(`looking up ${item.query}…`, "busy");
+  armOpTicker(item.command);
+}
+
+/** A streamed section landed: claim its ladder floor, ease toward the next. */
+function opSectionClaim(label: string): void {
+  if (opActiveId === null || opCommand === null) return;
+  lastSectionClaimed = label;
+  const floor = OP_LADDERS[opCommand].floors[label] ?? 100;
+  setOpPct(floor);
+  armOpTicker(opCommand);
+}
+
+/** Monotonic progress write (shares the boot driver; ops reset it first). */
+function setOpPct(pct: number): void {
+  if (!Number.isFinite(pct)) return;
+  if (pct > opFloor) opFloor = pct;
+  setBootPct(pct);
+}
+
+function disarmOpTicker(): void {
+  if (opTicker !== null) {
+    clearInterval(opTicker);
+    opTicker = null;
+  }
+}
+
+/**
+ * Eased creep toward the next section's floor while waiting for it — the
+ * synchronous stretches between sections have no measurable progress, so
+ * without this the bar would freeze mid-op. Counted sections (search
+ * meanings) own the bar instead: the creep only proves liveness until the
+ * first counted value lands, then real values climb it monotonically.
+ */
+function armOpTicker(command: Command): void {
+  disarmOpTicker();
+  const ladder = OP_LADDERS[command];
+  const idx = lastSectionClaimed ? ladder.order.indexOf(lastSectionClaimed) : -1;
+  const next = idx >= 0 && idx + 1 < ladder.order.length ? ladder.order[idx + 1]! : null;
+  let target: number;
+  if (next === null) {
+    target = 99; // every section streamed — creep toward the finish line
+  } else if (ladder.counted.has(next)) {
+    target = Math.min(opFloor + 5, 99); // the counted section drives the climb
+  } else {
+    target = Math.max(Math.min(ladder.floors[next] ?? 99, 99), opFloor + 0.5);
+  }
+  opTicker = setInterval(() => {
+    setOpPct(opFloor + (target - opFloor) * 0.15);
+  }, 150);
+}
+
+/**
+ * The operation finished (or the engine died): stop the creep. With the queue
+ * drained the divider rests at its full line, the % readout hides and the
+ * terse ready line returns; with more panes queued the next drain resets the
+ * bar to its dot.
+ */
+function endOpProgress(): void {
+  disarmOpTicker();
+  opActiveId = null;
+  opCommand = null;
+  lastSectionClaimed = null;
+  opFloor = 0;
+  if (queue.length === 0) {
+    pctEl.textContent = "";
+    pctEl.hidden = true;
+    document.documentElement.style.setProperty("--progress", "100%");
+    setStatus(`ready — ${readyWords.toLocaleString()} words (100% offline)`);
+  }
+}
+
+// ---- streaming panes --------------------------------------------------------
+/**
+ * The pane for a dequeued lookup, created immediately: header + a few
+ * skeleton rows (the worker's streamed sections fill the body in). Kept out
+ * of the history until its final `result` lands, so a crash mid-lookup never
+ * persists a half-built pane.
+ */
+function addSkeletonPane(item: Pending): void {
+  const pane = document.createElement("section");
+  pane.className = "pane streaming";
+  const head = document.createElement("div");
+  head.className = "pane-head";
+  const badge = document.createElement("span");
+  badge.className = "badge";
+  badge.textContent = item.command;
+  const q = document.createElement("span");
+  q.className = "pane-query";
+  q.textContent = item.query;
+  head.append(badge, q);
+  const pre = document.createElement("pre");
+  for (let i = 0; i < 3; i++) {
+    const line = document.createElement("span");
+    line.className = "skel-line";
+    line.style.width = `${[88, 64, 76][i]}%`;
+    pre.appendChild(line);
+  }
+  pane.append(head, pre);
+  panes.prepend(pane);
+  pane.scrollIntoView({ block: "start", behavior: "smooth" });
+  paneByOpId.set(item.id, pane);
+  opTexts.set(item.id, []);
+}
+
+/** Append one streamed section's text (linkified, like the final pane). The
+ * trailing newline is kept — never stripped: every section already carries
+ * the separator before the next one, so stripping it collapsed the blank
+ * lines between sections while streaming (body/thesaurus sat on adjacent
+ * lines, the search hint glued to the last row) until the final rebuild
+ * popped them back in. Appending the raw text keeps the mid-stream layout
+ * identical to the finished pane. The skeleton shimmer rows are cleared the
+ * moment the first section lands — they are a placeholder, never left
+ * stacked above the streamed text (later appends find none left). */
+function appendSectionText(pre: HTMLElement, text: string): void {
+  pre.querySelectorAll(".skel-line").forEach((el) => el.remove());
+  const nodes: (Node | string)[] = [];
+  text.split("\n").forEach((line, i) => {
+    if (i > 0) nodes.push("\n");
+    nodes.push(...linkifyLine(line));
+  });
+  pre.append(...nodes);
 }
 
 // ---- query expansion -------------------------------------------------------
@@ -254,7 +416,11 @@ function drain(): void {
   const item = queue[0];
   if (!item) return;
   inFlight = true;
+  // The pane appears now (header + skeleton body) and fills in as the
+  // worker streams its sections — no more blank waiting for the whole batch.
+  addSkeletonPane(item);
   syncBusyUi();
+  startOpProgress(item);
   const req: WorkerRequest = { kind: "run", id: item.id, command: item.command, query: item.query, max: item.max };
   worker.postMessage(req);
   armWatchdog();
@@ -278,10 +444,36 @@ function onWorkerMessage(ev: MessageEvent<WorkerMessage>): void {
       setStatus(`Importing dictionary… ${fmtMB(msg.loadedBytes)} / ${fmtMB(msg.totalBytes)}`, "busy");
       break;
     }
+    case "op-section": {
+      // A streamed section of the in-flight lookup: append it to the skeleton
+      // pane and claim its floor on the operation ladder.
+      const pane = paneByOpId.get(msg.id);
+      if (pane) {
+        const pre = pane.querySelector("pre");
+        if (pre) appendSectionText(pre, msg.text);
+      }
+      const texts = opTexts.get(msg.id);
+      if (texts) texts.push(msg.text);
+      opSectionClaim(msg.label);
+      break;
+    }
+    case "op-progress": {
+      // Counted progress (search meanings): follow the worker's absolute %
+      // verbatim — real work, not easing — and show its phase label. Both
+      // writes are gated on the ACTIVE op: a message for a lookup that
+      // already finished (or never started on this engine) must neither nudge
+      // the gauge nor clobber the status line. In-order delivery makes a
+      // stray unreachable, but a dead engine's late messages stay inert.
+      if (opActiveId !== msg.id) break;
+      setOpPct(msg.pct);
+      setStatus(msg.text, "busy");
+      break;
+    }
     case "ready":
       ready = true;
       engineDead = false;
       bootFailures = 0;
+      readyWords = msg.words;
       versionBadge.title = `omakase ${VERSION_FULL}${msg.dict ? ` · dictionary build: ${msg.dict}` : ""}`;
       // The full stamp (build, commits, SQLite version) lives in the header
       // badge's hover tooltip — the status bar just says it's ready.
@@ -314,14 +506,33 @@ function handleResult(msg: Extract<WorkerMessage, { kind: "result" }>): void {
   inFlight = false;
   if (item && item.id === msg.id) {
     queue.shift();
+    const pane = paneByOpId.get(msg.id);
+    paneByOpId.delete(msg.id);
+    const streamedText = opTexts.get(msg.id)?.join("") ?? "";
+    opTexts.delete(msg.id);
     try {
-      if (msg.text !== null) addPane(item.command, item.query, msg.text, false, msg.strokes);
-      else if (msg.error !== null) addPane(item.command, item.query, msg.error, true);
+      if (msg.error !== null) {
+        if (pane) pane.remove();
+        addPane(item.command, item.query, msg.error, true);
+      } else if (msg.text !== null) {
+        // Legacy whole-result path (no sections streamed).
+        if (pane) pane.remove();
+        addPane(item.command, item.query, msg.text, false, msg.strokes);
+      } else {
+        // Streamed success: the sections already rendered the pane — swap the
+        // skeleton for the canonical pane (trashbin + history + linkified
+        // text) built from the concatenated sections, byte-identical to what
+        // the CLI would have printed.
+        if (pane) pane.remove();
+        if (streamedText !== "") addPane(item.command, item.query, streamedText, false, msg.strokes);
+        else addPane(item.command, item.query, "(empty result)", true); // defensive: hits always stream
+      }
     } catch (err) {
       // A pane must never wedge the queue: report and keep draining.
       console.error("could not render result pane:", err);
     }
   }
+  endOpProgress(); // queue empty → park the bar and restore the ready line
   syncBusyUi();
   drain();
 }
@@ -365,10 +576,40 @@ function removeSpinner(): void {
 function syncBusyUi(): void {
   const head = queue[0] ?? null;
   const button = head ? buttonFor(head.command) : null;
+  // Per-command pending badges FIRST: every button shows how many panes of
+  // its kind are still queued BEHIND the in-flight head (the spinner marks
+  // the head; the badge counts only what is still to come). A [kanji, kanji,
+  // word] queue therefore shows a badge on kanji AND on word, each ticking
+  // down as its panes land — instead of a single total on the active button,
+  // which told you nothing about the other kinds waiting behind it. The
+  // badge pass must run BEFORE the spinner logic below: the spinner captures
+  // the button's label to restore later, and a badge still attached at that
+  // point would bake its number into the restored label ("kanji1").
+  for (const b of buttons) {
+    const cmd = b.dataset.cmd as Command;
+    const queued = queue.slice(1).filter((p) => p.command === cmd).length;
+    let badge = b.querySelector<HTMLSpanElement>(".btn-n");
+    if (queued > 0) {
+      if (!badge) {
+        badge = document.createElement("span");
+        badge.className = "btn-n";
+        badge.setAttribute("aria-hidden", "true");
+        b.appendChild(badge);
+      }
+      badge.textContent = String(queued);
+    } else if (badge) {
+      badge.remove();
+    }
+  }
   if (button !== spinnerOn) {
     removeSpinner();
     if (button && head) {
-      button.dataset.label = button.textContent ?? "";
+      // The label to restore is the button's command name — NEVER its live
+      // textContent: the per-command badges live inside the button, so a
+      // textContent snapshot would bake a badge number into the restored
+      // label ("kanji2") whether the badge is being added or removed in the
+      // same pass.
+      button.dataset.label = button.dataset.cmd ?? "";
       button.textContent = "";
       button.classList.add("busy");
       const spin = document.createElement("span");
@@ -376,24 +617,6 @@ function syncBusyUi(): void {
       spin.setAttribute("aria-hidden", "true");
       button.appendChild(spin);
       spinnerOn = button;
-    }
-  }
-  // Small queue counter: while more than one lookup is pending (the queue
-  // holds the in-flight head plus anything queued behind it) the busy button
-  // shows how many panes are still to come, counting down as each lands.
-  if (spinnerOn) {
-    const pendingCount = queue.length;
-    let counter = spinnerOn.querySelector<HTMLSpanElement>(".queue-n");
-    if (pendingCount > 1) {
-      if (!counter) {
-        counter = document.createElement("span");
-        counter.className = "queue-n";
-        counter.setAttribute("aria-hidden", "true");
-        spinnerOn.appendChild(counter);
-      }
-      counter.textContent = String(pendingCount);
-    } else if (counter) {
-      counter.remove();
     }
   }
   if (head) form.setAttribute("aria-busy", "true");
@@ -414,6 +637,12 @@ function engineDown(message: string): void {
   inFlight = false;
   if (lost) {
     queue.shift();
+    // The in-flight lookup's skeleton pane becomes an error pane — never a
+    // duplicate (the skeleton must not linger next to a fresh error pane).
+    const pane = paneByOpId.get(lost.id);
+    paneByOpId.delete(lost.id);
+    opTexts.delete(lost.id);
+    if (pane) pane.remove();
     try {
       addPane(lost.command, lost.query, `engine error — ${message}`, true);
     } catch {
@@ -422,6 +651,7 @@ function engineDown(message: string): void {
   }
   // The engine is restarting from scratch: park the progress gauge — the
   // fresh worker reports a new boot ladder from 0.
+  endOpProgress();
   endBootProgress();
   ready = false;
   bootFailures++;

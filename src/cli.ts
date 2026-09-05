@@ -193,14 +193,14 @@ function strokeOrderBlock(
  * so `search あ`-class prefixes never load every match; `readingsTotal`
  * reports the full pre-cap count so the renderer can show the remainder.
  */
-export function cmdSearch(
+export async function cmdSearch(
   db: DB,
   query: string,
   max: number = SEARCH_MAX_DEFAULT,
-): { readings: SearchHit[]; readingsTotal: number; meanings: SearchHit[] } {
+): Promise<{ readings: SearchHit[]; readingsTotal: number; meanings: SearchHit[] }> {
   const trimmed = query.trim();
   const { hits: readings, total: readingsTotal } = searchReadingPrefix(db, trimmed, max);
-  const meanings = isAscii(trimmed) ? searchMeanings(db, trimmed) : [];
+  const meanings = isAscii(trimmed) ? await searchMeanings(db, trimmed) : [];
   const keepReadings = isKanaInput(trimmed)
     || meanings.length === 0
     || readings.some((h) => h.exact);
@@ -430,14 +430,14 @@ function searchMax(flags: Map<string, string | null>, stderr: (s: string) => voi
 }
 
 /** Run one command against an open DB, returning its output (or null for error+exit). */
-export function runCommand(
+export async function runCommand(
   db: DB,
   command: string,
   query: string | undefined,
   flags: Map<string, string | null>,
   stderr: (s: string) => void,
   opts: { color?: boolean; strokesDir?: string } = {},
-): string | null {
+): Promise<string | null> {
   const tags = loadTags(db);
   switch (command) {
     case "word": {
@@ -483,7 +483,7 @@ export function runCommand(
       const trimmed = query.trim();
       const max = searchMax(flags, stderr);
       if (max === null) return "";
-      const { readings, readingsTotal, meanings } = cmdSearch(db, trimmed, max);
+      const { readings, readingsTotal, meanings } = await cmdSearch(db, trimmed, max);
       // Surface kanji whose readings start with the query too (Tangorin-style).
       const kanjiHits = isKanaInput(trimmed) || isAscii(trimmed)
         ? searchKanjiByReading(db, trimmed)
@@ -508,13 +508,13 @@ export function runCommand(
 }
 
 /** Entrypoint shared by the bin. Reads argv and DB path, prints result. */
-export function main(
+export async function main(
   argv: string[],
   dbPath: string,
   stdout: (s: string) => void,
   stderr: (s: string) => void,
   opts: { color?: boolean } = {},
-): number {
+): Promise<number> {
   const [command, ...rest] = argv;
 
   // Base help: `omakase --help` / `-h`. A missing command also shows help
@@ -560,7 +560,7 @@ export function main(
   }
 
   try {
-    const out = runCommand(
+    const out = await runCommand(
       db, command, args[0], flags, stderr,
       { color: opts.color, strokesDir: dirname(dbPath) },
     );
@@ -575,7 +575,7 @@ export function main(
 export { DB_PATH };
 
 /** Called from the bin / npm cli script with the real process args. */
-export function cli(argv: string[]): number {
+export async function cli(argv: string[]): Promise<number> {
   return main(
     argv,
     process.env.JAPANESE_DB ?? DB_PATH,
@@ -587,5 +587,5 @@ export function cli(argv: string[]): number {
 
 // Run directly: `tsx src/cli.ts word 食べる`
 if (import.meta.url === pathToFileURL(process.argv[1] ?? "").href) {
-  process.exitCode = cli(process.argv.slice(2));
+  process.exitCode = await cli(process.argv.slice(2));
 }

@@ -77,8 +77,13 @@ async function runLookup(page, cmd, query) {
         const first = document.querySelector("#panes .pane");
         const st = document.querySelector("#status").textContent;
         const lastRun = first?.querySelector(".pane-query")?.textContent;
-        // The newest pane must be the one we just asked for (queries are serialized).
-        return first && lastRun === q && !st.startsWith("starting") ? { text: first.querySelector("pre")?.textContent ?? "", err: first.classList.contains("error"), q: lastRun } : null;
+        const busy = document.querySelector("#lookup").hasAttribute("aria-busy");
+        // The newest pane must be the one we just asked for (queries are
+        // serialized), and the queue must be drained — a streaming skeleton
+        // pane matches the query before its sections have landed.
+        return first && lastRun === q && !st.startsWith("starting") && !busy
+          ? { text: first.querySelector("pre")?.textContent ?? "", err: first.classList.contains("error"), q: lastRun }
+          : null;
       }, query),
       // The first lookup after the OPFS import reads a cold 318 MB DB
       // before the OS page cache warms up — generous ceiling (a warm lookup
@@ -251,6 +256,63 @@ async function main() {
       JSON.stringify(idle),
     );
 
+    // ---- per-operation progress + streaming panes ---------------------------
+    // A lookup's pane appears immediately (header + skeleton rows) and the
+    // divider bar + % readout report the CURRENT operation's progress — the
+    // slow gloss search below (a few seconds of meaning scoring) gives the
+    // probes a real window to sample mid-flight.
+    const streamProbe = await page.evaluate(async () => {
+      const input = document.querySelector("#query");
+      input.value = "water";
+      document.querySelector('button[data-cmd="search"]').click();
+      // Let the eased creep / first counted progress values land.
+      await new Promise((r) => setTimeout(r, 600));
+      const streamPane = document.querySelector("#panes .pane.streaming");
+      const pct = document.querySelector("#status .pct");
+      const prog = getComputedStyle(document.documentElement).getPropertyValue("--progress").trim();
+      const status = document.querySelector("#status .status-msg")?.textContent ?? "";
+      return {
+        skel: !!streamPane && streamPane.querySelectorAll(".skel-line").length > 0,
+        paneQ: streamPane?.querySelector(".pane-query")?.textContent ?? "",
+        pctVisible: !!pct && !pct.hidden && /\d+%/.test(pct.textContent ?? ""),
+        prog,
+        mid: prog !== "0%" && prog !== "100%",
+        status,
+      };
+    });
+    check(
+      "op: skeleton pane + live % readout + divider mid-fill during a slow lookup",
+      streamProbe.skel && streamProbe.paneQ === "water" && streamProbe.pctVisible && streamProbe.mid
+        && (streamProbe.status.includes("looking up") || streamProbe.status.includes("searching")),
+      JSON.stringify(streamProbe),
+    );
+    const waterPane = await waitFor(
+      page,
+      () => page.evaluate(() => {
+        const first = document.querySelector("#panes .pane");
+        const qry = first?.querySelector(".pane-query")?.textContent;
+        if (qry !== "water") return null;
+        if (document.querySelector("#lookup").hasAttribute("aria-busy")) return null;
+        const pct = document.querySelector("#status .pct");
+        return {
+          hasSkel: !!first.querySelector(".skel-line"),
+          error: first.classList.contains("error"),
+          text: first.querySelector("pre")?.textContent ?? "",
+          pctHidden: !!pct && pct.hidden,
+          prog: getComputedStyle(document.documentElement).getPropertyValue("--progress").trim(),
+          status: document.querySelector("#status .status-msg")?.textContent ?? "",
+        };
+      }),
+      60000,
+      "water result (streamed sections + final pane)",
+    );
+    check(
+      "op: result finalizes the pane, bar rests full, % readout hidden",
+      !!waterPane && !waterPane.hasSkel && !waterPane.error && waterPane.text.includes("Meanings")
+        && waterPane.pctHidden && waterPane.prog === "100%" && waterPane.status.startsWith("ready"),
+      JSON.stringify(waterPane ? { skel: waterPane.hasSkel, prog: waterPane.prog, status: waterPane.status } : null),
+    );
+
     // Enter runs the default (search) command
     await page.evaluate(() => {
       const input = document.querySelector("#query");
@@ -262,9 +324,9 @@ async function main() {
       () => page.evaluate(() => {
         const first = document.querySelector("#panes .pane");
         const qry = first?.querySelector(".pane-query")?.textContent;
-        return first && qry === "taberu"
-          ? { badge: first.querySelector(".badge")?.textContent, text: first.querySelector("pre")?.textContent ?? "" }
-          : null;
+        if (!first || qry !== "taberu") return null;
+        if (document.querySelector("#lookup").hasAttribute("aria-busy")) return null;
+        return { badge: first.querySelector(".badge")?.textContent, text: first.querySelector("pre")?.textContent ?? "" };
       }),
       60000,
       "enter search result",
@@ -273,6 +335,58 @@ async function main() {
       "Enter runs default search command",
       enterPane?.badge === "search" && enterPane.text.includes("Readings") && enterPane.text.includes("食べる"),
       JSON.stringify(enterPane),
+    );
+
+    // The shimmer rows are a placeholder: cleared the moment the first
+    // section lands, so they are never left stacked above the streamed text.
+    // word 走る streams its body almost instantly, then spends a couple of
+    // hundred ms on the gloss-fallback thesaurus — a real window where the
+    // pane is still `.streaming` (the result has not rebuilt it yet), already
+    // holding body text, with zero skeleton rows left. Poll tight enough to
+    // land inside that window. (Runs after the Enter probe above: clicking
+    // word here would otherwise change the default command the Enter probe
+    // relies on.)
+    await page.evaluate(() => {
+      const input = document.querySelector("#query");
+      input.value = "走る";
+      document.querySelector('button[data-cmd="word"]').click();
+    });
+    const midWord = await waitFor(
+      page,
+      () => page.evaluate(() => {
+        const pane = document.querySelector("#panes .pane.streaming");
+        const text = pane?.querySelector("pre")?.textContent ?? "";
+        return pane && text.length > 0 && pane.querySelectorAll(".skel-line").length === 0
+          ? {
+            q: pane.querySelector(".pane-query")?.textContent ?? "",
+            head: text.slice(0, 40),
+            hasWord: text.includes("走る"),
+          }
+          : null;
+      }),
+      10000,
+      "word body landed (skeleton cleared, pane still streaming)",
+      20,
+    );
+    check(
+      "op: skeleton rows cleared when the first section lands, before the result rebuilds the pane",
+      !!midWord && midWord.q === "走る" && midWord.hasWord,
+      JSON.stringify(midWord),
+    );
+    // The probe sampled 走る mid-stream — let its result land and the queue
+    // drain before the next lookup starts, like every other probe leaves the
+    // app (never stack the next op on top of an in-flight one).
+    await waitFor(
+      page,
+      () => page.evaluate(() => {
+        if (document.querySelector("#lookup").hasAttribute("aria-busy")) return null;
+        const first = document.querySelector("#panes .pane");
+        return first?.querySelector(".pane-query")?.textContent === "走る" && !first.classList.contains("error")
+          ? true
+          : null;
+      }),
+      30000,
+      "走る result finalizes after the mid-stream probe",
     );
 
     // word
@@ -353,18 +467,19 @@ async function main() {
       }, [cmd, value]);
       const trace = [];
       for (;;) {
-        const st = await page.evaluate((b) => {
+        const st = await page.evaluate(([b, c]) => {
           const els = [...document.querySelectorAll("#panes .pane")];
           const busy = document.querySelector("#lookup").hasAttribute("aria-busy");
-          // counter is shown while more than one lookup is still pending
-          const counter = document.querySelector("button[data-cmd] .queue-n")?.textContent ?? null;
+          // per-command badge: how many panes of THIS command are still queued
+          // behind the in-flight head (the spinner marks the running one)
+          const counter = document.querySelector(`button[data-cmd="${c}"] .btn-n`)?.textContent ?? null;
           return {
             count: els.length - b,
             busy,
             counter,
             topQ: els[0]?.querySelector(".pane-query")?.textContent ?? "",
           };
-        }, base);
+        }, [base, cmd]);
         trace.push(st);
         if (st.count >= expect.length && !st.busy) break;
         if (Date.now() - t0 > 60000) throw new Error(`timeout streaming ${cmd} "${value}"`);
@@ -380,12 +495,13 @@ async function main() {
       return { trace, panes, totalMs: Date.now() - t0 };
     };
     // 制作者 box → three kanji lookups (制, then 作, then 者). Lookups are
-    // serialized, so the first pane lands while the queue still holds 作 + 者:
-    // count === 1 with the counter still visible proves progressive rendering.
+    // serialized, so the very first trace tick already shows 制's pane (its
+    // streaming skeleton) while 作 + 者 are still queued — the kanji badge
+    // reads 2 (both still to come), proving progressive rendering.
     const km = await streamPanes("kanji", "制作者", ["制", "作", "者"]);
     const kmFirst = km.trace.find((t) => t.count === 1);
     check(
-      "multi-kanji streams: 制 pane lands while 作 + 者 are still queued",
+      "multi-kanji streams: 制's pane is up while 作 + 者 are still queued",
       kmFirst?.topQ === "制" && kmFirst?.busy && kmFirst?.counter === "2",
       JSON.stringify(kmFirst ?? km.trace),
     );
@@ -488,7 +604,8 @@ async function main() {
       page,
       () => page.evaluate((q) => {
         const first = document.querySelector("#panes .pane");
-        return first && first.querySelector(".badge")?.textContent === "word"
+        if (!first || document.querySelector("#lookup").hasAttribute("aria-busy")) return null;
+        return first.querySelector(".badge")?.textContent === "word"
           && first.querySelector(".pane-query")?.textContent === q
           ? first.querySelector("pre")?.textContent : null;
       }, expectedWord),
@@ -510,7 +627,8 @@ async function main() {
       page,
       () => page.evaluate(() => {
         const first = document.querySelector("#panes .pane");
-        return first && first.querySelector(".badge")?.textContent === "kanji"
+        if (!first || document.querySelector("#lookup").hasAttribute("aria-busy")) return null;
+        return first.querySelector(".badge")?.textContent === "kanji"
           && first.querySelector(".pane-query")?.textContent === "食"
           ? first.querySelector("pre")?.textContent : null;
       }),
@@ -564,8 +682,11 @@ async function main() {
         magFound: !!mag,
         tokFound: !!tok,
         spinnerOnWord: !!document.querySelector('button[data-cmd="word"] .spinner'),
-        // queue counter: word 水 is in flight, 制作者 + 食 are queued behind it
-        counter: document.querySelector('button[data-cmd="word"] .queue-n')?.textContent ?? null,
+        // per-command badges: word 水 is in flight; 制作者 (word) and 食 (kanji)
+        // are queued behind it — each button counts its own kind
+        wordBadge: document.querySelector('button[data-cmd="word"] .btn-n')?.textContent ?? null,
+        kanjiBadge: document.querySelector('button[data-cmd="kanji"] .btn-n')?.textContent ?? null,
+        searchBadge: document.querySelector('button[data-cmd="search"] .btn-n')?.textContent ?? null,
         buttonsDisabled: [...document.querySelectorAll("button[data-cmd]")].every((b) => b.disabled),
         inputDisabled: input.disabled,
         ariaBusy: document.querySelector("#lookup").getAttribute("aria-busy"),
@@ -578,9 +699,9 @@ async function main() {
       JSON.stringify(busyProbe),
     );
     check(
-      "busy: queue counter shows how many panes are still to come",
-      busyProbe.counter === "3",
-      `counter=${busyProbe.counter}`,
+      "busy: per-command badges count each kind queued behind the running lookup",
+      busyProbe.wordBadge === "1" && busyProbe.kanjiBadge === "1" && busyProbe.searchBadge === null,
+      JSON.stringify({ word: busyProbe.wordBadge, kanji: busyProbe.kanjiBadge, search: busyProbe.searchBadge }),
     );
     // All three lookups must complete, one at a time, in click order: the
     // last-queued kanji pane lands on top, then the queued word, then the
@@ -590,6 +711,9 @@ async function main() {
       () => page.evaluate((base) => {
         const els = [...document.querySelectorAll("#panes .pane")];
         if (els.length < base + 3) return null;
+        // The panes must be FINAL (queue drained) — a streaming skeleton for
+        // the last lookup would match these queries before it has landed.
+        if (document.querySelector("#lookup").hasAttribute("aria-busy")) return null;
         const got = els.slice(0, 3).map((p) => ({
           q: p.querySelector(".pane-query")?.textContent ?? "",
           badge: p.querySelector(".badge")?.textContent ?? "",
@@ -611,7 +735,7 @@ async function main() {
     const idleAfterQueue = await page.evaluate(() => ({
       labels: [...document.querySelectorAll("button[data-cmd]")].map((b) => b.textContent.trim()),
       spinners: document.querySelectorAll("button[data-cmd] .spinner").length,
-      counters: document.querySelectorAll("button[data-cmd] .queue-n").length,
+      counters: document.querySelectorAll("button[data-cmd] .btn-n").length,
       allEnabled: [...document.querySelectorAll("button[data-cmd]")].every((b) => !b.disabled),
       inputEnabled: !document.querySelector("#query").disabled,
       ariaBusy: document.querySelector("#lookup").hasAttribute("aria-busy"),
@@ -648,6 +772,7 @@ async function main() {
             error: p.classList.contains("error"),
             text: p.querySelector("pre")?.textContent ?? "",
           }));
+          if (document.querySelector("#lookup").hasAttribute("aria-busy")) return null;
           return exp.every((q, i) => got[i]?.q === q) ? got : null;
         }, [expectTopDown, before]),
         60000,
@@ -696,7 +821,7 @@ async function main() {
             text: p.querySelector("pre")?.textContent ?? "",
           }));
           return exp.every((q, i) => got[i]?.q === q)
-            ? { got, added: els.length - base, counters: document.querySelectorAll("button[data-cmd] .queue-n").length }
+            ? { got, added: els.length - base, counters: document.querySelectorAll("button[data-cmd] .btn-n").length }
             : null;
         }, [expectTopDown, before]),
         60000,
@@ -731,8 +856,9 @@ async function main() {
     // dedupe also reaches across actions: while a kanji-食 lookup is pending
     // (in flight after the first click), clicking the same 食 token again must
     // not enqueue a second identical lookup — but a distinct token (作) still
-    // queues. Queue length therefore caps at 2 (counter reads 2, not 3), and
-    // exactly two panes land: 作 (newest, on top) then 食.
+    // queues. The kanji badge therefore reads 1 (only 作 behind the running
+    // 食 — the duplicate click was dropped), and exactly two panes land:
+    // 作 (newest, on top) then 食.
     const xBefore = await page.$$eval("#panes .pane", (els) => els.length);
     const xProbe = await page.evaluate(() => {
       const findTok = (ch) => [...document.querySelectorAll("#panes .pane pre .tok-kanji")]
@@ -746,12 +872,13 @@ async function main() {
         shokuFound: !!shoku,
         sakuFound: !!saku,
         ariaBusy: document.querySelector("#lookup").getAttribute("aria-busy"),
-        counter: document.querySelector("button[data-cmd] .queue-n")?.textContent ?? null,
+        kanjiBadge: document.querySelector('button[data-cmd="kanji"] .btn-n')?.textContent ?? null,
+        wordBadge: document.querySelector('button[data-cmd="word"] .btn-n')?.textContent ?? null,
       };
     });
     check(
       "cross-action dedupe: re-clicking a pending token does not re-enqueue",
-      xProbe.shokuFound && xProbe.sakuFound && xProbe.ariaBusy === "true" && xProbe.counter === "2",
+      xProbe.shokuFound && xProbe.sakuFound && xProbe.ariaBusy === "true" && xProbe.kanjiBadge === "1" && xProbe.wordBadge === null,
       JSON.stringify(xProbe),
     );
     const xDone = await waitFor(
@@ -801,6 +928,7 @@ async function main() {
             error: first.classList.contains("error"),
             text: first.querySelector("pre")?.textContent ?? "",
           };
+          if (document.querySelector("#lookup").hasAttribute("aria-busy")) return null;
           return got.q === exp ? got : null;
         }, [expectQuery, before]),
         60000,

@@ -334,22 +334,28 @@ function meaningRow(hit: SearchHit, tokens: string[], color: boolean): string {
 }
 
 /**
- * `search <query>` result list. Word hits are split into two ranked
- * sections — `Readings` (reading-prefix matches, shown with their romaji)
- * and `Meanings` (gloss matches) — with kanji-by-reading matches in a
- * trailing `Kanji` section. Sections are omitted when empty; each section
- * shows at most `max` rows (default SEARCH_MAX_DEFAULT, `--max` raises it),
- * with the remainder counted in the header and a trailing note. When
- * `color` is on, literal query overlap is bolded (romaji/kana for reading
- * hits, gloss words for meaning hits) — pipes and captures stay plain.
- * Mirrors render-goldens.py `render_search`.
+ * `search <query>` result sections — one string per present block, in render
+ * order, whose `join("\n")` reproduces `renderSearch` byte for byte. Section
+ * 0 is always the echoed query header (query + a blank line); each following
+ * section is a `Title (N):` block with its rows and the ``… and N more``
+ * note, ending in a newline (the join inserts the blank separator). An
+ * empty result is the single `  (no results)` block. The web worker streams
+ * these one at a time so a search pane fills in as its sections complete;
+ * the CLI (and goldens) keep using `renderSearch`, which just joins them.
+ *
+ * Sections are omitted when empty; each section shows at most `max` rows
+ * (default SEARCH_MAX_DEFAULT, `--max` raises it), with the remainder
+ * counted in the header and a trailing note. When `color` is on, literal
+ * query overlap is bolded (romaji/kana for reading hits, gloss words for
+ * meaning hits) — pipes and captures stay plain. Mirrors render-goldens.py
+ * `render_search`.
  *
  * `totals` reports the full pre-cap size of a section whose rows were
  * already capped by the caller (default: the section array length) — lets
  * a lookup cap in SQL while the header and ``… and N more`` note still
  * count every hit.
  */
-export function renderSearch(
+export function searchSections(
   query: string,
   readings: SearchHit[],
   meanings: SearchHit[],
@@ -359,7 +365,7 @@ export function renderSearch(
     color?: boolean;
     totals?: { readings?: number; meanings?: number; kanji?: number };
   } = {},
-): string {
+): string[] {
   const max = opts.max ?? SEARCH_MAX_DEFAULT;
   const color = opts.color ?? false;
   const totals = opts.totals ?? {};
@@ -367,17 +373,13 @@ export function renderSearch(
   const needle = kanaQuery ? query.replace(/\s+/g, "") : query.toLowerCase().replace(/\s+/g, "");
   const tokens = glossQueryTokens(query);
 
-  const lines: string[] = [query, ""];
-  let any = false;
-
+  const sections: string[] = [`${query}\n`]; // echoed query + blank line
   const addSection = (title: string, rows: string[], total: number): void => {
     if (total === 0) return;
-    if (any) lines.push("");
-    any = true;
-    lines.push(`${title} (${total}):`);
     const shown = rows.slice(0, max);
-    lines.push(...shown);
+    const lines = [`${title} (${total}):`, ...shown];
     if (total > max) lines.push(`  … and ${total - max} more`);
+    sections.push(lines.join("\n") + "\n");
   };
 
   if (readings.length > 0) {
@@ -389,8 +391,23 @@ export function renderSearch(
   if (kanjiHits.length > 0) {
     addSection("Kanji", kanjiHits.map(kanjiHitRow), totals.kanji ?? kanjiHits.length);
   }
-  if (!any) lines.push("  (no results)");
-  return lines.join("\n") + "\n";
+  if (sections.length === 1) sections.push("  (no results)\n");
+  return sections;
+}
+
+/** `search <query>` result list — `searchSections` joined (see above). */
+export function renderSearch(
+  query: string,
+  readings: SearchHit[],
+  meanings: SearchHit[],
+  kanjiHits: KanjiReadingHit[] = [],
+  opts: {
+    max?: number;
+    color?: boolean;
+    totals?: { readings?: number; meanings?: number; kanji?: number };
+  } = {},
+): string {
+  return searchSections(query, readings, meanings, kanjiHits, opts).join("\n");
 }
 
 /** `kanji <reading>` result list — same rows as the search Kanji section. */

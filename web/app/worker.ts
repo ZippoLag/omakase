@@ -9,7 +9,8 @@
  */
 import sqlite3InitModule, { type OpfsDatabase, type Sqlite3Static } from "../vendor/index.mjs";
 import { WasmDb } from "./shim.js";
-import { kanjiStrokePages, loadTags, runKanji, runSearch, runWord } from "./commands.js";
+import { kanjiStrokePages, loadTags, streamKanji, streamSearch, streamWord } from "./commands.js";
+import { OP_LADDERS } from "./worker-api.js";
 import type { WorkerMessage, WorkerRequest } from "./worker-api.js";
 
 /** OPFS path of the dictionary (also its URL on the server). */
@@ -176,58 +177,82 @@ async function boot(): Promise<void> {
   }
 }
 
-/** One lookup, rendered exactly like the CLI (word/kanji return null on miss). */
-function handleRun(req: WorkerRequest & { kind: "run" }): WorkerMessage {
-  if (!db) return { kind: "result", id: req.id, text: null, error: "dictionary not ready" };
+/**
+ * One lookup, streamed exactly like the CLI renders it: each section is
+ * posted as it completes (the UI appends it to the pane), then a terminal
+ * `result` — `text: null` on a streamed success, `error` on a miss. The
+ * awaits between sections let the worker's event loop breathe, so progress
+ * messages posted from inside the long meaning search actually reach the
+ * main thread (see OP_LADDERS / streamSearch's `onProgress`).
+ */
+async function handleRun(req: WorkerRequest & { kind: "run" }): Promise<void> {
+  if (!db) {
+    send({ kind: "result", id: req.id, text: null, error: "dictionary not ready" });
+    return;
+  }
   const q = req.query.trim();
-  if (!q) return { kind: "result", id: req.id, text: null, error: "type something to look up" };
+  if (!q) {
+    send({ kind: "result", id: req.id, text: null, error: "type something to look up" });
+    return;
+  }
+  const emit = async (label: string, text: string): Promise<void> => {
+    send({ kind: "op-section", id: req.id, label, text });
+  };
   try {
     switch (req.command) {
       case "word": {
-        const out = runWord(db, q, tags);
-        return {
-          kind: "result",
-          id: req.id,
-          text: out,
-          error: out === null ? `no entry for "${q}"` : null,
-        };
+        const r = await streamWord(db, q, tags, emit);
+        send({ kind: "result", id: req.id, text: null, error: r.error });
+        return;
       }
       case "kanji": {
-        const out = runKanji(db, q, req.max);
-        return {
-          kind: "result",
-          id: req.id,
-          text: out,
-          error: out === null ? `no kanji "${q}"` : null,
-          strokes: out === null ? undefined : kanjiStrokePages(db, q),
-        };
+        const r = await streamKanji(db, q, req.max, emit);
+        // Stroke-order pages are only meaningful for a kanji page (not a miss).
+        const strokes = r.error === null ? kanjiStrokePages(db, q) : undefined;
+        send({ kind: "result", id: req.id, text: null, error: r.error, strokes });
+        return;
       }
-      case "search":
-        return { kind: "result", id: req.id, text: runSearch(db, q, req.max), error: null };
+      case "search": {
+        // The meaning search is the one section long enough to measure (wasm
+        // profiling: 1–55 s for common English tokens): map real done/total
+        // onto its ladder segment so the bar follows actual work, not easing.
+        const base = OP_LADDERS.search.floors.readings!;
+        const top = OP_LADDERS.search.floors.meanings!;
+        const onProgress = async (done: number, total: number): Promise<void> => {
+          if (total <= 0) return;
+          send({
+            kind: "op-progress",
+            id: req.id,
+            pct: base + ((top - base) * done) / total,
+            text: `searching meanings… (${done.toLocaleString()} / ${total.toLocaleString()})`,
+          });
+        };
+        const r = await streamSearch(db, q, req.max, emit, onProgress);
+        send({ kind: "result", id: req.id, text: null, error: r.error });
+        return;
+      }
     }
   } catch (err) {
-    return {
+    send({
       kind: "result",
       id: req.id,
       text: null,
       error: `lookup failed: ${err instanceof Error ? err.message : String(err)}`,
-    };
+    });
   }
 }
 
 addEventListener("message", (ev: MessageEvent) => {
   const req = ev.data as WorkerRequest;
   if (!req || req.kind !== "run") return;
-  try {
-    send(handleRun(req));
-  } catch (err) {
+  void handleRun(req).catch((err) => {
     send({
       kind: "result",
       id: req.id,
       text: null,
       error: `lookup crashed: ${err instanceof Error ? err.message : String(err)}`,
     });
-  }
+  });
 });
 
 void boot();

@@ -3,4 +3,4 @@
 // tsx (no build step); invoked via the package.json "bin" field.
 import { cli } from "../src/cli.ts";
 
-process.exitCode = cli(process.argv.slice(2));
+process.exitCode = await cli(process.argv.slice(2));

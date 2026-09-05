@@ -407,8 +407,25 @@ function glossWordIds(db: DB, expr: string): string[] {
  * Candidate discovery per token uses the FTS index (`"tok"` for exact,
  * `tok*` for prefix); words are then scored in JS against their loaded
  * glosses.
+ *
+ * Async so the web worker can report real progress: the candidate pool is
+ * fully known before the load loop, so `onProgress(done, total)` is called
+ * every `PROGRESS_CHUNK` loaded candidates (and once at the end). Passed no
+ * callback it behaves exactly like the CLI's old synchronous search — the
+ * awaits cost nothing and the output is byte-identical (timing only). The
+ * pool is ordered by word id; a candidate whose rank lands in the top `max`
+ * is independent of how many were loaded before it.
  */
-export function searchMeanings(db: DB, query: string): SearchHit[] {
+export type MeaningProgress = (done: number, total: number) => void | Promise<void>;
+
+/** Yield cadence of the candidate load loop (see searchMeanings). */
+const PROGRESS_CHUNK = 64;
+
+export async function searchMeanings(
+  db: DB,
+  query: string,
+  onProgress?: MeaningProgress,
+): Promise<SearchHit[]> {
   const tokens = glossQueryTokens(query);
   if (tokens.length === 0) return [];
 
@@ -490,13 +507,22 @@ export function searchMeanings(db: DB, query: string): SearchHit[] {
   const exactSet = new Set(exactPool);
   const ranked: Ranked[] = [];
   const seen = new Set<string>();
-  for (const id of [...exactPool, ...anyPool.filter((i) => !exactSet.has(i)).slice(0, MEANING_POOL_LIMIT)]) {
+  // The pool has no duplicates (exact ids, then any-only ids), so done runs
+  // 1..total in order and the final call always reports total/total.
+  const pool = [...exactPool, ...anyPool.filter((i) => !exactSet.has(i)).slice(0, MEANING_POOL_LIMIT)];
+  const total = pool.length;
+  let done = 0;
+  for (const id of pool) {
     if (seen.has(id)) continue;
     seen.add(id);
     const word = loadWord(db, id);
     if (!word) continue;
     const r = rank(word);
     if (r) ranked.push(r);
+    done++;
+    if (onProgress && (done % PROGRESS_CHUNK === 0 || done === total)) {
+      await onProgress(done, total);
+    }
   }
   ranked.sort((a, b) =>
     b.exactCount - a.exactCount ||

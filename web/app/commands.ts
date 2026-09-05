@@ -29,7 +29,7 @@ import {
   renderKanji,
   renderKanjiReadingSearch,
   renderKanjiWords,
-  renderSearch,
+  searchSections,
   renderThesaurus,
   renderWordBody,
 } from "../../src/format.js";
@@ -50,18 +50,40 @@ function isAscii(s: string): boolean {
   return /^[\x20-\x7e]+$/.test(s);
 }
 
-/** `word <query>` — entry body + thesaurus + example sentences. */
-export function runWord(db: DbLike, query: string, tags: Record<string, string>): string | null {
+/** Outcome of a streaming lookup: `error` on a miss, otherwise the sections
+ * (already emitted) carry the whole result — the CLI text byte-for-byte. */
+export interface StreamResult {
+  error: string | null;
+}
+
+/**
+ * `word <query>` — entry body + thesaurus + example sentences, streamed as
+ * one section per part in render order. Each section carries the separator
+ * the CLI's `filter(Boolean).join("\n")` would insert (a blank line), so
+ * concatenating the emitted sections reproduces `cmdWord` byte-for-byte;
+ * empty parts are skipped exactly like `filter(Boolean)`.
+ */
+export async function streamWord(
+  db: DbLike,
+  query: string,
+  tags: Record<string, string>,
+  emit: (label: string, text: string) => Promise<void> | void,
+): Promise<StreamResult> {
   const word = findWordByWriting(db, query);
-  if (!word) return null;
+  if (!word) return { error: `no entry for "${query}"` };
   const body = renderWordBody(word, tags);
+  if (body) await emit("body", body);
   let { synonyms, antonyms } = wordThesaurus(db, word);
+  // Fallback for entries with no cross-reference links at all: related words
+  // inferred from shared distinctive English gloss tokens (glosses_fts).
   if (synonyms.length === 0 && antonyms.length === 0) {
     synonyms = glossThesaurus(db, word).synonyms;
   }
   const thesaurus = renderThesaurus(synonyms, antonyms);
+  if (thesaurus) await emit("thesaurus", "\n" + thesaurus);
   const examples = renderExamples(exampleSentences(db, word));
-  return [body, thesaurus, examples].filter(Boolean).join("\n");
+  if (examples) await emit("examples", "\n" + examples);
+  return { error: null };
 }
 
 /**
@@ -69,31 +91,39 @@ export function runWord(db: DbLike, query: string, tags: Record<string, string>)
  * first lists words containing the characters (ranked, capped at `max`),
  * then one page per kanji literal with compounds capped at `max`; kana /
  * romaji queries go through the kanji-by-reading search, capped at `max`.
+ * The web UI never sends a multi-kanji query (it splits the box into one
+ * lookup per character), but the multi-literal branch stays for CLI parity.
+ * Pages concatenate with no separator — each render already ends in a
+ * newline — so the emitted sections join to `cmdKanji`'s text byte-for-byte.
  */
-export function runKanji(db: DbLike, query: string, max: number = KANJI_MAX_DEFAULT): string | null {
+export async function streamKanji(
+  db: DbLike,
+  query: string,
+  max: number = KANJI_MAX_DEFAULT,
+  emit: (label: string, text: string) => Promise<void> | void,
+): Promise<StreamResult> {
   const literals = kanjiLiterals(db, query);
   if (literals) {
-    const parts: string[] = [];
     if (literals.length > 1) {
       const words = wordsContainingKanji(db, literals, max);
       const wordsText = renderKanjiWords(words.hits, words.total, max);
-      if (wordsText !== "") parts.push(wordsText);
+      if (wordsText !== "") await emit("words", wordsText);
     }
     for (const literal of literals) {
       const kanji = loadKanji(db, literal, max);
-      if (!kanji) return null; // every literal passed kanjiLiterals, so unreachable
+      if (!kanji) return { error: `no kanji "${query}"` }; // unreachable after kanjiLiterals
       let radicalDisplay: string | null = null;
       if (kanji.classicalRadical != null) {
         radicalDisplay = `${radicalChar(db, kanji.classicalRadical) ?? "?"} (${kanji.classicalRadical})`;
       }
-      parts.push(renderKanji(kanji, radicalDisplay));
+      await emit("page", renderKanji(kanji, radicalDisplay));
     }
-    // No separator: every part ends with a newline (see cli.ts cmdKanji).
-    return parts.join("");
+    return { error: null };
   }
   const hits = searchKanjiByReading(db, query);
-  if (hits.length === 0) return null;
-  return renderKanjiReadingSearch(query, hits, max);
+  if (hits.length === 0) return { error: `no kanji "${query}"` };
+  await emit("reading-search", renderKanjiReadingSearch(query, hits, max));
+  return { error: null };
 }
 
 /**
@@ -113,13 +143,27 @@ export function kanjiStrokePages(db: DbLike, query: string): StrokePage[] {
   return pages;
 }
 
-/** `search <query>` — ranked readings/meanings/kanji sections + did-you-mean hint. */
-export function runSearch(db: DbLike, query: string, max: number = 30): string {
+/**
+ * `search <query>` — ranked readings/meanings/kanji sections + did-you-mean
+ * hint, streamed in render order via `searchSections` (the single source of
+ * the byte-identical section text; see the join-equality test). `onProgress`
+ * receives real done/total while the meaning search runs — the one section
+ * long enough (and measurable enough) to count, see worker.ts. Sections are
+ * emitted with the blank-line separator between them, and the hint (when an
+ * ASCII search finds nothing) concatenates as its own trailing section.
+ */
+export async function streamSearch(
+  db: DbLike,
+  query: string,
+  max: number = 30,
+  emit: (label: string, text: string) => Promise<void> | void,
+  onProgress?: (done: number, total: number) => Promise<void> | void,
+): Promise<StreamResult> {
   const trimmed = query.trim();
   // Reading rows are ranked and capped at `max` inside the lookup (SQL
-  // LIMIT); `total` feeds renderSearch's header/remainder note.
+  // LIMIT); `total` feeds the header/remainder note.
   const { hits: readings, total: readingsTotal } = searchReadingPrefix(db, trimmed, max);
-  const meanings = isAscii(trimmed) ? searchMeanings(db, trimmed) : [];
+  const meanings = isAscii(trimmed) ? await searchMeanings(db, trimmed, onProgress) : [];
   const keepReadings = isKanaInput(trimmed)
     || meanings.length === 0
     || readings.some((h) => h.exact);
@@ -127,15 +171,29 @@ export function runSearch(db: DbLike, query: string, max: number = 30): string {
   const kanjiHits = isKanaInput(trimmed) || isAscii(trimmed)
     ? searchKanjiByReading(db, trimmed)
     : [];
-  const out = renderSearch(trimmed, shownReadings, meanings, kanjiHits, {
+  const secs = searchSections(trimmed, shownReadings, meanings, kanjiHits, {
     max,
     color: false,
     totals: { readings: keepReadings ? readingsTotal : 0 },
   });
-  if (shownReadings.length === 0 && meanings.length === 0 && kanjiHits.length === 0 && isAscii(trimmed)) {
-    return out + webSearchHint(db, trimmed);
+  // Ladder labels per section, derived from what is actually present:
+  // searchSections omits empty blocks, so an index-based label would misname
+  // e.g. a meanings-only result as "readings" (under-claiming its floor) or
+  // a kanji-only one as "readings" instead of "kanji". Mirror the same
+  // presence rules in the same order; the one remaining shape is the sole
+  // "(no results)" block, labeled "none".
+  const labels = ["header"];
+  if (shownReadings.length > 0) labels.push("readings");
+  if (meanings.length > 0) labels.push("meanings");
+  if (kanjiHits.length > 0) labels.push("kanji");
+  if (labels.length === 1) labels.push("none"); // the "(no results)" block
+  for (let i = 0; i < secs.length; i++) {
+    await emit(labels[i]!, (i === 0 ? "" : "\n") + secs[i]!);
   }
-  return out;
+  if (shownReadings.length === 0 && meanings.length === 0 && kanjiHits.length === 0 && isAscii(trimmed)) {
+    await emit("hint", webSearchHint(db, trimmed));
+  }
+  return { error: null };
 }
 
 /** "did you mean" hint — mirrors cli.ts searchHint. */

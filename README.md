@@ -342,21 +342,28 @@ once, to install it.
 Lookups are **queued, never dropped**: only one runs at a time, and any
 clicks that land while one is in flight (the interactive tokens below stay
 tappable) simply join the queue and still get their own pane, in click
-order, and while several lookups are pending the busy button shows a small
-counter with how many result panes are still to come (counting down as each
-lands). The boxes also expand a bit beyond the strict CLI one-query-one-run
-model — **word** with several comma- and/or space-separated words looks each
-word up separately (each pane is exactly what looking that word up alone
-returns), with repeats deduplicated (`水 水` → one 水 lookup, and
-`水, 水, 食事` → the 水 and 食事 panes only). Dedupe also reaches across
-actions: a lookup that is already pending — queued or in flight — is never
-enqueued again, so clicking the same kanji or word token twice in a row
-still yields a single pane. **kanji** ignores every non-kanji character in
-the box (`食べる` → 食) and then looks up **each kanji it contains as its own
-lookup** — `制・作者` → `kanji 制` + `kanji 作` + `kanji 者`, one per
-character — so every individual kanji page comes back, each byte-identical
-to looking the character up alone and each rendered as soon as its own
-lookup finishes (a multi-kanji box resolves one kanji at a time instead of
+order, and while several lookups are pending **each command button shows a
+badge with how many panes of its kind are still queued behind the one in
+flight** (the spinner marks the running lookup; the badges count down as
+each pane lands). Every lookup **streams**: its pane appears immediately
+with a skeleton body, the worker posts each rendered section as it
+completes (word: entry → thesaurus → examples; search: Readings → Meanings
+→ Kanji; kanji: the page), and the divider bar under the controls shows the
+current lookup's progress — ladder floors per section, with a real
+measured percentage inside the long meaning search. The boxes also expand a
+bit beyond the strict CLI one-query-one-run model — **word** with several
+comma- and/or space-separated words looks each word up separately (each
+pane is exactly what looking that word up alone returns), with repeats
+deduplicated (`水 水` → one 水 lookup, and `水, 水, 食事` → the 水 and
+食事 panes only). Dedupe also reaches across actions: a lookup that is
+already pending — queued or in flight — is never enqueued again, so
+clicking the same kanji or word token twice in a row still yields a single
+pane. **kanji** ignores every non-kanji character in the box (`食べる` →
+食) and then looks up **each kanji it contains as its own lookup** —
+`制・作者` → `kanji 制` + `kanji 作` + `kanji 者`, one per character — so
+every individual kanji page comes back, each byte-identical to looking the
+character up alone and each rendered as soon as its own lookup finishes (a
+multi-kanji box resolves one kanji at a time instead of
 freezing until the whole batch is ready); kana/romaji boxes still run the
 kanji-by-reading search. **search** is unchanged — it always gets the raw
 query, verbatim.

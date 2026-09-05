@@ -14,7 +14,7 @@ import Database from "better-sqlite3";
 import { transform } from "../data/build/transform.js";
 import { buildDb } from "../data/build/buildDb.js";
 import { cmdWord, cmdKanji, cmdSearch, loadTags } from "../src/cli.js";
-import { renderKanjiWords, renderSearch, renderWordBody } from "../src/format.js";
+import { renderKanjiWords, renderSearch, renderWordBody, searchSections } from "../src/format.js";
 import {
   exampleSentences,
   glossThesaurus,
@@ -157,11 +157,11 @@ test("kanji goldens (kanji pages, byte-for-byte)", () => {
   }
 });
 
-test("search goldens (English / kana / romaji, byte-for-byte)", () => {
+test("search goldens (English / kana / romaji, byte-for-byte)", async () => {
   const db = buildFixtureDb();
   try {
     for (const [file, query] of SEARCH_GOLDENS) {
-      const { readings, meanings } = cmdSearch(db, query);
+      const { readings, meanings } = await cmdSearch(db, query);
       const out = renderSearch(query, readings, meanings, searchKanjiByReading(db, query));
       assert.equal(out, golden(file), file);
     }
@@ -563,13 +563,13 @@ test("kanji page: no Radicals line when kradfile has no decomposition", () => {
   }
 });
 
-test("no-match paths return null / empty result set", () => {
+test("no-match paths return null / empty result set", async () => {
   const db = buildFixtureDb();
   try {
     const tags = loadTags(db);
     assert.equal(cmdWord(db, "存在しない語", tags), null);
     assert.equal(cmdKanji(db, "無"), null);
-    const { readings, meanings } = cmdSearch(db, "zqxjk");
+    const { readings, meanings } = await cmdSearch(db, "zqxjk");
     assert.equal(readings.length + meanings.length, 0);
   } finally {
     db.close();
@@ -702,10 +702,10 @@ test("unmatched romaji prefix returns no kana fallback", () => {
   }
 });
 
-test("cmdSearch: an exact reading lands in Readings with its romaji, no meaning hits", () => {
+test("cmdSearch: an exact reading lands in Readings with its romaji, no meaning hits", async () => {
   const db = buildFixtureDb();
   try {
-    const { readings, meanings } = cmdSearch(db, "taberu");
+    const { readings, meanings } = await cmdSearch(db, "taberu");
     // ``taberu`` hits the romaji reading directly; no gloss contains it.
     assert.deepEqual(readings.map((h) => ({ reading: h.reading, romaji: h.romaji, gloss: h.gloss })), [
       { reading: "たべる", romaji: "taberu", gloss: "to eat" },
@@ -716,11 +716,11 @@ test("cmdSearch: an exact reading lands in Readings with its romaji, no meaning 
   }
 });
 
-test("cmdSearch: unmatched ASCII goes to the Meanings (gloss) section", () => {
+test("cmdSearch: unmatched ASCII goes to the Meanings (gloss) section", async () => {
   const db = buildFixtureDb();
   try {
     // No reading romaji starts with ``eat``, so it must scan glosses.
-    const { readings, meanings } = cmdSearch(db, "eat");
+    const { readings, meanings } = await cmdSearch(db, "eat");
     assert.equal(readings.length, 0);
     assert.ok(meanings.length > 0);
     assert.ok(meanings.some((h) => h.reading === "たべる" && h.gloss === "to eat"));
@@ -729,17 +729,17 @@ test("cmdSearch: unmatched ASCII goes to the Meanings (gloss) section", () => {
   }
 });
 
-test("cmdSearch: romaji spaced per kana still hits the reading (``ta be ru`` → たべる)", () => {
+test("cmdSearch: romaji spaced per kana still hits the reading (``ta be ru`` → たべる)", async () => {
   const db = buildFixtureDb();
   try {
-    const { readings } = cmdSearch(db, "ta be ru");
+    const { readings } = await cmdSearch(db, "ta be ru");
     assert.deepEqual(readings.map((h) => h.reading), ["たべる"]);
   } finally {
     db.close();
   }
 });
 
-test("cmdSearch gloss: tokens are ANDed and prefix-matched", () => {
+test("cmdSearch gloss: tokens are ANDed and prefix-matched", async () => {
   const mk = (id: string, writing: string, reading: string, glosses: string[]): JmdictWord => ({
     id,
     kanji: writing ? [{ common: true, text: writing, tags: [] }] : [],
@@ -777,24 +777,24 @@ test("cmdSearch gloss: tokens are ANDed and prefix-matched", () => {
   );
   const db = buildDb(rows, { tags: "{}" }, { dbPath: ":memory:" });
   try {
-    const ids = (q: string): string[] => cmdSearch(db, q).meanings.map((h) => h.word.id);
+    const ids = async (q: string): Promise<string[]> => (await cmdSearch(db, q)).meanings.map((h) => h.word.id);
     // Multi-word query: every token must prefix-match within a single sense
     // (word 60's tokens live in DIFFERENT senses and must NOT match).
-    assert.deepEqual(ids("develop film"), ["10"]);
+    assert.deepEqual(await ids("develop film"), ["10"]);
     // Ranking: exact-token glosses first (30, 60 = "to develop"), then
     // prefix matches (10/20 "development…", 50 "developer") by common+id.
-    assert.deepEqual(ids("develop"), ["30", "60", "10", "20", "50"]);
+    assert.deepEqual(await ids("develop"), ["30", "60", "10", "20", "50"]);
     // ``devel`` has no exact matches: everything is a prefix match, ordered
     // by common then entry id.
-    assert.deepEqual(ids("devel"), ["10", "20", "30", "50", "60"]);
-    assert.deepEqual(ids("film"), ["10", "40", "60"]);
-    assert.deepEqual(ids("zzz"), []);
+    assert.deepEqual(await ids("devel"), ["10", "20", "30", "50", "60"]);
+    assert.deepEqual(await ids("film"), ["10", "40", "60"]);
+    assert.deepEqual(await ids("zzz"), []);
   } finally {
     db.close();
   }
 });
 
-test("cmdSearch: ambiguous query shows BOTH ranked sections (reading + meaning)", () => {
+test("cmdSearch: ambiguous query shows BOTH ranked sections (reading + meaning)", async () => {
   // ``take`` is a valid romaji reading (たけ) AND an English word ("to take").
   const mk = (id: string, writing: string, reading: string, common: boolean, gloss: string): JmdictWord => ({
     id,
@@ -828,7 +828,7 @@ test("cmdSearch: ambiguous query shows BOTH ranked sections (reading + meaning)"
   );
   const db = buildDb(rows, { tags: "{}" }, { dbPath: ":memory:" });
   try {
-    const { readings, meanings } = cmdSearch(db, "take");
+    const { readings, meanings } = await cmdSearch(db, "take");
     // Readings: both たけ words are exact ``take``; the common 竹 ranks first.
     assert.deepEqual(readings.map((h) => ({ reading: h.reading, romaji: h.romaji })), [
       { reading: "たけ", romaji: "take" },
@@ -843,7 +843,7 @@ test("cmdSearch: ambiguous query shows BOTH ranked sections (reading + meaning)"
   }
 });
 
-test("meaning ranking: an earlier covering sense beats a later one", () => {
+test("meaning ranking: an earlier covering sense beats a later one", async () => {
   // Both words carry an exact ``eat`` gloss; 遣る-style late slang senses must
   // not outrank a word whose primary sense is the match.
   const mk = (id: string, glossesPerSense: string[][]): JmdictWord => ({
@@ -877,7 +877,7 @@ test("meaning ranking: an earlier covering sense beats a later one", () => {
   );
   const db = buildDb(rows, { tags: "{}" }, { dbPath: ":memory:" });
   try {
-    const ids = cmdSearch(db, "eat").meanings.map((h) => h.word.id);
+    const ids = (await cmdSearch(db, "eat")).meanings.map((h) => h.word.id);
     // 20's sense 1 covers; 10 only covers via sense 2 -> 20 ranks first even
     // though its entry id is larger.
     assert.deepEqual(ids, ["20", "10"]);
@@ -886,7 +886,7 @@ test("meaning ranking: an earlier covering sense beats a later one", () => {
   }
 });
 
-test("cmdSearch: accidental ASCII reading prefixes are dropped when meanings match", () => {
+test("cmdSearch: accidental ASCII reading prefixes are dropped when meanings match", async () => {
   // ``eat`` prefix-matches the katakana loan エアタオル (romaji ``eataoru``)
   // but the user means the English word — the reading hit must not crowd out
   // the meaning hits (unlike a genuinely ambiguous query like ``take``).
@@ -923,11 +923,11 @@ test("cmdSearch: accidental ASCII reading prefixes are dropped when meanings mat
   try {
     // ``eat``: the eataoru reading match exists but is not exact, and there
     // are meaning hits -> Readings section is dropped.
-    const eat = cmdSearch(db, "eat");
+    const eat = await cmdSearch(db, "eat");
     assert.deepEqual(eat.meanings.map((h) => h.word.id), ["20"]);
     assert.equal(eat.readings.length, 0, "accidental reading prefix hidden");
     // ``eata``: no meaning hits, so the reading-prefix path is the answer.
-    const eata = cmdSearch(db, "eata");
+    const eata = await cmdSearch(db, "eata");
     assert.equal(eata.meanings.length, 0);
     assert.deepEqual(eata.readings.map((h) => h.word.id), ["10"]);
   } finally {
@@ -935,23 +935,23 @@ test("cmdSearch: accidental ASCII reading prefixes are dropped when meanings mat
   }
 });
 
-test("search: LIKE wildcards in the query are matched literally, not as SQL wildcards", () => {
+test("search: LIKE wildcards in the query are matched literally, not as SQL wildcards", async () => {
   const db = buildFixtureDb();
   try {
     // A bare ``%`` used to match every kana writing (``LIKE '%%%'`` = anything),
     // and ``_`` acted as a single-char wildcard (``tab_r`` matched たべる).
-    const flat = (q: string): { reading: string }[] => [
-      ...cmdSearch(db, q).readings,
-      ...cmdSearch(db, q).meanings,
+    const flat = async (q: string): Promise<{ reading: string }[]> => [
+      ...(await cmdSearch(db, q)).readings,
+      ...(await cmdSearch(db, q)).meanings,
     ];
-    assert.equal(flat("%").length, 0);
-    assert.equal(flat("_").length, 0);
-    assert.equal(flat("tab_r").length, 0);
+    assert.equal((await flat("%")).length, 0);
+    assert.equal((await flat("_")).length, 0);
+    assert.equal((await flat("tab_r")).length, 0);
     // The kana column has the same protection.
-    assert.equal(flat("たべ%").length, 0);
-    assert.equal(flat("たべ_る").length, 0);
+    assert.equal((await flat("たべ%")).length, 0);
+    assert.equal((await flat("たべ_る")).length, 0);
     // A backslash in the query is literal too, not an escape for the engine.
-    assert.equal(flat("tab\\eru").length, 0);
+    assert.equal((await flat("tab\\eru")).length, 0);
     // Ordinary prefixes still match after escaping.
     assert.deepEqual(readings(prefixHits(db, "tabe")), ["たべる", "たべもの"]);
     assert.deepEqual(readings(prefixHits(db, "たべ")), ["たべる", "たべもの"]);
@@ -1039,6 +1039,50 @@ function fakeWord(id: string, reading: string, gloss: string): LoadedWord {
     furigana: new Map(),
   };
 }
+
+test("searchSections: joins back to renderSearch byte-for-byte, one block per section", () => {
+  const readings = [
+    { word: fakeWord("1", "たけ", "bamboo"), reading: "たけ", romaji: "take", gloss: "bamboo" },
+  ];
+  const meanings = [
+    { word: fakeWord("2", "とる", "to take"), reading: "とる", gloss: "to take" },
+  ];
+  const kanjiHits = [{ literal: "竹", readings: ["たけ"], meanings: ["bamboo"] }];
+  // All three sections: header + one block per present section.
+  let secs = searchSections("take", readings, meanings, kanjiHits, {});
+  assert.equal(secs.join("\n"), renderSearch("take", readings, meanings, kanjiHits, {}));
+  assert.equal(secs.length, 4);
+  assert.equal(secs[0], "take\n");
+  assert.ok(secs[1]!.startsWith("Readings (1):"));
+  assert.ok(secs[2]!.startsWith("Meanings (1):"));
+  assert.ok(secs[3]!.startsWith("Kanji (1):"));
+  // Readings + Meanings only.
+  secs = searchSections("take", readings, meanings, [], {});
+  assert.equal(secs.join("\n"), renderSearch("take", readings, meanings, [], {}));
+  assert.equal(secs.length, 3);
+  // Single section.
+  secs = searchSections("taberu", readings, [], []);
+  assert.equal(secs.join("\n"), renderSearch("taberu", readings, [], []));
+  assert.equal(secs.length, 2);
+  // No results: header + the plain "(no results)" block (used for hints).
+  secs = searchSections("zqxjk", [], [], []);
+  assert.equal(secs.join("\n"), renderSearch("zqxjk", [], [], []));
+  assert.deepEqual(secs, ["zqxjk\n", "  (no results)\n"]);
+  // A capped section keeps its count + remainder note inside its own block.
+  const many = Array.from({ length: 35 }, (_, i) => ({
+    word: fakeWord(String(i), "たべる", "to eat"),
+    reading: "たべる",
+    romaji: "taberu",
+    gloss: "to eat",
+  }));
+  secs = searchSections("tabe", many, [], [], {});
+  assert.equal(secs.join("\n"), renderSearch("tabe", many, [], [], {}));
+  assert.equal(secs.length, 2);
+  assert.ok(secs[1]!.includes("Readings (35):") && secs[1]!.includes("… and 5 more"));
+  // Color passes through identically.
+  secs = searchSections("take", readings, [], [], { color: true });
+  assert.equal(secs.join("\n"), renderSearch("take", readings, [], [], { color: true }));
+});
 
 test("renderSearch: sections with counts; reading rows print kana + romaji", () => {
   const readings = [

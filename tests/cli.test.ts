@@ -28,10 +28,10 @@ function loadJson<T>(path: string): T {
 }
 
 /** Run `main` with captured stdout/stderr; the DB path is never reached. */
-function run(argv: string[]): { code: number; stdout: string; stderr: string } {
+async function run(argv: string[]): Promise<{ code: number; stdout: string; stderr: string }> {
   let stdout = "";
   let stderr = "";
-  const code = main(
+  const code = await main(
     argv,
     "/nonexistent/kanji.db", // help returns before opening the DB
     (s) => {
@@ -106,10 +106,10 @@ function buildFixtureDbFile(): { dbPath: string; dir: string } {
 }
 
 /** Run `main` against an on-disk fixture DB (opened readonly), capturing output. */
-function runOnDb(argv: string[], dbPath: string): { code: number; stdout: string; stderr: string } {
+async function runOnDb(argv: string[], dbPath: string): Promise<{ code: number; stdout: string; stderr: string }> {
   let stdout = "";
   let stderr = "";
-  const code = main(
+  const code = await main(
     argv,
     dbPath,
     (s) => {
@@ -122,16 +122,16 @@ function runOnDb(argv: string[], dbPath: string): { code: number; stdout: string
   return { code, stdout, stderr };
 }
 
-test("no args: shows base help on stdout, exits 1", () => {
-  const { code, stdout } = run([]);
+test("no args: shows base help on stdout, exits 1", async () => {
+  const { code, stdout } = await run([]);
   assert.equal(code, 1);
   assert.ok(stdout.includes("Usage:"));
   assert.ok(/omakase <command> \[args\.\.\.\]/.test(stdout));
 });
 
-test("--help: shows base help listing all commands, exits 0", () => {
+test("--help: shows base help listing all commands, exits 0", async () => {
   for (const flag of ["--help", "-h"]) {
-    const { code, stdout, stderr } = run([flag]);
+    const { code, stdout, stderr } = await run([flag]);
     assert.equal(code, 0, `${flag} exit code`);
     assert.equal(stderr, "", `${flag} writes no error`);
     assert.ok(stdout.includes("Japanese quick-reference CLI"));
@@ -141,47 +141,47 @@ test("--help: shows base help listing all commands, exits 0", () => {
   }
 });
 
-test("word --help: detailed usage with --limit, exits 0", () => {
+test("word --help: detailed usage with --limit, exits 0", async () => {
   for (const flag of ["--help", "-h"]) {
-    const { code, stdout } = run(["word", flag]);
+    const { code, stdout } = await run(["word", flag]);
     assert.equal(code, 0);
     assert.ok(stdout.includes("omakase word <writing>"));
     assert.ok(stdout.includes("--limit N"));
   }
 });
 
-test("kanji --help: detailed usage with <query> (literal or reading), exits 0", () => {
-  const { code, stdout } = run(["kanji", "--help"]);
+test("kanji --help: detailed usage with <query> (literal or reading), exits 0", async () => {
+  const { code, stdout } = await run(["kanji", "--help"]);
   assert.equal(code, 0);
   assert.ok(stdout.includes("omakase kanji <query>"));
   assert.ok(stdout.includes("stroke count"));
 });
 
-test("search --help: detailed usage describing input forms, exits 0", () => {
-  const { code, stdout } = run(["search", "-h"]);
+test("search --help: detailed usage describing input forms, exits 0", async () => {
+  const { code, stdout } = await run(["search", "-h"]);
   assert.equal(code, 0);
   assert.ok(stdout.includes("omakase search <query>"));
   assert.ok(stdout.includes("prefix-matched"));
 });
 
-test("unknown command: error to stderr with base help, exits 2", () => {
-  const { code, stdout, stderr } = run(["bogus"]);
+test("unknown command: error to stderr with base help, exits 2", async () => {
+  const { code, stdout, stderr } = await run(["bogus"]);
   assert.equal(code, 2);
   assert.equal(stdout, "");
   assert.ok(stderr.includes("unknown command: bogus"));
   assert.ok(stderr.includes("Usage:"));
 });
 
-test("help wins over a missing database", () => {
+test("help wins over a missing database", async () => {
   // The dbPath is bogus; help must still succeed because it never opens the DB.
-  const { code, stdout } = run(["word", "--help"]);
+  const { code, stdout } = await run(["word", "--help"]);
   assert.equal(code, 0);
   assert.ok(stdout.includes("omakase word"));
 });
 
-test("--version / -V: prints the app version without opening the DB", () => {
+test("--version / -V: prints the app version without opening the DB", async () => {
   for (const flag of ["--version", "-V"]) {
-    const { code, stdout, stderr } = run([flag]); // bogus DB path — must not be opened
+    const { code, stdout, stderr } = await run([flag]); // bogus DB path — must not be opened
     assert.equal(code, 0, `${flag} exit code`);
     assert.equal(stderr, "", `${flag} writes no error`);
     assert.match(stdout, /^omakase \d+\.\d+\.\d+-build\.\d+ \(/, `${flag} stamp line`);
@@ -190,9 +190,9 @@ test("--version / -V: prints the app version without opening the DB", () => {
   }
 });
 
-test("--license / --licenses: prints the full embedded license without opening the DB", () => {
+test("--license / --licenses: prints the full embedded license without opening the DB", async () => {
   for (const flag of ["--license", "--licenses"]) {
-    const { code, stdout, stderr } = run([flag]); // bogus DB path — must not be opened
+    const { code, stdout, stderr } = await run([flag]); // bogus DB path — must not be opened
     assert.equal(code, 0, `${flag} exit code`);
     assert.equal(stderr, "", `${flag} writes no error`);
     assert.ok(stdout.includes("Sebastián R. Vansteenkiste"), `${flag} has the author credit`);
@@ -203,15 +203,15 @@ test("--license / --licenses: prints the full embedded license without opening t
   }
 });
 
-test("the embedded license text matches LICENSE.md byte-for-byte", () => {
+test("the embedded license text matches LICENSE.md byte-for-byte", async () => {
   const file = readFileSync(join(ROOT, "LICENSE.md"), "utf8");
   assert.equal(LICENSE_TEXT, file);
 });
 
-test("--version with a database: app line plus the dictionary build stamp", () => {
+test("--version with a database: app line plus the dictionary build stamp", async () => {
   const { dbPath, dir } = buildFixtureDbFile();
   try {
-    const { code, stdout, stderr } = runOnDb(["--version"], dbPath);
+    const { code, stdout, stderr } = await runOnDb(["--version"], dbPath);
     assert.equal(code, 0);
     assert.equal(stderr, "");
     assert.match(stdout, /^omakase \d+\.\d+\.\d+-build\.\d+/);
@@ -223,10 +223,10 @@ test("--version with a database: app line plus the dictionary build stamp", () =
 
 // ---- end-to-end: real commands against an on-disk fixture DB ---------------
 
-test("word <query>: real DB lookup exits 0 and prints the entry + examples", () => {
+test("word <query>: real DB lookup exits 0 and prints the entry + examples", async () => {
   const { dbPath, dir } = buildFixtureDbFile();
   try {
-    const { code, stdout, stderr } = runOnDb(["word", "食べる"], dbPath);
+    const { code, stdout, stderr } = await runOnDb(["word", "食べる"], dbPath);
     assert.equal(code, 0);
     assert.equal(stderr, "");
     assert.ok(stdout.includes("食べる [たべる] (common)"));
@@ -234,7 +234,7 @@ test("word <query>: real DB lookup exits 0 and prints the entry + examples", () 
     assert.ok(stdout.includes("Examples:"));
 
     // Kana-only entries resolve too.
-    const kanaOnly = runOnDb(["word", "いい"], dbPath);
+    const kanaOnly = await runOnDb(["word", "いい"], dbPath);
     assert.equal(kanaOnly.code, 0);
     assert.ok(kanaOnly.stdout.includes("いい [いい] (common)"));
   } finally {
@@ -242,18 +242,18 @@ test("word <query>: real DB lookup exits 0 and prints the entry + examples", () 
   }
 });
 
-test("word --limit N: space and equals flag forms both truncate senses", () => {
+test("word --limit N: space and equals flag forms both truncate senses", async () => {
   const { dbPath, dir } = buildFixtureDbFile();
   try {
     // 食べる has 2 senses; --limit 1 (space form) shows the first only.
-    const space = runOnDb(["word", "食べる", "--limit", "1"], dbPath);
+    const space = await runOnDb(["word", "食べる", "--limit", "1"], dbPath);
     assert.equal(space.code, 0);
     assert.ok(space.stdout.includes("  1. to eat"));
     assert.ok(!space.stdout.includes("  2. to live on"));
     assert.ok(space.stdout.includes("… and 1 more senses"));
 
     // --limit=2 (equals form) keeps both senses, no trailing note.
-    const eq = runOnDb(["word", "食べる", "--limit=2"], dbPath);
+    const eq = await runOnDb(["word", "食べる", "--limit=2"], dbPath);
     assert.equal(eq.code, 0);
     assert.ok(eq.stdout.includes("  2. to live on"));
     assert.ok(!eq.stdout.includes("more senses"));
@@ -262,10 +262,10 @@ test("word --limit N: space and equals flag forms both truncate senses", () => {
   }
 });
 
-test("word <missing>: error to stderr, no stdout (exits 0)", () => {
+test("word <missing>: error to stderr, no stdout (exits 0)", async () => {
   const { dbPath, dir } = buildFixtureDbFile();
   try {
-    const { code, stdout, stderr } = runOnDb(["word", "存在しない"], dbPath);
+    const { code, stdout, stderr } = await runOnDb(["word", "存在しない"], dbPath);
     assert.equal(code, 0);
     assert.equal(stdout, "");
     assert.ok(stderr.includes('no entry for "存在しない"'));
@@ -274,7 +274,7 @@ test("word <missing>: error to stderr, no stdout (exits 0)", () => {
   }
 });
 
-test("missing query: word/kanji/search each write an error to stderr", () => {
+test("missing query: word/kanji/search each write an error to stderr", async () => {
   const { dbPath, dir } = buildFixtureDbFile();
   try {
     const cases: [string[], string][] = [
@@ -283,7 +283,7 @@ test("missing query: word/kanji/search each write an error to stderr", () => {
       [["search"], "error: search requires a query"],
     ];
     for (const [argv, message] of cases) {
-      const { code, stdout, stderr } = runOnDb(argv, dbPath);
+      const { code, stdout, stderr } = await runOnDb(argv, dbPath);
       assert.equal(code, 0, `${argv.join(" ")} exit code`);
       assert.equal(stdout, "");
       assert.ok(stderr.includes(message), `${argv.join(" ")} stderr: expected ${message}`);
@@ -293,10 +293,10 @@ test("missing query: word/kanji/search each write an error to stderr", () => {
   }
 });
 
-test("kanji --strokes: braille stroke-order frames lead the page", () => {
+test("kanji --strokes: braille stroke-order frames lead the page", async () => {
   const { dbPath, dir } = buildFixtureDbFile();
   try {
-    const { code, stdout, stderr } = runOnDb(["kanji", "水", "--strokes"], dbPath);
+    const { code, stdout, stderr } = await runOnDb(["kanji", "水", "--strokes"], dbPath);
     assert.equal(code, 0);
     assert.equal(stderr, "");
     // The stroke block comes first (art on top), then the normal page.
@@ -312,53 +312,53 @@ test("kanji --strokes: braille stroke-order frames lead the page", () => {
     assert.ok(stdout.includes("\n\n水  [4 strokes]\n"), "page follows the block");
     assert.ok(stdout.includes("Meanings: water"), "page body intact");
     // Deterministic: identical input renders identical output.
-    const again = runOnDb(["kanji", "水", "--strokes"], dbPath);
+    const again = await runOnDb(["kanji", "水", "--strokes"], dbPath);
     assert.equal(again.stdout, stdout);
   } finally {
     rmSync(dir, { recursive: true, force: true });
   }
 });
 
-test("kanji --strokes: errors for multi-literal, reading queries, and no diagram", () => {
+test("kanji --strokes: errors for multi-literal, reading queries, and no diagram", async () => {
   const { dbPath, dir } = buildFixtureDbFile();
   try {
     // Multi-literal: one kanji at a time.
-    const multi = runOnDb(["kanji", "飲食", "--strokes"], dbPath);
+    const multi = await runOnDb(["kanji", "飲食", "--strokes"], dbPath);
     assert.equal(multi.code, 0);
     assert.equal(multi.stdout, "");
     assert.ok(multi.stderr.includes("error: --strokes needs a single kanji literal"), multi.stderr);
     // Reading query (kana): no page to draw.
-    const reading = runOnDb(["kanji", "たべ", "--strokes"], dbPath);
+    const reading = await runOnDb(["kanji", "たべ", "--strokes"], dbPath);
     assert.equal(reading.stdout, "");
     assert.ok(reading.stderr.includes("error: --strokes needs a single kanji literal"), reading.stderr);
     // 喰 has a kanji page but no stroke_order row in the fixtures.
-    const none = runOnDb(["kanji", "喰", "--strokes"], dbPath);
+    const none = await runOnDb(["kanji", "喰", "--strokes"], dbPath);
     assert.equal(none.code, 0);
     assert.equal(none.stdout, "");
     assert.ok(none.stderr.includes('no stroke-order data for "喰"'), none.stderr);
     // A plain page (no flag) never mentions strokes and stays byte-identical.
-    const plain = runOnDb(["kanji", "水"], dbPath);
+    const plain = await runOnDb(["kanji", "水"], dbPath);
     assert.ok(!plain.stdout.includes("Stroke order"));
   } finally {
     rmSync(dir, { recursive: true, force: true });
   }
 });
 
-test("kanji: literal page and reading search both work end-to-end", () => {
+test("kanji: literal page and reading search both work end-to-end", async () => {
   const { dbPath, dir } = buildFixtureDbFile();
   try {
-    const lit = runOnDb(["kanji", "食"], dbPath);
+    const lit = await runOnDb(["kanji", "食"], dbPath);
     assert.equal(lit.code, 0);
     assert.ok(lit.stdout.includes("食  [9 strokes]"));
     assert.ok(lit.stdout.includes("Compounds:"));
 
     // Reading-search branch (kana or romaji): 水's kun みず → "mizu".
     // (The entry lists both kun readings みず / みず-, so match the row prefix.)
-    const romaji = runOnDb(["kanji", "mizu"], dbPath);
+    const romaji = await runOnDb(["kanji", "mizu"], dbPath);
     assert.equal(romaji.code, 0);
     assert.ok(romaji.stdout.includes("  水  [みず"));
 
-    const noMatch = runOnDb(["kanji", "無"], dbPath);
+    const noMatch = await runOnDb(["kanji", "無"], dbPath);
     assert.equal(noMatch.code, 0);
     assert.equal(noMatch.stdout, "");
     assert.ok(noMatch.stderr.includes('no kanji "無"'));
@@ -367,23 +367,23 @@ test("kanji: literal page and reading search both work end-to-end", () => {
   }
 });
 
-test("search: meaning + reading sections, Kanji section, and empty result", () => {
+test("search: meaning + reading sections, Kanji section, and empty result", async () => {
   const { dbPath, dir } = buildFixtureDbFile();
   try {
-    const gloss = runOnDb(["search", "eat"], dbPath);
+    const gloss = await runOnDb(["search", "eat"], dbPath);
     assert.equal(gloss.code, 0);
     assert.ok(gloss.stdout.includes("Meanings (2):"));
     assert.ok(gloss.stdout.includes("食べる  [たべる]  to eat"));
     assert.ok(!gloss.stdout.includes("Readings ("), "no reading hits for eat");
 
-    const kana = runOnDb(["search", "たべ"], dbPath);
+    const kana = await runOnDb(["search", "たべ"], dbPath);
     assert.equal(kana.code, 0);
     assert.ok(kana.stdout.includes("Readings (2):"));
     assert.ok(kana.stdout.includes("食べ物  [たべもの (tabemono)]"));
     assert.ok(kana.stdout.includes("Kanji (1):"));
     assert.ok(kana.stdout.includes("食  [た.べる]"));
 
-    const empty = runOnDb(["search", "zqxjk"], dbPath);
+    const empty = await runOnDb(["search", "zqxjk"], dbPath);
     assert.equal(empty.code, 0);
     assert.ok(empty.stdout.includes("(no results)"));
   } finally {
@@ -391,12 +391,12 @@ test("search: meaning + reading sections, Kanji section, and empty result", () =
   }
 });
 
-test("search --max/-max: caps a section (space, equals, and -max forms)", () => {
+test("search --max/-max: caps a section (space, equals, and -max forms)", async () => {
   const { dbPath, dir } = buildFixtureDbFile();
   try {
     // たべ hits 2 readings; --max 1 shows the first and notes the remainder.
     for (const argv of [["search", "たべ", "--max", "1"], ["search", "たべ", "--max=1"], ["search", "たべ", "-max", "1"]]) {
-      const { code, stdout } = runOnDb(argv, dbPath);
+      const { code, stdout } = await runOnDb(argv, dbPath);
       assert.equal(code, 0, `${argv.join(" ")} exit code`);
       assert.ok(stdout.includes("Readings (2):"), `${argv.join(" ")} header counts the section`);
       assert.ok(stdout.includes("食べる  [たべる (taberu)]"), `${argv.join(" ")} first row`);
@@ -405,7 +405,7 @@ test("search --max/-max: caps a section (space, equals, and -max forms)", () => 
     }
 
     // An invalid cap is an error on stderr, no output.
-    const bad = runOnDb(["search", "たべ", "--max", "0"], dbPath);
+    const bad = await runOnDb(["search", "たべ", "--max", "0"], dbPath);
     assert.equal(bad.code, 0);
     assert.equal(bad.stdout, "");
     assert.ok(bad.stderr.includes("error: --max must be a positive integer"));
@@ -414,19 +414,19 @@ test("search --max/-max: caps a section (space, equals, and -max forms)", () => 
   }
 });
 
-test("search: a reading match and an English word both appear in ranked sections", () => {
+test("search: a reading match and an English word both appear in ranked sections", async () => {
   // ``take`` is a romaji reading (たけ) — but no fixture word reads たけ, so
   // the Readings section is absent; ``taberu`` lands in Readings with romaji.
   const { dbPath, dir } = buildFixtureDbFile();
   try {
-    const romaji = runOnDb(["search", "taberu"], dbPath);
+    const romaji = await runOnDb(["search", "taberu"], dbPath);
     assert.equal(romaji.code, 0);
     assert.ok(romaji.stdout.includes("Readings (1):"));
     assert.ok(romaji.stdout.includes("食べる  [たべる (taberu)]  to eat"));
     assert.ok(!romaji.stdout.includes("Meanings ("), "no meaning hits for taberu");
 
     // Spaced romaji (``ta be ru``) still matches the reading.
-    const spaced = runOnDb(["search", "ta be ru"], dbPath);
+    const spaced = await runOnDb(["search", "ta be ru"], dbPath);
     assert.equal(spaced.code, 0);
     assert.ok(spaced.stdout.includes("食べる  [たべる (taberu)]"));
   } finally {
@@ -434,18 +434,18 @@ test("search: a reading match and an English word both appear in ranked sections
   }
 });
 
-test("empty ASCII gloss search: prints a reading-path hint (did you mean)", () => {
+test("empty ASCII gloss search: prints a reading-path hint (did you mean)", async () => {
   const { dbPath, dir } = buildFixtureDbFile();
   try {
     // Completely unmatched query: generic hint pointing at the reading path.
-    const miss = runOnDb(["search", "zqxjk"], dbPath);
+    const miss = await runOnDb(["search", "zqxjk"], dbPath);
     assert.equal(miss.code, 0);
     assert.ok(miss.stdout.includes("(no results)"));
     assert.ok(miss.stdout.includes("readings match by kana or romaji prefix"));
 
     // ``eat zzz``: the ANDed gloss search is empty, but a relaxed single-token
     // match suggests 食べる and its reading as the path to search instead.
-    const close = runOnDb(["search", "eat zzz"], dbPath);
+    const close = await runOnDb(["search", "eat zzz"], dbPath);
     assert.equal(close.code, 0);
     assert.ok(close.stdout.includes("did you mean「食べる [たべる] to eat」"));
     assert.ok(close.stdout.includes("omakase search たべる"));
@@ -455,8 +455,8 @@ test("empty ASCII gloss search: prints a reading-path hint (did you mean)", () =
   }
 });
 
-test("cannot open the DB: real command exits 1 with guidance on stderr", () => {
-  const { code, stdout, stderr } = runOnDb(["word", "食べる"], "/nonexistent/kanji.db");
+test("cannot open the DB: real command exits 1 with guidance on stderr", async () => {
+  const { code, stdout, stderr } = await runOnDb(["word", "食べる"], "/nonexistent/kanji.db");
   assert.equal(code, 1);
   assert.equal(stdout, "");
   assert.ok(stderr.includes("cannot open database at /nonexistent/kanji.db"));
