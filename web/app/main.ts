@@ -1,8 +1,18 @@
 /**
- * UI: a full-width single-line input with three buttons — kanji / word /
+ * UI: a composable, hierarchical single-line input with three buttons — kanji / word /
  * search. Every action runs its lookup in the DB worker and inserts a fresh
  * results pane directly below the button row, pushing older panes down
  * (newest-first history).
+ *
+ * Nested Results: Clicking magnifying glass icons or kanji within result panes
+ * creates nested results within the parent pane instead of top-level panes.
+ * No duplicate content exists at the same level under the same parent.
+ *
+ * Caching: All search results are cached in-memory for instant retrieval.
+ *
+ * Collapsible: Each result and result list can be individually collapsed/expanded.
+ *
+ * Auto-scroll: Global toggle enables/disables automatic scrolling to new results.
  *
  * Actions are queued, never dropped: any number of clicks — command buttons,
  * Enter, or the per-character kanji / magnifier tokens inside result panes —
@@ -42,6 +52,30 @@ import { OP_LADDERS } from "./worker-api.js";
 import type { Command, StrokePage, WorkerMessage, WorkerRequest } from "./worker-api.js";
 import { strokeWidgetFigure } from "./stroke-widget.js";
 import { VERSION, VERSION_FULL } from "../../src/version.js";
+import { cacheManager } from "./cache.js";
+import {
+  type ResultNode,
+  type LegacyPaneRecord,
+  generateNodeId,
+  createResultNode,
+  createErrorResultNode,
+  hasDuplicate,
+  registerResult,
+  unregisterResult,
+  clearDuplicateTracker,
+  findResultById,
+  addResultToParent,
+  deleteResultFromTree,
+  toggleResultCollapse,
+  setResultCollapse,
+  setAllChildrenCollapse,
+  countResults,
+  migrateToHierarchical,
+  deserializeResultTree,
+  serializeCollapsedStates,
+  restoreCollapsedStates,
+  clearResultTree
+} from "./tree.js";
 
 // ---- DOM -------------------------------------------------------------------
 const form = document.querySelector<HTMLFormElement>("#lookup")!;
@@ -51,11 +85,14 @@ const buttons = document.querySelectorAll<HTMLButtonElement>("button[data-cmd]")
 const status = document.querySelector<HTMLDivElement>("#status")!;
 /** The status line's message text (the % readout below is a sibling span). */
 const statusMsg = document.querySelector<HTMLSpanElement>("#status .status-msg")!;
-/** Live “x%” readout shown next to the status while the engine boots. */
+/** Live "x%" readout shown next to the status while the engine boots. */
 const pctEl = document.querySelector<HTMLSpanElement>("#status .pct")!;
 const versionBadge = document.querySelector<HTMLSpanElement>("#version")!;
 const clearBtn = document.querySelector<HTMLButtonElement>("#clear")!;
 const panes = document.querySelector<HTMLDivElement>("#panes")!;
+
+// Auto-scroll toggle element (will be added to header)
+let autoScrollToggle: HTMLButtonElement | null = null;
 
 // Version badge — the app stamp at boot; the full stamp + dictionary build
 // (from DB meta) once the worker reports ready.
@@ -72,6 +109,8 @@ interface Pending {
    * action carries a single word, a kanji action the kanji-only query. */
   query: string;
   max: number;
+  /** Parent ID for nested results */
+  parentId: string | null;
 }
 
 const queue: Pending[] = [];
@@ -89,6 +128,13 @@ let engineDead = false;
 let bootFailures = 0;
 /** Track cancelled operation IDs to ignore their results when they arrive. */
 const cancelledOps = new Set<number>();
+
+// ---- Composable UI State ------------------------------------------------
+/** Hierarchical result tree (top-level nodes only) */
+let resultTree: ResultNode[] = [];
+
+/** Auto-scroll preference */
+let autoScrollEnabled = true;
 
 // ---- per-operation streaming + progress -------------------------------------
 /** Skeleton panes keyed by the in-flight request id (created at drain). */
@@ -125,19 +171,31 @@ interface StoredState {
   command?: unknown;
   max?: unknown;
   panes?: unknown;
+  autoScrollEnabled?: unknown;
+  collapsedStates?: unknown;
+  resultTree?: unknown;
 }
 
 const STORAGE_KEY = "omakase.state";
 const COMMANDS: readonly string[] = ["kanji", "word", "search"];
-/** Result history, newest first — mirrors the #panes DOM order (child 0 = newest). */
-let history: PaneRecord[] = [];
 
-/** Write input, last command, max and the pane history to localStorage. */
+/**
+ * Write input, last command, max, auto-scroll and the pane history to localStorage.
+ */
 function saveState(): void {
   try {
+    const collapsedStates = serializeCollapsedStates(resultTree);
     localStorage.setItem(
       STORAGE_KEY,
-      JSON.stringify({ v: 1, query: input.value, command: lastCommand, max: parseMax(), panes: history }),
+      JSON.stringify({
+        v: 2,
+        query: input.value,
+        command: lastCommand,
+        max: parseMax(),
+        autoScrollEnabled,
+        resultTree: resultTree,
+        collapsedStates
+      }),
     );
   } catch {
     /* storage unavailable (private mode / quota) — persistence is a nicety */
@@ -279,23 +337,40 @@ function endOpProgress(): void {
 
 // ---- streaming panes --------------------------------------------------------
 /**
+ * Map from operation ID to the DOM element for streaming panes
+ */
+const streamingPaneById = new Map<number, { pane: HTMLElement, pre: HTMLElement, parentId: string | null }>();
+
+/**
  * The pane for a dequeued lookup, created immediately: header + a few
  * skeleton rows (the worker's streamed sections fill the body in). Kept out
- * of the history until its final `result` lands, so a crash mid-lookup never
+ * of the tree until its final `result` lands, so a crash mid-lookup never
  * persists a half-built pane.
  */
 function addSkeletonPane(item: Pending): void {
+  const nodeId = `op_${item.id}`; // Temporary ID for streaming
+  const parentId = item.parentId;
+  
   const pane = document.createElement("section");
   pane.className = "pane streaming";
+  pane.dataset.nodeId = nodeId;
+  if (parentId) {
+    pane.classList.add("nested");
+  }
+  
   const head = document.createElement("div");
   head.className = "pane-head";
+  
   const badge = document.createElement("span");
   badge.className = "badge";
   badge.textContent = item.command;
+  
   const q = document.createElement("span");
   q.className = "pane-query";
   q.textContent = item.query;
+  
   head.append(badge, q);
+  
   const pre = document.createElement("pre");
   for (let i = 0; i < 3; i++) {
     const line = document.createElement("span");
@@ -303,10 +378,40 @@ function addSkeletonPane(item: Pending): void {
     line.style.width = `${[88, 64, 76][i]}%`;
     pre.appendChild(line);
   }
+  
   pane.append(head, pre);
-  panes.prepend(pane);
-  pane.scrollIntoView({ block: "start", behavior: "smooth" });
+  
+  // Insert into appropriate location
+  if (parentId) {
+    const parentPane = document.querySelector(`[data-node-id="${parentId}"]`);
+    if (parentPane) {
+      let childrenContainer = parentPane.querySelector('.pane-children');
+      if (!childrenContainer) {
+        childrenContainer = document.createElement('div');
+        childrenContainer.className = 'pane-children';
+        const preElement = parentPane.querySelector('pre');
+        if (preElement) {
+          parentPane.insertBefore(childrenContainer, preElement.nextSibling);
+        } else {
+          parentPane.appendChild(childrenContainer);
+        }
+      }
+      childrenContainer.prepend(pane);
+    } else {
+      // Parent not found, add to top level
+      panes.prepend(pane);
+    }
+  } else {
+    panes.prepend(pane);
+  }
+  
+  // Conditional auto-scroll
+  if (autoScrollEnabled) {
+    pane.scrollIntoView({ block: "start", behavior: "smooth" });
+  }
+  
   paneByOpId.set(item.id, pane);
+  streamingPaneById.set(item.id, { pane, pre, parentId });
   opTexts.set(item.id, []);
 }
 
@@ -319,12 +424,12 @@ function addSkeletonPane(item: Pending): void {
  * identical to the finished pane. The skeleton shimmer rows are cleared the
  * moment the first section lands — they are a placeholder, never left
  * stacked above the streamed text (later appends find none left). */
-function appendSectionText(pre: HTMLElement, text: string): void {
+function appendSectionText(pre: HTMLElement, text: string, parentId: string | null): void {
   pre.querySelectorAll(".skel-line").forEach((el) => el.remove());
   const nodes: (Node | string)[] = [];
   text.split("\n").forEach((line, i) => {
     if (i > 0) nodes.push("\n");
-    nodes.push(...linkifyLine(line));
+    nodes.push(...linkifyLine(line, parentId));
   });
   pre.append(...nodes);
 }
@@ -336,7 +441,9 @@ const KANJI_RE = /\p{Script=Han}/u;
  * `，`, Japanese `、`) and any whitespace. */
 const WORD_SEP_RE = /[\s,，、]+/u;
 
-/** The individual words of a `word` box, in order (runs between separators). */
+/**
+ * The individual words of a `word` box, in order (runs between separators).
+ */
 function wordTokens(raw: string): string[] {
   return raw.split(WORD_SEP_RE).filter((s) => s !== "");
 }
@@ -376,36 +483,79 @@ function kanjiQueries(raw: string): string[] {
  * that word up alone returns); `kanji` ignores non-kanji characters; the
  * `search` action is sent verbatim.
  */
-function submit(command: Command): void {
+function submit(command: Command, context?: { parentId: string | null }): void {
   if (engineDead) return;
   const raw = input.value;
+  const parentId = context?.parentId ?? null;
+  const max = parseMax();
+  
   const queries = command === "word"
     ? wordTokens(raw)
     : command === "kanji"
       ? kanjiQueries(raw)
       : [raw.trim()];
-  // Repeated lookups collapse before anything is enqueued — both repeats
-  // inside one action (a word box like 水 水 queues a single lookup) and
-  // lookups that are already pending: the queue's head stays in place until
-  // its result lands, so this also covers whatever is in flight. A token
-  // clicked twice in a row therefore gets one pane, not two. The dedupe key
-  // is command + normalized query, so kanji 食 and word 食 stay distinct.
-  const seen = new Set(queue.map((p) => `${p.command}\u0000${p.query}`));
-  const pending: string[] = [];
+  
+  // Check for duplicates and existing cache
+  const seen = new Set(queue.map((p) => `${p.command}\u0000${p.query}\u0000${p.parentId}`));
+  const pending: { query: string; parentId: string | null; max: number }[] = [];
+  
   for (const q of queries) {
-    const key = `${command}\u0000${q}`;
-    if (q.length > 0 && !seen.has(key)) {
+    if (q.length === 0) continue;
+    
+    const key = `${command}\u0000${q}\u0000${parentId}`;
+    
+    // Check if this would be a duplicate at the same level under same parent
+    if (hasDuplicate(parentId, command as Command, q)) {
+      continue;
+    }
+    
+    // Check if already in queue for this parent context
+    if (!seen.has(key)) {
       seen.add(key);
-      pending.push(q);
+      pending.push({ query: q, parentId, max });
     }
   }
+  
   if (pending.length === 0) {
     input.focus();
     return;
   }
+  
   lastCommand = command;
-  const max = parseMax();
-  for (const q of pending) queue.push({ id: nextId++, command, query: q, max });
+  for (const p of pending) {
+    // Check cache first
+    const cached = cacheManager.getCached(command, p.query, p.max);
+    if (cached) {
+      // Use cached result - create new node with proper parent context
+      const newNode = createResultNode(
+        cached.command,
+        cached.query,
+        cached.text,
+        cached.error,
+        cached.strokes,
+        p.parentId,
+        p.max
+      );
+      
+      // Add to tree and render
+      resultTree = addResultToParent(resultTree, newNode, p.parentId);
+      renderResultNode(newNode);
+      
+      // Register to prevent duplicates
+      registerResult(p.parentId, command, p.query);
+    } else {
+      // Not cached, add to queue
+      queue.push({ 
+        id: nextId++, 
+        command, 
+        query: p.query, 
+        max: p.max,
+        parentId: p.parentId
+      });
+      cacheManager.markFetchStarted(command, p.query, p.max);
+    }
+  }
+  
   saveState();
   syncBusyUi();
   input.select();
@@ -413,12 +563,21 @@ function submit(command: Command): void {
 }
 
 /** Add a pane indicating the operation was cancelled. */
-function addCancelledPane(command: string, query: string): void {
+function addCancelledPane(command: string, query: string, parentId: string | null = null): void {
+  const nodeId = generateNodeId();
   const pane = document.createElement("section");
   pane.className = "pane error cancelled";
-  
+  pane.dataset.nodeId = nodeId;
+  if (parentId) {
+    pane.classList.add("nested");
+  }
+
   const head = document.createElement("div");
   head.className = "pane-head";
+  
+  // Add collapse toggle
+  const collapseToggle = createCollapseToggle(nodeId);
+  head.append(collapseToggle);
   
   const badge = document.createElement("span");
   badge.className = "badge";
@@ -445,8 +604,33 @@ function addCancelledPane(command: string, query: string): void {
   pre.textContent = "operation cancelled";
   
   pane.append(head, pre);
-  panes.prepend(pane);
-  pane.scrollIntoView({ block: "start", behavior: "smooth" });
+  
+  // Insert at appropriate location
+  if (parentId) {
+    const parentPane = document.querySelector(`[data-node-id="${parentId}"]`);
+    if (parentPane) {
+      let childrenContainer = parentPane.querySelector('.pane-children');
+      if (!childrenContainer) {
+        childrenContainer = document.createElement('div');
+        childrenContainer.className = 'pane-children';
+        const preElement = parentPane.querySelector('pre');
+        if (preElement) {
+          parentPane.insertBefore(childrenContainer, preElement.nextSibling);
+        } else {
+          parentPane.appendChild(childrenContainer);
+        }
+      }
+      childrenContainer.prepend(pane);
+    } else {
+      panes.prepend(pane);
+    }
+  } else {
+    panes.prepend(pane);
+  }
+  
+  if (autoScrollEnabled) {
+    pane.scrollIntoView({ block: "start", behavior: "smooth" });
+  }
 }
 
 /** Cancel the currently-running operation only (head of queue). */
@@ -460,12 +644,14 @@ function cancelCurrentOperation(): void {
   inFlight = false;
   
   // Remove skeleton pane and replace with cancelled message
-  const skeletonPane = paneByOpId.get(head.id);
-  if (skeletonPane) {
-    skeletonPane.remove();
+  const skeletonData = streamingPaneById.get(head.id);
+  if (skeletonData) {
+    skeletonData.pane.remove();
+    streamingPaneById.delete(head.id);
   }
   paneByOpId.delete(head.id);
   opTexts.delete(head.id);
+  cacheManager.markFetchCompleted(head.command, head.query, head.max);
   
   if (opActiveId === head.id) {
     opActiveId = null;
@@ -474,7 +660,7 @@ function cancelCurrentOperation(): void {
   }
   
   // Add cancelled pane for user visibility
-  addCancelledPane(head.command, head.query);
+  addCancelledPane(head.command, head.query, head.parentId);
   
   // Update UI and process next
   syncBusyUi();
@@ -520,10 +706,10 @@ function onWorkerMessage(ev: MessageEvent<WorkerMessage>): void {
       // pane and claim its floor on the operation ladder.
       // Skip if this operation was cancelled
       if (cancelledOps.has(msg.id)) break;
-      const pane = paneByOpId.get(msg.id);
-      if (pane) {
-        const pre = pane.querySelector("pre");
-        if (pre) appendSectionText(pre, msg.text);
+      const streamingData = streamingPaneById.get(msg.id);
+      if (streamingData) {
+        const { pre, parentId } = streamingData;
+        appendSectionText(pre, msg.text, parentId);
       }
       const texts = opTexts.get(msg.id);
       if (texts) texts.push(msg.text);
@@ -585,8 +771,14 @@ function handleResult(msg: Extract<WorkerMessage, { kind: "result" }>): void {
       queue.shift();
     }
     // Clean up any in-progress state
+    const streamingData = streamingPaneById.get(msg.id);
+    if (streamingData) {
+      streamingData.pane.remove();
+      streamingPaneById.delete(msg.id);
+    }
     paneByOpId.delete(msg.id);
     opTexts.delete(msg.id);
+    
     if (opActiveId === msg.id) {
       opActiveId = null;
       opCommand = null;
@@ -599,32 +791,67 @@ function handleResult(msg: Extract<WorkerMessage, { kind: "result" }>): void {
   
   if (item && item.id === msg.id) {
     queue.shift();
-    const pane = paneByOpId.get(msg.id);
+    const streamingData = streamingPaneById.get(msg.id);
+    streamingPaneById.delete(msg.id);
+    const skeletonPane = paneByOpId.get(msg.id);
     paneByOpId.delete(msg.id);
     const streamedText = opTexts.get(msg.id)?.join("") ?? "";
     opTexts.delete(msg.id);
+    cacheManager.markFetchCompleted(item.command, item.query, item.max);
+    
     try {
       if (msg.error !== null) {
-        if (pane) pane.remove();
-        addPane(item.command, item.query, msg.error, true);
+        if (streamingData) streamingData.pane.remove();
+        if (skeletonPane) skeletonPane.remove();
+        
+        const errorNode = createErrorResultNode(item.command, item.query, msg.error, item.parentId, item.max);
+        resultTree = addResultToParent(resultTree, errorNode, item.parentId);
+        renderResultNode(errorNode);
+        registerResult(item.parentId, item.command, item.query);
+        
       } else if (msg.text !== null) {
         // Legacy whole-result path (no sections streamed).
-        if (pane) pane.remove();
-        addPane(item.command, item.query, msg.text, false, msg.strokes);
+        if (streamingData) streamingData.pane.remove();
+        if (skeletonPane) skeletonPane.remove();
+        
+        const resultNode = createResultNode(item.command, item.query, msg.text, false, msg.strokes, item.parentId, item.max);
+        resultTree = addResultToParent(resultTree, resultNode, item.parentId);
+        renderResultNode(resultNode);
+        
+        // Cache the result
+        cacheManager.setCache(item.command, item.query, item.max, resultNode);
+        registerResult(item.parentId, item.command, item.query);
+        
       } else {
         // Streamed success: the sections already rendered the pane — swap the
         // skeleton for the canonical pane (trashbin + history + linkified
         // text) built from the concatenated sections, byte-identical to what
         // the CLI would have printed.
-        if (pane) pane.remove();
-        if (streamedText !== "") addPane(item.command, item.query, streamedText, false, msg.strokes);
-        else addPane(item.command, item.query, "(empty result)", true); // defensive: hits always stream
+        if (streamingData) streamingData.pane.remove();
+        if (skeletonPane) skeletonPane.remove();
+        
+        if (streamedText !== "") {
+          const resultNode = createResultNode(item.command, item.query, streamedText, false, msg.strokes, item.parentId, item.max);
+          resultTree = addResultToParent(resultTree, resultNode, item.parentId);
+          renderResultNode(resultNode);
+          
+          // Cache the result
+          cacheManager.setCache(item.command, item.query, item.max, resultNode);
+          registerResult(item.parentId, item.command, item.query);
+        } else {
+          // Defensive: hits always stream
+          const errorNode = createErrorResultNode(item.command, item.query, "(empty result)", item.parentId, item.max);
+          resultTree = addResultToParent(resultTree, errorNode, item.parentId);
+          renderResultNode(errorNode);
+          registerResult(item.parentId, item.command, item.query);
+        }
       }
     } catch (err) {
       // A pane must never wedge the queue: report and keep draining.
       console.error("could not render result pane:", err);
     }
   }
+  
   endOpProgress(); // queue empty → park the bar and restore the ready line
   syncBusyUi();
   drain();
@@ -746,7 +973,8 @@ function syncBusyUi(): void {
  * rest of the queue drains once the fresh engine reports ready. Only after
  * several consecutive failures does the app give up (the environment cannot
  * run the engine) — it then settles into a clear error state instead of
- * spinning forever, and reloading the page restarts it. */
+ * spinning forever, and reloading the page restarts it.
+ */
 function engineDown(message: string): void {
   disarmWatchdog();
   const lost = inFlight ? (queue[0] ?? null) : null;
@@ -755,12 +983,21 @@ function engineDown(message: string): void {
     queue.shift();
     // The in-flight lookup's skeleton pane becomes an error pane — never a
     // duplicate (the skeleton must not linger next to a fresh error pane).
-    const pane = paneByOpId.get(lost.id);
+    const streamingData = streamingPaneById.get(lost.id);
+    streamingPaneById.delete(lost.id);
+    const skeletonPane = paneByOpId.get(lost.id);
     paneByOpId.delete(lost.id);
     opTexts.delete(lost.id);
-    if (pane) pane.remove();
+    cacheManager.markFetchCompleted(lost.command, lost.query, lost.max);
+    
+    if (streamingData) streamingData.pane.remove();
+    if (skeletonPane) skeletonPane.remove();
+    
     try {
-      addPane(lost.command, lost.query, `engine error — ${message}`, true);
+      const errorNode = createErrorResultNode(lost.command, lost.query, `engine error — ${message}`, lost.parentId, lost.max);
+      resultTree = addResultToParent(resultTree, errorNode, lost.parentId);
+      renderResultNode(errorNode);
+      registerResult(lost.parentId, lost.command, lost.query);
     } catch {
       /* never wedge on a pane */
     }
@@ -776,7 +1013,10 @@ function engineDown(message: string): void {
     while (queue.length > 0) {
       const item = queue.shift()!;
       try {
-        addPane(item.command, item.query, `engine error — ${message}`, true);
+        const errorNode = createErrorResultNode(item.command, item.query, `engine error — ${message}`, item.parentId, item.max);
+        resultTree = addResultToParent(resultTree, errorNode, item.parentId);
+        renderResultNode(errorNode);
+        registerResult(item.parentId, item.command, item.query);
       } catch {
         /* never wedge on a pane */
       }
@@ -837,11 +1077,11 @@ function makeWorker(): Worker {
 const KANA_RE = /[\p{Script=Hiragana}\p{Script=Katakana}]/u;
 
 /**
- * “Word row” — `  writing  [reading/ruby]  gloss…`, the shape used by
+ * "Word row" — `  writing  [reading/ruby]  gloss…`, the shape used by
  * compounds, multi-kanji Words, search hits, thesaurus and deconjugate rows.
  * The bracket group allows nested ruby like `食[たべ]物[もの]`.
  */
-const WORD_ROW_RE = /^(\s*)([^\[]*?)\s{2}\[((?:[^\[\]]|\[[^\[\]]*\])*)\](.*)$/;
+const WORD_ROW_RE = /^(\s*)([^\[\]]*?)\s{2}\[((?:[^\[\]]|\\[[^\[\]]*\\])*)\](.*)$/;
 
 /** Magnifier glyph for word-lookup buttons (inline SVG, monochrome). */
 const WORD_ICON_SVG =
@@ -855,8 +1095,12 @@ const TRASH_ICON_SVG =
   'fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round">' +
   '<path d="M3 6h18"/><path d="M8 6V4h8v2"/><path d="m6 6 1 14h10l1-14"/></svg>';
 
+/** Chevron icons for collapse/expand toggles */
+const CHEVRON_DOWN_SVG = '<svg viewBox="0 0 24 24" width="12" height="12" aria-hidden="true" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round"><path d="M6 9l6 6 6-6"/></svg>';
+const CHEVRON_RIGHT_SVG = '<svg viewBox="0 0 24 24" width="12" height="12" aria-hidden="true" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round"><path d="M9 18l6-6-6-6"/></svg>';
+
 /** One kanji character as a button → `kanji <ch>` lookup. */
-function kanjiButton(ch: string): HTMLButtonElement {
+function kanjiButton(ch: string, parentId: string | null = null): HTMLButtonElement {
   const b = document.createElement("button");
   b.className = "tok tok-kanji";
   b.textContent = ch;
@@ -864,22 +1108,22 @@ function kanjiButton(ch: string): HTMLButtonElement {
   b.addEventListener("click", () => {
     if (form.hasAttribute("aria-busy")) return;
     input.value = ch;
-    submit("kanji");
+    submit("kanji", { parentId });
   });
   return b;
 }
 
 /** A word-lookup icon at the left of a word → `word <writing>` lookup. */
-function wordIconButton(writing: string): HTMLButtonElement {
+function wordIconButton(writing: string, parentId: string | null = null): HTMLButtonElement {
   const b = document.createElement("button");
   b.className = "tok tok-word";
   b.title = `word ${writing}`;
-  b.setAttribute("aria-label", `look up “${writing}”`);
+  b.setAttribute("aria-label", `look up "${writing}"`);
   b.innerHTML = WORD_ICON_SVG;
   b.addEventListener("click", () => {
     if (form.hasAttribute("aria-busy")) return;
     input.value = writing;
-    submit("word");
+    submit("word", { parentId });
   });
   return b;
 }
@@ -891,7 +1135,7 @@ function wordIconButton(writing: string): HTMLButtonElement {
  * even a single character). Bracket contents (readings/ruby) are left plain
  * apart from their own kanji being clickable.
  */
-function linkifyLine(line: string): (Node | string)[] {
+function linkifyLine(line: string, parentId: string | null = null): (Node | string)[] {
   const out: (Node | string)[] = [];
   const m = WORD_ROW_RE.exec(line);
   let cursor = 0;
@@ -900,80 +1144,187 @@ function linkifyLine(line: string): (Node | string)[] {
     const writing = m[2]!;
     if (KANJI_RE.test(writing) || KANA_RE.test(writing)) {
       out.push(line.slice(cursor, writingStart));
-      out.push(wordIconButton(writing));
+      out.push(wordIconButton(writing, parentId));
       cursor = writingStart;
     }
   }
   for (const ch of line.slice(cursor)) {
-    out.push(KANJI_RE.test(ch) ? kanjiButton(ch) : ch);
+    out.push(KANJI_RE.test(ch) ? kanjiButton(ch, parentId) : ch);
   }
   return out;
 }
 
-// ---- panes -----------------------------------------------------------------
 /**
- * Build one results pane: a small header (command · query · trashbin) + the
- * CLI text. Deleting via the trashbin removes the pane and its history
- * record (persisted), leaving the rest of the history intact.
+ * Create collapse toggle button for a result pane
  */
-function renderPane(rec: PaneRecord): HTMLElement {
-  const pane = document.createElement("section");
-  pane.className = "pane";
-  if (rec.error) pane.classList.add("error");
+function createCollapseToggle(nodeId: string, initiallyCollapsed: boolean = false): HTMLButtonElement {
+  const toggle = document.createElement("button");
+  toggle.className = "pane-collapse";
+  toggle.innerHTML = initiallyCollapsed ? CHEVRON_RIGHT_SVG : CHEVRON_DOWN_SVG;
+  toggle.title = initiallyCollapsed ? 'Expand' : 'Collapse';
+  toggle.setAttribute('aria-label', initiallyCollapsed ? 'Expand' : 'Collapse');
+  toggle.addEventListener('click', (ev) => {
+    ev.stopPropagation();
+    ev.preventDefault();
+    toggleResult(nodeId);
+  });
+  return toggle;
+}
 
+/**
+ * Toggle collapse state for a result node in the UI and state
+ */
+function toggleResult(nodeId: string): void {
+  resultTree = toggleResultCollapse(resultTree, nodeId);
+  
+  const pane = document.querySelector(`[data-node-id="${nodeId}"]`);
+  if (pane) {
+    const toggle = pane.querySelector('.pane-collapse') as HTMLButtonElement | null;
+    const childrenContainer = pane.querySelector('.pane-children');
+    
+    if (toggle) {
+      const node = findResultById(resultTree, nodeId);
+      if (node) {
+        toggle.innerHTML = node.collapsed ? CHEVRON_RIGHT_SVG : CHEVRON_DOWN_SVG;
+        toggle.title = node.collapsed ? 'Expand' : 'Collapse';
+        toggle.setAttribute('aria-label', node.collapsed ? 'Expand' : 'Collapse');
+      }
+    }
+    
+    if (childrenContainer) {
+      const node = findResultById(resultTree, nodeId);
+      if (node) {
+        childrenContainer.classList.toggle('hidden', node.collapsed);
+      }
+    }
+    
+    saveState();
+  }
+}
+
+/**
+ * Delete a result node from the UI and state
+ */
+function deleteResult(nodeId: string): void {
+  resultTree = deleteResultFromTree(resultTree, nodeId);
+  
+  const pane = document.querySelector(`[data-node-id="${nodeId}"]`);
+  if (pane) {
+    pane.remove();
+  }
+  
+  updateClearButton();
+  saveState();
+}
+
+/**
+ * Render a single result node as DOM
+ */
+function renderResultNode(node: ResultNode): HTMLElement {
+  const pane = document.createElement("section");
+  pane.className = `pane${node.parentId ? ' nested' : ''}`;
+  pane.dataset.nodeId = node.id;
+
+  // Header
   const head = document.createElement("div");
   head.className = "pane-head";
+
+  // Collapse toggle
+  const collapseToggle = createCollapseToggle(node.id, node.collapsed);
+  head.append(collapseToggle);
+
   const badge = document.createElement("span");
   badge.className = "badge";
-  badge.textContent = rec.command;
+  badge.textContent = node.command;
+  
   const q = document.createElement("span");
   q.className = "pane-query";
-  q.textContent = rec.query;
+  q.textContent = node.query;
+
   const del = document.createElement("button");
   del.type = "button";
   del.className = "pane-del";
   del.title = "Delete this result";
-  del.setAttribute("aria-label", `Delete result for ${rec.query}`);
+  del.setAttribute("aria-label", `Delete result for ${node.query}`);
   del.innerHTML = TRASH_ICON_SVG;
   del.addEventListener("click", () => {
-    history = history.filter((r) => r !== rec);
-    pane.remove();
-    updateClearButton();
-    saveState();
+    deleteResult(node.id);
   });
+
   head.append(badge, q, del);
 
+  // Content
   const pre = document.createElement("pre");
-  const content = rec.text.endsWith("\n") ? rec.text.slice(0, -1) : rec.text;
+  const content = node.text.endsWith("\n") ? node.text.slice(0, -1) : node.text;
   const nodes: (Node | string)[] = [];
   content.split("\n").forEach((line, i) => {
     if (i > 0) nodes.push("\n");
-    nodes.push(...linkifyLine(line));
+    nodes.push(...linkifyLine(line, node.id));
   });
   pre.append(...nodes);
 
   pane.append(head, pre);
+
+  // Children container (for nested results)
+  const childrenContainer = document.createElement("div");
+  childrenContainer.className = `pane-children${node.collapsed ? ' hidden' : ''}`;
+  
+  // Render children recursively
+  for (const child of node.children) {
+    const childPane = renderResultNode(child);
+    childrenContainer.appendChild(childPane);
+  }
+  
+  pane.append(childrenContainer);
+
+  // Insert into appropriate location
+  if (node.parentId) {
+    const parentPane = document.querySelector(`[data-node-id="${node.parentId}"]`);
+    if (parentPane) {
+      let parentChildrenContainer = parentPane.querySelector('.pane-children');
+      if (!parentChildrenContainer) {
+        parentChildrenContainer = document.createElement('div');
+        parentChildrenContainer.className = 'pane-children';
+        const preElement = parentPane.querySelector('pre');
+        if (preElement) {
+          parentPane.insertBefore(parentChildrenContainer, preElement.nextSibling);
+        } else {
+          parentPane.appendChild(parentChildrenContainer);
+        }
+      }
+      parentChildrenContainer.prepend(pane);
+    } else {
+      // Parent not found, add to top level
+      panes.prepend(pane);
+    }
+  } else {
+    panes.prepend(pane);
+  }
+  
+  // Auto-scroll if enabled
+  if (autoScrollEnabled) {
+    pane.scrollIntoView({ block: "start", behavior: "smooth" });
+  }
+  
+  // Attach stroke widgets if this is a kanji result with stroke data
+  if (node.command === 'kanji' && node.strokes && node.strokes.length > 0) {
+    attachStrokeWidgets(pane, node.strokes);
+  }
+
   return pane;
 }
 
-/** Add a fresh result pane (newest first) and persist the history. */
-function addPane(
-  command: string,
-  query: string,
-  text: string,
-  isError: boolean,
-  strokes?: StrokePage[],
-): void {
-  const rec: PaneRecord = { command, query, text, error: isError, ...(strokes && strokes.length > 0 ? { strokes } : {}) };
-  history.unshift(rec);
-  updateClearButton();
-  const pane = renderPane(rec);
-  panes.prepend(pane); // newest pane sits directly below the button row
-  attachStrokeWidgets(pane, rec.strokes);
-  pane.scrollIntoView({ block: "start", behavior: "smooth" });
-  saveState();
+/**
+ * Render the entire result tree
+ */
+function renderResultTree(): void {
+  panes.replaceChildren();
+  for (const node of resultTree) {
+    renderResultNode(node);
+  }
 }
 
+// ---- panes -----------------------------------------------------------------
 /**
  * Stroke-order widgets live between a pane's header and its text: one figure
  * per page character (kanji 制作者 gets three). Widgets fetch their svg
@@ -986,23 +1337,33 @@ function attachStrokeWidgets(pane: HTMLElement, strokes: StrokePage[] | undefine
   strip.className = "stroke-strip";
   for (const page of strokes) strip.appendChild(strokeWidgetFigure(page));
   const pre = pane.querySelector("pre");
-  if (pre) pane.insertBefore(strip, pre);
+  if (pre) {
+    const head = pane.querySelector('.pane-head');
+    if (head && head.nextSibling === pre) {
+      pane.insertBefore(strip, pre);
+    } else {
+      pane.insertBefore(strip, pre);
+    }
+  }
 }
 
 /** The header trashbin is enabled only while there is history to delete. */
 function updateClearButton(): void {
-  clearBtn.disabled = history.length === 0;
+  clearBtn.disabled = countResults(resultTree) === 0;
 }
 
 /** Header trashbin: remove every result pane and clear the persisted history. */
 function clearAll(): void {
-  history = [];
+  resultTree = clearResultTree();
+  cacheManager.clear();
   panes.replaceChildren();
   updateClearButton();
   saveState();
 }
 
-/** Restore input, max, last command and the result history from storage. */
+/**
+ * Restore input, max, last command and the result history from storage.
+ */
 function restoreState(): void {
   let stored: StoredState | null = null;
   try {
@@ -1010,10 +1371,29 @@ function restoreState(): void {
   } catch {
     /* corrupt storage — start fresh */
   }
-  if (!stored || stored.v !== 1) {
+  if (!stored || stored.v === undefined) {
     setLastCommand("search");
     return;
   }
+  
+  // Load auto-scroll preference (default to true)
+  autoScrollEnabled = stored.autoScrollEnabled !== false;
+  
+  // Handle legacy format (v1) - flat panes
+  if (stored.v === 1 && Array.isArray(stored.panes)) {
+    const legacyPanes = stored.panes as LegacyPaneRecord[];
+    resultTree = migrateToHierarchical(legacyPanes);
+  } else if (stored.v === 2 && Array.isArray(stored.resultTree)) {
+    // New hierarchical format
+    resultTree = deserializeResultTree(stored.resultTree);
+    
+    // Restore collapsed states
+    if (stored.collapsedStates && typeof stored.collapsedStates === 'object') {
+      resultTree = restoreCollapsedStates(resultTree, stored.collapsedStates as Record<string, boolean>);
+    }
+  }
+  
+  // Restore UI state
   if (typeof stored.query === "string") input.value = stored.query;
   const m = Number(stored.max);
   if (Number.isInteger(m) && m >= 1) maxInput.value = String(m);
@@ -1021,39 +1401,50 @@ function restoreState(): void {
     ? (stored.command as Command)
     : "search";
   setLastCommand(command);
-  if (Array.isArray(stored.panes)) {
-    for (const rec of stored.panes) {
-      if (
-        rec && typeof rec === "object"
-        && typeof (rec as PaneRecord).command === "string"
-        && typeof (rec as PaneRecord).query === "string"
-        && typeof (rec as PaneRecord).text === "string"
-      ) {
-        const r = rec as PaneRecord;
-        const strokes: StrokePage[] | undefined = Array.isArray(r.strokes)
-          ? r.strokes.filter(
-              (s) => s && typeof s.literal === "string" && typeof s.svgFile === "string",
-            )
-          : undefined;
-        history.push({
-          command: r.command,
-          query: r.query,
-          text: r.text,
-          error: !!r.error,
-          ...(strokes && strokes.length > 0 ? { strokes } : {}),
-        });
-      }
-    }
-    // history is newest-first; appending in order reproduces the DOM order.
-    for (const rec of history) {
-      const pane = renderPane(rec);
-      panes.append(pane);
-      attachStrokeWidgets(pane, rec.strokes);
-    }
-  }
+  
+  // Render tree
+  renderResultTree();
   updateClearButton();
 }
 
+// ---- Auto-scroll toggle -----------------------------------------------------
+/**
+ * Initialize the auto-scroll toggle in the header
+ */
+function initializeAutoScrollToggle(): void {
+  autoScrollToggle = document.createElement("button");
+  autoScrollToggle.id = "auto-scroll-toggle";
+  autoScrollToggle.className = "header-toggle";
+  updateAutoScrollToggleText();
+  autoScrollToggle.title = 'Toggle auto-scroll for new results';
+  autoScrollToggle.setAttribute('aria-label', autoScrollEnabled ? 'Disable auto-scroll' : 'Enable auto-scroll');
+  autoScrollToggle.addEventListener('click', () => {
+    autoScrollEnabled = !autoScrollEnabled;
+    updateAutoScrollToggleText();
+    if (autoScrollToggle) {
+      autoScrollToggle.setAttribute('aria-label', autoScrollEnabled ? 'Disable auto-scroll' : 'Enable auto-scroll');
+    }
+    localStorage.setItem('omakase.autoScroll', String(autoScrollEnabled));
+    saveState();
+  });
+  
+  // Insert in header - before the clear button
+  const header = document.querySelector('header');
+  if (header && clearBtn.parentNode === header) {
+    header.insertBefore(autoScrollToggle, clearBtn);
+  }
+}
+
+/**
+ * Update the auto-scroll toggle button text
+ */
+function updateAutoScrollToggleText(): void {
+  if (autoScrollToggle) {
+    autoScrollToggle.textContent = autoScrollEnabled ? 'Auto-scroll: ON' : 'Auto-scroll: OFF';
+  }
+}
+
+// ---- controls --------------------------------------------------------------
 function setControlsDisabled(v: boolean): void {
   input.disabled = v;
   maxInput.disabled = v;
@@ -1061,6 +1452,19 @@ function setControlsDisabled(v: boolean): void {
 }
 
 // ---- events ----------------------------------------------------------------
+// Initialize auto-scroll toggle on startup
+initializeAutoScrollToggle();
+
+// Load auto-scroll preference from localStorage if available
+try {
+  const savedAutoScroll = localStorage.getItem('omakase.autoScroll');
+  if (savedAutoScroll !== null) {
+    autoScrollEnabled = savedAutoScroll !== 'false';
+  }
+} catch {
+  // localStorage not available
+}
+
 for (const b of buttons) {
   b.addEventListener("click", () => {
     setLastCommand(b.dataset.cmd as Command);

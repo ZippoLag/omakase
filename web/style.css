@@ -680,3 +680,124 @@ summary:focus-visible,
 .pane pre button.tok:focus-visible {
   font-weight: 700;
 }
+
+/* ==========================================================================
+   COMPOSABLE UI STYLES
+   ========================================================================== */
+
+/* ---- Nested result panes -------------------------------------------------- */
+.pane.nested {
+  margin-left: 15px;
+  border-left: 2px solid var(--line);
+  padding-left: 10px;
+}
+
+.pane-children {
+  margin-top: 8px;
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  overflow: hidden;
+  max-height: 5000px;
+  opacity: 1;
+  transition: max-height 0.3s ease-out, opacity 0.2s ease, margin-top 0.3s ease;
+  will-change: max-height, opacity;
+}
+
+.pane-children.hidden {
+  max-height: 0 !important;
+  opacity: 0;
+  margin-top: 0;
+  pointer-events: none;
+  overflow: hidden;
+}
+
+/* ---- Collapse toggle ------------------------------------------------------- */
+.pane-collapse {
+  flex: none;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  min-width: 32px;
+  height: 32px;
+  width: 32px;
+  padding: 0;
+  margin-right: 8px;
+  border: none;
+  border-radius: 8px;
+  background: var(--bg-pane);
+  color: var(--muted);
+  cursor: pointer;
+  position: relative;
+  z-index: 1;
+  -webkit-appearance: none;
+  appearance: none;
+  user-select: none;
+}
+
+.pane-collapse:hover:not(:disabled),
+.pane-collapse:focus-visible {
+  background: color-mix(in srgb, var(--accent) 12%, transparent);
+  color: var(--accent);
+}
+
+.pane-collapse:active {
+  transform: scale(0.95);
+}
+
+.pane-collapse svg {
+  width: 16px;
+  height: 16px;
+  stroke-width: 2.5;
+}
+
+/* ---- Auto-scroll toggle in header ------------------------------------------ */
+#auto-scroll-toggle {
+  flex: none;
+  align-self: center;
+  padding: 6px 12px;
+  font-size: 12px;
+  border: 1px solid var(--line);
+  border-radius: 8px;
+  background: var(--bg-pane);
+  color: var(--ink);
+  cursor: pointer;
+  margin-right: 8px;
+  -webkit-tap-highlight-color: transparent;
+  touch-action: manipulation;
+}
+
+#auto-scroll-toggle:hover:not(:disabled),
+#auto-scroll-toggle:focus-visible {
+  border-color: var(--accent);
+  color: var(--accent);
+}
+
+#auto-scroll-toggle:active {
+  transform: translateY(1px);
+}
+
+/* ---- Header toggle base styles -------------------------------------------- */
+.header-toggle {
+  font: inherit;
+  font-size: 12px;
+  font-weight: 600;
+  padding: 6px 12px;
+  border: 1px solid var(--line);
+  border-radius: 8px;
+  background: var(--bg-pane);
+  color: var(--ink);
+  cursor: pointer;
+  -webkit-tap-highlight-color: transparent;
+  touch-action: manipulation;
+}
+
+.header-toggle:hover:not(:disabled),
+.header-toggle:focus-visible {
+  border-color: var(--accent);
+  color: var(--accent);
+}
+
+.header-toggle:active {
+  transform: translateY(1px);
+}
