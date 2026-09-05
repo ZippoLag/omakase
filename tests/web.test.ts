@@ -166,7 +166,7 @@ test("queue management: only head operation is cancelled", () => {
 
 // Test state cleanup during cancellation
 test("state cleanup: removes all tracking for cancelled operation", () => {
-  const paneByOpId = new Map<number, HTMLElement>();
+  const paneByOpId = new Map<number, { remove(): void }>(); // stand-in for main.ts's DOM map — tests typecheck without the DOM lib
   const opTexts = new Map<number, string[]>();
   const opActiveId = 1;
   const opCommand = "word";
@@ -336,8 +336,8 @@ test("composable: queue items with parent context are properly identified", () =
   
   assert.strictEqual(topLevel.length, 1);
   assert.strictEqual(nested.length, 1);
-  assert.strictEqual(topLevel[0].id, 1);
-  assert.strictEqual(nested[0].id, 2);
+  assert.strictEqual(topLevel[0]!.id, 1);
+  assert.strictEqual(nested[0]!.id, 2);
 });
 
 test("composable: duplicate detection in queue with parent context", () => {
@@ -367,18 +367,18 @@ test("composable: auto-scroll toggle can be disabled", () => {
 
 // Test cache key generation
 test("composable: cache key generation is consistent", () => {
-  const key1 = `word|test|30`;
+  const key1: string = `word|test|30`; // typed as string so the !== comparisons below are allowed
   const key2 = `word|test|30`;
-  const key3 = `kanji|日|30`;
+  const key3: string = `kanji|日|30`;
   
   assert.strictEqual(key1, key2);
   assert.ok(key1 !== key3);
 });
 
 test("composable: cache key differentiates by command", () => {
-  const wordKey = `word|test|30`;
-  const kanjiKey = `kanji|test|30`;
-  const searchKey = `search|test|30`;
+  const wordKey: string = `word|test|30`;
+  const kanjiKey: string = `kanji|test|30`;
+  const searchKey: string = `search|test|30`;
   
   assert.ok(wordKey !== kanjiKey);
   assert.ok(wordKey !== searchKey);

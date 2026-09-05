@@ -296,19 +296,36 @@ function disarmOpTicker(): void {
  * without this the bar would freeze mid-op. Counted sections (search
  * meanings) own the bar instead: the creep only proves liveness until the
  * first counted value lands, then real values climb it monotonically.
+ *
+ * The creep must NEVER overshoot a floor that a future section or counted
+ * value has to claim: setOpPct is monotonic, so a target at/above the next
+ * floor (or 99 before any section lands) would swallow that progress forever
+ * and park the bar while real work is still streaming. Targets therefore cap
+ * just below the next floor; the floor itself is only ever claimed by real
+ * arrival (opSectionClaim / op-progress).
  */
 function armOpTicker(command: Command): void {
   disarmOpTicker();
   const ladder = OP_LADDERS[command];
+  // Before any section lands, ease toward just below the FIRST floor; after
+  // a claim, ease toward just below the NEXT section's floor (99 only means
+  // "no floor left to claim" — every section already streamed).
   const idx = lastSectionClaimed ? ladder.order.indexOf(lastSectionClaimed) : -1;
   const next = idx >= 0 && idx + 1 < ladder.order.length ? ladder.order[idx + 1]! : null;
   let target: number;
   if (next === null) {
-    target = 99; // every section streamed — creep toward the finish line
-  } else if (ladder.counted.has(next)) {
-    target = Math.min(opFloor + 5, 99); // the counted section drives the climb
+    // No next section: lastSectionClaimed was the final one (or the op has
+    // none at all). Creep toward the finish line without crossing 99.
+    target = 99;
   } else {
-    target = Math.max(Math.min(ladder.floors[next] ?? 99, 99), opFloor + 0.5);
+    const nextFloor = ladder.floors[next] ?? 100;
+    if (ladder.counted.has(next)) {
+      // The counted section (search meanings) claims its whole range with
+      // real progress; keep the liveness creep in the gap just below it.
+      target = Math.min(opFloor + 5, nextFloor - 1);
+    } else {
+      target = Math.max(Math.min(nextFloor - 1, 99), opFloor + 0.5);
+    }
   }
   opTicker = setInterval(() => {
     setOpPct(opFloor + (target - opFloor) * 0.15);
@@ -642,6 +659,10 @@ function cancelCurrentOperation(): void {
   cancelledOps.add(head.id);
   queue.shift();
   inFlight = false;
+  // The cancelled lookup's watchdog must not fire later and kill the engine
+  // while some other lookup (or nothing at all) is running — drop the timer
+  // armed for it here; drain() below re-arms for the new head.
+  disarmWatchdog();
   
   // Remove skeleton pane and replace with cancelled message
   const skeletonData = streamingPaneById.get(head.id);
@@ -703,9 +724,12 @@ function onWorkerMessage(ev: MessageEvent<WorkerMessage>): void {
     }
     case "op-section": {
       // A streamed section of the in-flight lookup: append it to the skeleton
-      // pane and claim its floor on the operation ladder.
-      // Skip if this operation was cancelled
-      if (cancelledOps.has(msg.id)) break;
+      // pane and claim its floor on the operation ladder. Gated on the ACTIVE
+      // op (like op-progress): a section from a cancelled or already-forgotten
+      // lookup must neither render into a stale skeleton nor claim a ladder
+      // floor (setOpPct is monotonic — a stray claim would park the bar above
+      // the active op's real progress).
+      if (opActiveId !== msg.id || cancelledOps.has(msg.id)) break;
       const streamingData = streamingPaneById.get(msg.id);
       if (streamingData) {
         const { pre, parentId } = streamingData;
@@ -714,6 +738,10 @@ function onWorkerMessage(ev: MessageEvent<WorkerMessage>): void {
       const texts = opTexts.get(msg.id);
       if (texts) texts.push(msg.text);
       opSectionClaim(msg.label);
+      // The worker is demonstrably alive and mid-lookup: extend the watchdog
+      // so a slow-but-streaming lookup (e.g. the long meaning search on a
+      // phone) is never killed while it is still making progress.
+      armWatchdog();
       break;
     }
     case "op-progress": {
@@ -726,6 +754,10 @@ function onWorkerMessage(ev: MessageEvent<WorkerMessage>): void {
       if (opActiveId !== msg.id || cancelledOps.has(msg.id)) break;
       setOpPct(msg.pct);
       setStatus(msg.text, "busy");
+      // Liveness extension: same rationale as op-section — the watchdog must
+      // only fire when the worker has gone silent, not while real progress
+      // messages keep arriving for the active lookup.
+      armWatchdog();
       break;
     }
     case "ready":
@@ -754,102 +786,88 @@ function onWorkerMessage(ev: MessageEvent<WorkerMessage>): void {
 }
 
 /**
- * A lookup answered. The worker replies strictly in queue order, so the head
- * is ours; anything else is a stray from a dead engine and is ignored rather
- * than trusted. Whatever the outcome, the busy chrome and queue are synced
+ * A lookup answered. Only the reply for the queue's head is ever acted on:
+ * replies for cancelled or forgotten lookups and strays from a dead engine
+ * are inert. Whatever the outcome, the busy chrome and queue are synced
  * afterwards, so the UI always returns to a usable state.
  */
 function handleResult(msg: Extract<WorkerMessage, { kind: "result" }>): void {
-  disarmWatchdog();
+  // THE protocol gate — read the head and match BEFORE touching any state.
+  // A reply that is not the head's (a cancelled lookup the worker still
+  // finished, or a stray from a dead engine) must leave inFlight true and the
+  // head's watchdog armed: the old code disarmed/reset them first, which let
+  // a late reply for a cancelled op make drain() re-post the head (same id,
+  // second skeleton pane) and cascade the desync down the queue.
   const item = queue[0] ?? null;
-  inFlight = false;
-  
-  // Skip processing if this operation was cancelled
-  if (cancelledOps.has(msg.id)) {
-    cancelledOps.delete(msg.id);
-    if (item?.id === msg.id) {
-      queue.shift();
-    }
-    // Clean up any in-progress state
-    const streamingData = streamingPaneById.get(msg.id);
-    if (streamingData) {
-      streamingData.pane.remove();
-      streamingPaneById.delete(msg.id);
-    }
-    paneByOpId.delete(msg.id);
-    opTexts.delete(msg.id);
-    
-    if (opActiveId === msg.id) {
-      opActiveId = null;
-      opCommand = null;
-    }
-    endOpProgress();
-    syncBusyUi();
-    drain();
+  if (!item || item.id !== msg.id) {
+    cancelledOps.delete(msg.id); // GC the cancel marker; nothing else to do
     return;
   }
+  const wasCancelled = cancelledOps.has(msg.id);
+  cancelledOps.delete(msg.id);
+  queue.shift();
+  disarmWatchdog();
+  inFlight = false;
   
-  if (item && item.id === msg.id) {
-    queue.shift();
-    const streamingData = streamingPaneById.get(msg.id);
-    streamingPaneById.delete(msg.id);
-    const skeletonPane = paneByOpId.get(msg.id);
-    paneByOpId.delete(msg.id);
-    const streamedText = opTexts.get(msg.id)?.join("") ?? "";
-    opTexts.delete(msg.id);
-    cacheManager.markFetchCompleted(item.command, item.query, item.max);
-    
-    try {
-      if (msg.error !== null) {
-        if (streamingData) streamingData.pane.remove();
-        if (skeletonPane) skeletonPane.remove();
-        
-        const errorNode = createErrorResultNode(item.command, item.query, msg.error, item.parentId, item.max);
-        resultTree = addResultToParent(resultTree, errorNode, item.parentId);
-        renderResultNode(errorNode);
-        registerResult(item.parentId, item.command, item.query);
-        
-      } else if (msg.text !== null) {
-        // Legacy whole-result path (no sections streamed).
-        if (streamingData) streamingData.pane.remove();
-        if (skeletonPane) skeletonPane.remove();
-        
-        const resultNode = createResultNode(item.command, item.query, msg.text, false, msg.strokes, item.parentId, item.max);
+  // This lookup's streaming state: a real reply swaps the skeleton for the
+  // final pane; a cancelled head's entries were already dropped at cancel
+  // time (both removals are no-ops there).
+  const streamingData = streamingPaneById.get(msg.id);
+  streamingPaneById.delete(msg.id);
+  const skeletonPane = paneByOpId.get(msg.id);
+  paneByOpId.delete(msg.id);
+  const streamedText = opTexts.get(msg.id)?.join("") ?? "";
+  opTexts.delete(msg.id);
+  cacheManager.markFetchCompleted(item.command, item.query, item.max);
+  
+  if (streamingData) streamingData.pane.remove();
+  if (skeletonPane) skeletonPane.remove();
+  
+  try {
+    if (wasCancelled) {
+      // The cancelled lookup's terminal reply: the user already got the
+      // "operation cancelled" pane (cancelCurrentOperation) — register
+      // nothing, render nothing.
+    } else if (msg.error !== null) {
+      const errorNode = createErrorResultNode(item.command, item.query, msg.error, item.parentId, item.max);
+      resultTree = addResultToParent(resultTree, errorNode, item.parentId);
+      renderResultNode(errorNode);
+      registerResult(item.parentId, item.command, item.query);
+      
+    } else if (msg.text !== null) {
+      // Legacy whole-result path (no sections streamed).
+      const resultNode = createResultNode(item.command, item.query, msg.text, false, msg.strokes, item.parentId, item.max);
+      resultTree = addResultToParent(resultTree, resultNode, item.parentId);
+      renderResultNode(resultNode);
+      
+      // Cache the result
+      cacheManager.setCache(item.command, item.query, item.max, resultNode);
+      registerResult(item.parentId, item.command, item.query);
+      
+    } else {
+      // Streamed success: the sections already rendered the pane — swap the
+      // skeleton for the canonical pane (trashbin + history + linkified
+      // text) built from the concatenated sections, byte-identical to what
+      // the CLI would have printed.
+      if (streamedText !== "") {
+        const resultNode = createResultNode(item.command, item.query, streamedText, false, msg.strokes, item.parentId, item.max);
         resultTree = addResultToParent(resultTree, resultNode, item.parentId);
         renderResultNode(resultNode);
         
         // Cache the result
         cacheManager.setCache(item.command, item.query, item.max, resultNode);
         registerResult(item.parentId, item.command, item.query);
-        
       } else {
-        // Streamed success: the sections already rendered the pane — swap the
-        // skeleton for the canonical pane (trashbin + history + linkified
-        // text) built from the concatenated sections, byte-identical to what
-        // the CLI would have printed.
-        if (streamingData) streamingData.pane.remove();
-        if (skeletonPane) skeletonPane.remove();
-        
-        if (streamedText !== "") {
-          const resultNode = createResultNode(item.command, item.query, streamedText, false, msg.strokes, item.parentId, item.max);
-          resultTree = addResultToParent(resultTree, resultNode, item.parentId);
-          renderResultNode(resultNode);
-          
-          // Cache the result
-          cacheManager.setCache(item.command, item.query, item.max, resultNode);
-          registerResult(item.parentId, item.command, item.query);
-        } else {
-          // Defensive: hits always stream
-          const errorNode = createErrorResultNode(item.command, item.query, "(empty result)", item.parentId, item.max);
-          resultTree = addResultToParent(resultTree, errorNode, item.parentId);
-          renderResultNode(errorNode);
-          registerResult(item.parentId, item.command, item.query);
-        }
+        // Defensive: hits always stream
+        const errorNode = createErrorResultNode(item.command, item.query, "(empty result)", item.parentId, item.max);
+        resultTree = addResultToParent(resultTree, errorNode, item.parentId);
+        renderResultNode(errorNode);
+        registerResult(item.parentId, item.command, item.query);
       }
-    } catch (err) {
-      // A pane must never wedge the queue: report and keep draining.
-      console.error("could not render result pane:", err);
     }
+  } catch (err) {
+    // A pane must never wedge the queue: report and keep draining.
+    console.error("could not render result pane:", err);
   }
   
   endOpProgress(); // queue empty → park the bar and restore the ready line

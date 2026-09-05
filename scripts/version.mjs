@@ -18,7 +18,7 @@
  * Usage:
  *   node scripts/version.mjs            bump, write src/version.ts, print the stamp
  *   node scripts/version.mjs --json     same, but print a JSON record on stdout
- *   node scripts/version.mjs --print    print the current stamp without writing/bumping
+ *   node scripts/version.mjs --print    print the committed stamp without writing/bumping
  */
 import { spawnSync } from "node:child_process";
 import { readFileSync, writeFileSync } from "node:fs";
@@ -49,8 +49,25 @@ function committedBuild() {
 }
 
 let build;
+let printedStamp = null;
 if (printOnly) {
-  build = committedBuild();
+  // Read-only mode is a pure viewer of the COMMITTED stamp in src/version.ts.
+  // The pre-commit hook re-stamps before the commit exists, so the committed
+  // module's git provenance can legitimately lag HEAD by one commit;
+  // recomputing git fields live (the old behavior) made `--print` disagree
+  // with the very module it documents. Parse the module instead — and never
+  // touch the counter or the file.
+  const src = readFileSync(VERSION_SRC, "utf8");
+  const field = (name) => {
+    const m = new RegExp(`export const ${name} = ("([^"]*)"|'([^']*)'|(\\d+));`).exec(src);
+    if (!m) throw new Error(`src/version.ts is missing ${name} — run a build once to stamp it`);
+    return m[2] ?? m[3] ?? Number(m[4]);
+  };
+  const appVersion = String(field("APP_VERSION"));
+  build = Number(field("BUILD"));
+  const commitCount = Number(field("COMMITS"));
+  const commit = String(field("COMMIT"));
+  printedStamp = `${appVersion}-build.${build} (${commitCount} commits, ${commit})`;
 } else {
   let stored = 0;
   try {
@@ -90,14 +107,14 @@ function commitDate() {
   return git(["log", "-1", "--format=%cI"]) ?? "";
 }
 
-const versionFull = `${pkg().version}-build.${build} (${commits()} commits, ${shortSha()})`;
+const versionFull = printedStamp ?? `${pkg().version}-build.${build} (${commits()} commits, ${shortSha()})`;
 if (jsonOut) {
   process.stdout.write(JSON.stringify({
     version: pkg().version,
     build,
-    commits: commits(),
-    commit: shortSha(),
-    commitDate: commitDate(),
+    commits: printedStamp ? Number(printedStamp.match(/\((\d+) commits/)?.[1] ?? 0) : commits(),
+    commit: printedStamp ? printedStamp.match(/, ([0-9a-f]+)\)/)?.[1] ?? "unknown" : shortSha(),
+    commitDate: printedStamp ? "" : commitDate(),
     versionFull,
     line: `omakase ${versionFull}`,
   }) + "\n");
