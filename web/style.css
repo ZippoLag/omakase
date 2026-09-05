@@ -259,6 +259,39 @@ button.busy {
 
 @keyframes spin { to { transform: rotate(360deg); } }
 
+/* Cancel button that appears alongside the spinner on busy command buttons. */
+button.busy .cancel-btn {
+  pointer-events: auto;
+  font: inherit;
+  font-size: 18px;
+  font-weight: 600;
+  padding: 0;
+  margin-left: 2px;
+  border: none;
+  border-radius: 4px;
+  background: var(--bg-pane);
+  color: var(--muted);
+  cursor: pointer;
+  width: 20px;
+  height: 20px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  line-height: 1;
+  -webkit-tap-highlight-color: transparent;
+  touch-action: manipulation;
+}
+
+button.busy .cancel-btn:hover,
+button.busy .cancel-btn:focus-visible {
+  color: var(--accent);
+  background: color-mix(in srgb, var(--accent) 12%, transparent);
+}
+
+button.busy .cancel-btn:active {
+  transform: scale(0.9);
+}
+
 /* Per-command pending badges: how many panes of that command are still queued
    behind the in-flight lookup (the spinner marks the one running). One badge
    per button, counting down as its panes land — the disabled state above must
@@ -315,6 +348,9 @@ button.busy {
 }
 
 .pane.error .badge { color: var(--accent); border-color: var(--accent); }
+
+.pane.cancelled .badge { color: var(--accent); border-color: var(--accent); }
+.pane.cancelled pre { color: var(--accent); }
 
 .pane-query { font-weight: 600; color: var(--ink); overflow-wrap: anywhere; }
 

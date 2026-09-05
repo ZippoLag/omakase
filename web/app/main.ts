@@ -87,6 +87,8 @@ let inFlight = false;
 let engineDead = false;
 /** Consecutive engine-downs without a ready in between (reset on ready). */
 let bootFailures = 0;
+/** Track cancelled operation IDs to ignore their results when they arrive. */
+const cancelledOps = new Set<number>();
 
 // ---- per-operation streaming + progress -------------------------------------
 /** Skeleton panes keyed by the in-flight request id (created at drain). */
@@ -410,6 +412,75 @@ function submit(command: Command): void {
   drain();
 }
 
+/** Add a pane indicating the operation was cancelled. */
+function addCancelledPane(command: string, query: string): void {
+  const pane = document.createElement("section");
+  pane.className = "pane error cancelled";
+  
+  const head = document.createElement("div");
+  head.className = "pane-head";
+  
+  const badge = document.createElement("span");
+  badge.className = "badge";
+  badge.textContent = command;
+  
+  const q = document.createElement("span");
+  q.className = "pane-query";
+  q.textContent = query;
+  
+  const del = document.createElement("button");
+  del.type = "button";
+  del.className = "pane-del";
+  del.title = "Delete this result";
+  del.setAttribute("aria-label", `Delete result for ${query}`);
+  del.innerHTML = TRASH_ICON_SVG;
+  del.addEventListener("click", () => {
+    pane.remove();
+    updateClearButton();
+  });
+  
+  head.append(badge, q, del);
+  
+  const pre = document.createElement("pre");
+  pre.textContent = "operation cancelled";
+  
+  pane.append(head, pre);
+  panes.prepend(pane);
+  pane.scrollIntoView({ block: "start", behavior: "smooth" });
+}
+
+/** Cancel the currently-running operation only (head of queue). */
+function cancelCurrentOperation(): void {
+  const head = queue[0];
+  if (!head) return;
+  
+  // Mark as cancelled and clean up
+  cancelledOps.add(head.id);
+  queue.shift();
+  inFlight = false;
+  
+  // Remove skeleton pane and replace with cancelled message
+  const skeletonPane = paneByOpId.get(head.id);
+  if (skeletonPane) {
+    skeletonPane.remove();
+  }
+  paneByOpId.delete(head.id);
+  opTexts.delete(head.id);
+  
+  if (opActiveId === head.id) {
+    opActiveId = null;
+    opCommand = null;
+    endOpProgress();
+  }
+  
+  // Add cancelled pane for user visibility
+  addCancelledPane(head.command, head.query);
+  
+  // Update UI and process next
+  syncBusyUi();
+  drain();
+}
+
 /** Send the head of the queue to the worker — the only place requests go out. */
 function drain(): void {
   if (inFlight || !ready) return;
@@ -447,6 +518,8 @@ function onWorkerMessage(ev: MessageEvent<WorkerMessage>): void {
     case "op-section": {
       // A streamed section of the in-flight lookup: append it to the skeleton
       // pane and claim its floor on the operation ladder.
+      // Skip if this operation was cancelled
+      if (cancelledOps.has(msg.id)) break;
       const pane = paneByOpId.get(msg.id);
       if (pane) {
         const pre = pane.querySelector("pre");
@@ -464,7 +537,7 @@ function onWorkerMessage(ev: MessageEvent<WorkerMessage>): void {
       // already finished (or never started on this engine) must neither nudge
       // the gauge nor clobber the status line. In-order delivery makes a
       // stray unreachable, but a dead engine's late messages stay inert.
-      if (opActiveId !== msg.id) break;
+      if (opActiveId !== msg.id || cancelledOps.has(msg.id)) break;
       setOpPct(msg.pct);
       setStatus(msg.text, "busy");
       break;
@@ -504,6 +577,26 @@ function handleResult(msg: Extract<WorkerMessage, { kind: "result" }>): void {
   disarmWatchdog();
   const item = queue[0] ?? null;
   inFlight = false;
+  
+  // Skip processing if this operation was cancelled
+  if (cancelledOps.has(msg.id)) {
+    cancelledOps.delete(msg.id);
+    if (item?.id === msg.id) {
+      queue.shift();
+    }
+    // Clean up any in-progress state
+    paneByOpId.delete(msg.id);
+    opTexts.delete(msg.id);
+    if (opActiveId === msg.id) {
+      opActiveId = null;
+      opCommand = null;
+    }
+    endOpProgress();
+    syncBusyUi();
+    drain();
+    return;
+  }
+  
   if (item && item.id === msg.id) {
     queue.shift();
     const pane = paneByOpId.get(msg.id);
@@ -553,8 +646,10 @@ function setLastCommand(command: Command): void {
 
 /** Button currently showing the spinner (its label is hidden). */
 let spinnerOn: HTMLButtonElement | null = null;
+/** Cancel button for the currently running operation. */
+let cancelBtnOn: HTMLButtonElement | null = null;
 
-/** Remove the spinner from whatever button carries it (restores the label). */
+/** Remove the spinner and cancel button from whatever button carries it (restores the label). */
 function removeSpinner(): void {
   if (!spinnerOn) return;
   const b = spinnerOn;
@@ -562,6 +657,12 @@ function removeSpinner(): void {
   b.textContent = b.dataset.label ?? "";
   delete b.dataset.label;
   spinnerOn = null;
+  
+  // Also remove cancel button if it exists
+  if (cancelBtnOn) {
+    cancelBtnOn.remove();
+    cancelBtnOn = null;
+  }
 }
 
 /**
@@ -616,6 +717,21 @@ function syncBusyUi(): void {
       spin.className = "spinner";
       spin.setAttribute("aria-hidden", "true");
       button.appendChild(spin);
+      
+      // Add cancel button alongside spinner
+      const cancel = document.createElement("button");
+      cancel.type = "button";
+      cancel.className = "cancel-btn";
+      cancel.textContent = "×";
+      cancel.title = "Cancel";
+      cancel.setAttribute("aria-label", "Cancel current lookup");
+      cancel.addEventListener("click", (ev) => {
+        ev.stopPropagation();
+        cancelCurrentOperation();
+      });
+      button.appendChild(cancel);
+      cancelBtnOn = cancel;
+      
       spinnerOn = button;
     }
   }
