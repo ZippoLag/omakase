@@ -2,7 +2,7 @@
 
 **omakase** is built **by [Sebastián R. Vansteenkiste](https://github.com/zippolag)
 via [DeepSeek V4 Flash](https://www.deepseek.com/) @
-[FREEBUFF](https://freebuff.com)**.
+[FREEBUFF](https://freebuff.com/get-started?ref=ref-48e765cb-2146-4cf9-8fba-2a2af1676e77&referrer=Sebasti%C3%A1n+Vansteenkiste)** (affiliate link).
 
 This NOTICE lists every third-party data source and software library the
 project incorporates, together with its copyright and license. It is an

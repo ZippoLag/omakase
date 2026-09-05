@@ -5,7 +5,7 @@ a thesaurus — synonyms and antonyms — via `word`, kanji pages via `kanji`,
 and search the dictionary by kana, romaji, or English gloss via `search`, all
 against a local SQLite database — no network access at query time.
 
-> **Note from author:** Hi, I'm [Sebastián](https://github.com/zippolag), I love [tangorin](https://tangorin.com/), and if I could I would economically support them so their servers have all the oomph required to always reply in milliseconds, but sadly, I cannot. Hence, faced with the need to have a quick Japanese reference always available, and since I had access to [FREEBUFF](https://github.com/CodebuffAI/freebuff), I took the chance to iterate over my use cases and build just what I needed: a japanese reference app which I can access both as a CLI in my terminal and as a PWA in any device.
+> **Note from author:** Hi, I'm [Sebastián](https://github.com/zippolag), I love [tangorin](https://tangorin.com/), and if I could I would economically support them so their servers have all the oomph required to always reply in milliseconds, but sadly, I cannot. Hence, faced with the need to have a quick Japanese reference always available, and since I had access to [FREEBUFF](https://freebuff.com/get-started?ref=ref-48e765cb-2146-4cf9-8fba-2a2af1676e77&referrer=Sebasti%C3%A1n+Vansteenkiste) (affiliate link), I took the chance to iterate over my use cases and build just what I needed: a japanese reference app which I can access both as a CLI in my terminal and as a PWA in any device.
 
 ## Requirements
 
@@ -472,7 +472,7 @@ provenance).
 
 omakase is built **by [Sebastián R. Vansteenkiste](https://github.com/zippolag)
 via [DeepSeek V4 Flash](https://www.deepseek.com/) @
-[FREEBUFF](https://freebuff.com)**. It is an independent, from-scratch
+[FREEBUFF](https://freebuff.com/get-started?ref=ref-48e765cb-2146-4cf9-8fba-2a2af1676e77&referrer=Sebasti%C3%A1n+Vansteenkiste)** (affiliate link). It is an independent, from-scratch
 reimplementation inspired by [tangorin.com](https://tangorin.com/) (the free
 Japanese–English dictionary initially developed by Gregory Bober and now owned
 by Archie Preston) — no Tangorin code or data is included; all dictionary

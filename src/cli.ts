@@ -261,7 +261,7 @@ Commands:
 
 Run "omakase <command> --help" for details on a command.
 
-Credits: by Sebastián R. Vansteenkiste (https://github.com/zippolag) via DeepSeek V4 Flash (https://www.deepseek.com/) @ FREEBUFF (https://freebuff.com)
+Credits: by Sebastián R. Vansteenkiste (https://github.com/zippolag) via DeepSeek V4 Flash (https://www.deepseek.com/) @ FREEBUFF (https://freebuff.com/get-started?ref=ref-48e765cb-2146-4cf9-8fba-2a2af1676e77&referrer=Sebasti%C3%A1n+Vansteenkiste) (affiliate link)
 Data: JMdict/KANJIDIC2/kradfile/radkfile (EDRDG, CC BY-SA 4.0) · KanjiVG (CC BY-SA 3.0) · Tatoeba (CC BY 2.0) — run "omakase --license" for the full text
 `;
 
