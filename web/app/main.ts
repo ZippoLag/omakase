@@ -746,6 +746,7 @@ function kanjiButton(ch: string): HTMLButtonElement {
   b.textContent = ch;
   b.title = `kanji ${ch}`;
   b.addEventListener("click", () => {
+    if (form.hasAttribute("aria-busy")) return;
     input.value = ch;
     submit("kanji");
   });
@@ -760,6 +761,7 @@ function wordIconButton(writing: string): HTMLButtonElement {
   b.setAttribute("aria-label", `look up “${writing}”`);
   b.innerHTML = WORD_ICON_SVG;
   b.addEventListener("click", () => {
+    if (form.hasAttribute("aria-busy")) return;
     input.value = writing;
     submit("word");
   });
