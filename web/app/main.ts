@@ -1437,8 +1437,17 @@ function restoreState(): void {
   // 1, which would collide with the ids deserialized above).
   seedNodeIdFromTree(resultTree);
   
-  // Render tree
-  renderResultTree();
+  // Render tree — and never let a corrupt/foreign node crash the boot: a node
+  // that slips past the deserializer's shape checks and throws mid-render
+  // would otherwise be re-persisted by the next saveState, crashing every
+  // reload the same way. Drop the bad state and start empty instead.
+  try {
+    renderResultTree();
+  } catch {
+    localStorage.removeItem(STORAGE_KEY);
+    resultTree = clearResultTree();
+    panes.replaceChildren();
+  }
   updateClearButton();
 }
 

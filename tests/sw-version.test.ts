@@ -11,9 +11,13 @@ import assert from "node:assert/strict";
 import { readFileSync } from "node:fs";
 import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
-import { cacheName, patchSwCache, versionFromStamp } from "../scripts/sw-version.mjs";
+import { cacheName, patchIndexHtml, patchSwCache, versionFromStamp } from "../scripts/sw-version.mjs";
 
 const root = join(dirname(fileURLToPath(import.meta.url)), "..");
+
+// The real worker source — the fixture patchSwCache must round-trip (the
+// tests below pin both the CACHE constant and the versioned PRECACHE assets).
+const swSource = readFileSync(join(root, "web", "sw.js"), "utf8");
 
 test("cache name embeds the full build version", () => {
   assert.equal(cacheName("0.1.0-build.7"), "omakase-0.1.0-build.7");
@@ -22,10 +26,14 @@ test("cache name embeds the full build version", () => {
   assert.notEqual(cacheName("0.1.0-build.7"), cacheName("0.1.0-build.8"));
 });
 
-test("patchSwCache substitutes the CACHE constant with the stamped version", () => {
-  const sw = 'const CACHE = "omakase-v__VERSION__";\nself.addEventListener("install", () => {});';
-  const out = patchSwCache(sw, "0.1.0-build.7");
-  assert.ok(out.startsWith('const CACHE = "omakase-0.1.0-build.7";'));
+test("patchSwCache substitutes the CACHE constant and versions the precache assets", () => {
+  const out = patchSwCache(swSource, "0.1.0-build.7");
+  assert.ok(out.includes('const CACHE = "omakase-0.1.0-build.7";'));
+  // The shell assets in PRECACHE carry the same version as index.html's
+  // links (patchIndexHtml) — the new sw precaches the new assets, never a
+  // stale cached copy.
+  assert.ok(out.includes('"./style.css?v=0.1.0-build.7"'));
+  assert.ok(out.includes('"./web/app/main.js?v=0.1.0-build.7"'));
   // The rest of the worker source is untouched.
   assert.ok(out.includes('self.addEventListener("install"'));
 });
@@ -34,9 +42,44 @@ test("patchSwCache fails loudly when the CACHE constant is missing", () => {
   assert.throws(() => patchSwCache("const NOPE = 1;", "0.1.0-build.7"), /CACHE constant not found/);
 });
 
-test("a new build version always changes the emitted cache constant", () => {
-  const sw = 'const CACHE = "omakase-v6";';
-  assert.notEqual(patchSwCache(sw, "0.1.0-build.7"), patchSwCache(sw, "0.1.0-build.8"));
+test("patchSwCache fails loudly when the precache asset entries are missing", () => {
+  assert.throws(
+    () => patchSwCache('const CACHE = "omakase-v6";', "0.1.0-build.7"),
+    /PRECACHE asset entries not found/,
+  );
+});
+
+test("a new build version always changes the emitted cache constant and asset URLs", () => {
+  const a = patchSwCache(swSource, "0.1.0-build.7");
+  const b = patchSwCache(swSource, "0.1.0-build.8");
+  assert.notEqual(a, b);
+  assert.ok(a.includes('"omakase-0.1.0-build.7"') && a.includes('?v=0.1.0-build.7'));
+  assert.ok(b.includes('"omakase-0.1.0-build.8"') && b.includes('?v=0.1.0-build.8'));
+});
+
+test("patchIndexHtml versions the shell asset links", () => {
+  const html = [
+    '<link rel="stylesheet" href="./style.css">',
+    '<script type="module" src="./web/app/main.js"></script>',
+  ].join("\n");
+  const out = patchIndexHtml(html, "0.1.0-build.7");
+  assert.ok(out.includes('href="./style.css?v=0.1.0-build.7"'));
+  assert.ok(out.includes('src="./web/app/main.js?v=0.1.0-build.7"'));
+  // No other markup is touched.
+  assert.ok(out.includes('<link rel="stylesheet"') && out.includes('<script type="module"'));
+});
+
+test("patchIndexHtml fails loudly when an asset link is missing", () => {
+  assert.throws(() => patchIndexHtml("<html></html>", "0.1.0-build.7"), /versioned .* link not found/);
+});
+
+test("patchIndexHtml agrees with the real index.html", () => {
+  // The served page (dist/index.html) is built from web/index.html — pin the
+  // substitution against the real source so a renamed asset link fails loudly.
+  const html = readFileSync(join(root, "web", "index.html"), "utf8");
+  const out = patchIndexHtml(html, "0.1.0-build.7");
+  assert.ok(out.includes('href="./style.css?v=0.1.0-build.7"'));
+  assert.ok(out.includes('src="./web/app/main.js?v=0.1.0-build.7"'));
 });
 
 test("versionFromStamp composes the version from the generated stamp", () => {

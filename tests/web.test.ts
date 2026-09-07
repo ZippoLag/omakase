@@ -8,6 +8,11 @@ import { mkdtempSync, rmSync, statSync, truncateSync, writeFileSync } from "node
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { dbLooksHealthy } from "../web/app/commands.js";
+import {
+  deserializeResultTree,
+  isValidResultNode,
+  restoreCollapsedStates,
+} from "../web/app/tree.js";
 
 // node:sqlite only exists unflagged on Node ≥22.13 (absent on Node 20, behind
 // --experimental-sqlite on 22.5–22.12). The dbLooksHealthy tests below need a
@@ -468,4 +473,94 @@ test("dbLooksHealthy: rejects a garbage file that still opens", { skip: sqliteSk
   } finally {
     rmSync(dir, { recursive: true, force: true });
   }
+});
+
+// =============================================================================
+// W8: restore hardening — isValidResultNode / deserializeResultTree /
+// restoreCollapsedStates against corrupt or foreign localStorage state
+// =============================================================================
+
+/** A well-formed node as it would be persisted (shape only — ids need not be
+ * unique for the validator). */
+function validNode(overrides = {}): Record<string, unknown> {
+  return {
+    id: "node_1",
+    parentId: null,
+    command: "kanji",
+    query: "食",
+    text: "食: strokes 9\nOn: ショク",
+    error: false,
+    strokes: [{ literal: "食", svgFile: "098df.svg" }],
+    children: [],
+    collapsed: false,
+    createdAt: 1234,
+    max: 30,
+    ...overrides,
+  };
+}
+
+test("isValidResultNode: accepts a well-formed node (with children)", () => {
+  const node = validNode({ children: [validNode({ id: "node_2", command: "word" })] });
+  assert.equal(isValidResultNode(node), true);
+});
+
+test("isValidResultNode: rejects a node missing children", () => {
+  const { children: _omit, ...noChildren } = validNode();
+  assert.equal(isValidResultNode(noChildren), false);
+});
+
+test("isValidResultNode: rejects a wrong (foreign) command", () => {
+  assert.equal(isValidResultNode(validNode({ command: "delete-everything" })), false);
+  assert.equal(isValidResultNode(validNode({ command: 42 })), false);
+});
+
+test("isValidResultNode: rejects a non-boolean collapsed", () => {
+  assert.equal(isValidResultNode(validNode({ collapsed: "yes" })), false);
+  assert.equal(isValidResultNode(validNode({ collapsed: 1 })), false);
+});
+
+test("isValidResultNode: rejects non-string text/query/id and non-number max", () => {
+  assert.equal(isValidResultNode(validNode({ text: null })), false);
+  assert.equal(isValidResultNode(validNode({ query: 123 })), false);
+  assert.equal(isValidResultNode(validNode({ id: 7 })), false);
+  assert.equal(isValidResultNode(validNode({ max: "30" })), false);
+});
+
+test("isValidResultNode: rejects a node with an invalid descendant", () => {
+  const node = validNode({ children: [validNode({ collapsed: "yes" })] });
+  assert.equal(isValidResultNode(node), false);
+});
+
+test("deserializeResultTree: non-array input yields an empty tree", () => {
+  assert.deepStrictEqual(deserializeResultTree(null), []);
+  assert.deepStrictEqual(deserializeResultTree({}), []);
+  assert.deepStrictEqual(deserializeResultTree("nope"), []);
+});
+
+test("deserializeResultTree: drops invalid nodes (the corrupt-state shape)", () => {
+  // The e2e corrupt shape: `{v:2, resultTree:[{id:"x"}]}` — missing every
+  // required field must not survive restore.
+  const out = deserializeResultTree([{ id: "x" }, validNode()]);
+  assert.equal(out.length, 1);
+  assert.equal(out[0]!.id, "node_1");
+});
+
+test("deserializeResultTree: prunes invalid children from a valid parent", () => {
+  const node = validNode({
+    children: [validNode({ id: "good_child" }), { id: "bad_child" }, "junk"],
+  });
+  const out = deserializeResultTree([node]);
+  assert.equal(out.length, 1);
+  assert.equal(out[0]!.children.length, 1);
+  assert.equal(out[0]!.children[0]!.id, "good_child");
+});
+
+test("restoreCollapsedStates: non-boolean state values fall back to false", () => {
+  const nodes = deserializeResultTree([
+    validNode({ id: "a" }),
+    validNode({ id: "b" }),
+  ]);
+  const restored = restoreCollapsedStates(nodes, { a: true, b: "yes", c: 1 } as unknown as Record<string, boolean>);
+  assert.equal(restored[0]!.collapsed, true);
+  assert.equal(restored[1]!.collapsed, false);
 });

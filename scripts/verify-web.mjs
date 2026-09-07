@@ -117,10 +117,29 @@ async function main() {
   // with the version the served app reports (both emitted by web:build).
   const stamp = versionFromStamp(readFileSync(join(root, "dist", "src", "version.js"), "utf8"));
   const swJs = readFileSync(join(root, "dist", "sw.js"), "utf8");
+  const indexHtml = readFileSync(join(root, "dist", "index.html"), "utf8");
   check(
     "sw.js cache name stamped with the served build version",
     !!stamp && swJs.includes(`const CACHE = "omakase-${stamp}";`),
     stamp ? `CACHE=omakase-${stamp}` : "(dist/src/version.js has no stamp — run web:build)",
+  );
+  // Version-busted shell assets (W6): dist/index.html must link style.css and
+  // web/app/main.js with the build version as a query param, and dist/sw.js
+  // must precache the SAME versioned URLs — otherwise a new build can resolve
+  // old cached assets (stale/unstyled UI) until the next update.
+  check(
+    "index.html links the versioned shell assets (cache-busting)",
+    !!stamp
+      && indexHtml.includes(`href="./style.css?v=${stamp}"`)
+      && indexHtml.includes(`src="./web/app/main.js?v=${stamp}"`),
+    stamp ? `assets ?v=${stamp}` : "(dist/src/version.js has no stamp — run web:build)",
+  );
+  check(
+    "sw.js precaches the same versioned shell assets",
+    !!stamp
+      && swJs.includes(`"./style.css?v=${stamp}"`)
+      && swJs.includes(`"./web/app/main.js?v=${stamp}"`),
+    stamp ? `precache ?v=${stamp}` : "(dist/src/version.js has no stamp — run web:build)",
   );
 
   const server = await startServer();
@@ -1335,6 +1354,20 @@ async function main() {
       }
     };
     await page.setViewport({ width: 420, height: 900, isMobile: false, hasTouch: false });
+    // Switching isMobile/hasTouch forces Chrome to reload the page, so the app
+    // boots again (controls disabled until the worker reports ready). Wait for
+    // that before probing hover/focus — otherwise the controls are still
+    // disabled: the hover emphasis cue cannot act on them, and a lookup click
+    // below is silently dropped (disabled buttons swallow clicks).
+    await waitFor(
+      page,
+      () => page.evaluate(() => {
+        const s = document.querySelector("#status")?.textContent ?? "";
+        return s.startsWith("ready") ? s : null;
+      }),
+      60000,
+      "feedback-section ready (desktop viewport)",
+    );
     const cmdBtn = 'button[data-cmd="kanji"]';
     await page.evaluate(() => document.activeElement?.blur?.());
     await page.mouse.move(0, 0);
@@ -1626,6 +1659,45 @@ async function main() {
         && collapseRestored.aria === "Expand",
       JSON.stringify(collapseRestored),
     );
+
+    // ---- corrupt/foreign state restore (W8) --------------------------------
+    // A corrupt or foreign omakase.state (nodes missing required fields) must
+    // not crash the boot: restoreState drops the bad tree and starts empty
+    // instead of re-persisting a state that crashes every reload.
+    await page.evaluate(() => {
+      localStorage.setItem("omakase.state", JSON.stringify({
+        v: 2,
+        query: "",
+        command: "search",
+        max: 30,
+        resultTree: [{ id: "x" }], // missing children/command/query/text/error/collapsed/max
+        collapsedStates: { x: "not-a-boolean" }, // non-boolean collapsed value
+      }));
+    });
+    await page.reload({ waitUntil: "load", timeout: 30000 });
+    const corruptBoot = await waitFor(
+      page,
+      () => page.evaluate(() => {
+        const s = document.querySelector("#status")?.textContent ?? "";
+        return s.startsWith("ready")
+          ? {
+            panes: document.querySelectorAll("#panes .pane").length,
+            query: document.querySelector("#query").value,
+          }
+          : null;
+      }),
+      60000,
+      "corrupt-state ready",
+    );
+    check(
+      "corrupt state: app boots ready with no panes (bad tree dropped, no crash)",
+      !!corruptBoot && corruptBoot.panes === 0,
+      JSON.stringify(corruptBoot),
+    );
+    // The app is fully usable again: a fresh lookup renders normally — the
+    // recovery path after dropping the bad state.
+    p = await runLookup(page, "word", "食べる");
+    check("corrupt state: a fresh lookup recovers the app", p.text.includes("1. to eat"), `err=${p.isError}`);
 
     // OPFS VFS logs NotFound probes for sidecar files (journals) as errors; benign.
     const realErrors = consoleLog.filter(

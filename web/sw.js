@@ -46,17 +46,37 @@ const PRECACHE = [
 
 self.addEventListener("install", (event) => {
   event.waitUntil(
-    caches.open(CACHE)
-      .then((cache) => cache.addAll(PRECACHE).catch((err) => console.warn("precache incomplete:", err)))
-      .then(() => self.skipWaiting()),
+    caches.open(CACHE).then(async (cache) => {
+      // addAll is all-or-nothing: one failed fetch rejects the whole batch,
+      // leaving the cache half-populated. Only take over (skipWaiting) when
+      // the precache actually completed — an incomplete precache must not
+      // replace the current worker, or activate would delete the old cache
+      // and leave offline users with a broken shell. The old worker keeps
+      // serving until a later update succeeds.
+      const ok = await cache.addAll(PRECACHE).then(() => true, (err) => {
+        console.warn("precache incomplete — keeping the current version active:", err);
+        return false;
+      });
+      if (ok) self.skipWaiting();
+    }),
   );
 });
 
 self.addEventListener("activate", (event) => {
   event.waitUntil(
-    caches.keys()
-      .then((keys) => Promise.all(keys.filter((k) => k !== CACHE).map((k) => caches.delete(k))))
-      .then(() => self.clients.claim()),
+    caches.open(CACHE).then(async (cache) => {
+      // Only purge older caches when THIS cache actually holds every precache
+      // entry — deleting them while the new cache is incomplete would leave
+      // offline users with nothing to serve. An incomplete cache simply keeps
+      // the old caches around (the app stays usable); the next successful
+      // update cleans them up.
+      const entries = await Promise.all(PRECACHE.map((u) => cache.match(u)));
+      if (entries.every((e) => e !== undefined)) {
+        const keys = await caches.keys();
+        await Promise.all(keys.filter((k) => k !== CACHE).map((k) => caches.delete(k)));
+      }
+      await self.clients.claim();
+    }),
   );
 });
 
@@ -67,8 +87,25 @@ self.addEventListener("fetch", (event) => {
   // browser HTTP cache still applies.
   if (url.pathname === "/kanji.db") return;
 
+  // Navigations go network-first so a fresh deploy is picked up on the next
+  // reload (offline falls back to the precached shell); every other request
+  // is cache-first WITHIN this build's cache only — never a stale cache from
+  // an older build — falling back to the network and caching the response.
+  if (event.request.mode === "navigate") {
+    event.respondWith(
+      fetch(event.request)
+        .then((resp) => {
+          const clone = resp.clone();
+          caches.open(CACHE).then((cache) => cache.put(event.request, clone));
+          return resp;
+        })
+        .catch(() => caches.match(event.request, { cacheName: CACHE })),
+    );
+    return;
+  }
+
   event.respondWith(
-    caches.match(event.request).then((cached) => {
+    caches.match(event.request, { cacheName: CACHE }).then((cached) => {
       if (cached) return cached;
       return fetch(event.request).then((resp) => {
         if (resp.ok) {

@@ -16,7 +16,7 @@ import { cpSync, existsSync, mkdirSync, readFileSync, statSync, writeFileSync } 
 import { createRequire } from "node:module";
 import { dirname, join, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
-import { patchSwCache, versionFromStamp } from "./sw-version.mjs";
+import { patchIndexHtml, patchSwCache, versionFromStamp } from "./sw-version.mjs";
 
 const root = resolve(dirname(fileURLToPath(import.meta.url)), "..");
 const require = createRequire(import.meta.url);
@@ -43,8 +43,11 @@ if (run.status !== 0) {
   process.exit(run.status ?? 1);
 }
 
-// Static shell files land at the docroot (dist/).
-for (const f of ["index.html", "style.css", "manifest.webmanifest", "icon.svg"]) {
+// Static shell files land at the docroot (dist/). index.html is written
+// separately below once the build version is known, so its asset links carry
+// the version stamp (?v=<version>) — a new build can never resolve old
+// cached assets, and the service worker precaches the same versioned URLs.
+for (const f of ["style.css", "manifest.webmanifest", "icon.svg"]) {
   cpSync(join(root, "web", f), join(root, "dist", f));
 }
 
@@ -57,13 +60,20 @@ for (const f of ["LICENSE.md", "NOTICE.md"]) {
 
 // The service worker's cache name is derived from the freshly stamped build
 // version (written to src/version.ts above), so every web build publishes a
-// new cache and the sw purges older caches on activate.
+// new cache and the sw purges older caches on activate. index.html gets the
+// same version on its shell asset links (style.css / web/app/main.js) and the
+// sw's PRECACHE entries match, so a new build can never resolve old cached
+// assets.
 const version = versionFromStamp(readFileSync(join(root, "src", "version.ts"), "utf8"));
 if (!version) {
   console.error("src/version.ts has no version stamp — version stamping did not run?");
   process.exit(1);
 }
 try {
+  writeFileSync(
+    join(root, "dist", "index.html"),
+    patchIndexHtml(readFileSync(join(root, "web", "index.html"), "utf8"), version),
+  );
   writeFileSync(
     join(root, "dist", "sw.js"),
     patchSwCache(readFileSync(join(root, "web", "sw.js"), "utf8"), version),

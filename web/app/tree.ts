@@ -327,15 +327,78 @@ export function migrateToHierarchical(panes: LegacyPaneRecord[]): ResultNode[] {
   ));
 }
 
+/** The persisted fields of a result node (children are validated separately). */
+type ResultNodeShape = Omit<ResultNode, "children">;
+
+const RESULT_COMMANDS = new Set<string>(["kanji", "word", "search"]);
+
+/** Shape check for one stroke-order page entry. */
+function isValidStrokePage(v: unknown): v is StrokePage {
+  if (typeof v !== "object" || v === null) return false;
+  const o = v as Record<string, unknown>;
+  return typeof o.literal === "string" && typeof o.svgFile === "string";
+}
+
+/** Own-field shape check for a result node (children aside). */
+function isValidNodeShape(o: Record<string, unknown>): o is ResultNodeShape {
+  if (typeof o.id !== "string") return false;
+  if (o.parentId !== null && typeof o.parentId !== "string") return false;
+  if (typeof o.command !== "string" || !RESULT_COMMANDS.has(o.command)) return false;
+  if (typeof o.query !== "string") return false;
+  if (typeof o.text !== "string") return false;
+  if (typeof o.error !== "boolean") return false;
+  if (o.strokes !== undefined && !(Array.isArray(o.strokes) && o.strokes.every(isValidStrokePage))) return false;
+  if (typeof o.collapsed !== "boolean") return false;
+  if (typeof o.max !== "number") return false;
+  return true;
+}
+
 /**
- * Deserialize result tree from localStorage
+ * Recursive validator for a persisted result node: every own field must be
+ * the right type AND every descendant must validate too — a corrupt or
+ * foreign subtree can never slip past restore and crash rendering.
+ */
+export function isValidResultNode(v: unknown): v is ResultNode {
+  if (typeof v !== "object" || v === null) return false;
+  const o = v as Record<string, unknown>;
+  const rawChildren = o.children;
+  if (!isValidNodeShape(o)) return false;
+  return Array.isArray(rawChildren) && rawChildren.every(isValidResultNode);
+}
+
+/**
+ * Sanitize one node recursively: null when its own shape is invalid,
+ * otherwise the node with only its valid children kept. Unlike
+ * isValidResultNode (which rejects a node wholesale when any descendant is
+ * bad), this prunes invalid children so one bad descendant does not take a
+ * whole subtree down.
+ */
+function sanitizeResultNode(v: unknown): ResultNode | null {
+  if (typeof v !== "object" || v === null) return null;
+  const o = v as Record<string, unknown>;
+  const rawChildren = o.children;
+  if (!isValidNodeShape(o)) return null;
+  const children = Array.isArray(rawChildren)
+    ? rawChildren.map(sanitizeResultNode).filter((c): c is ResultNode => c !== null)
+    : [];
+  return { ...o, children };
+}
+
+/**
+ * Deserialize result tree from localStorage, hardened against corrupt or
+ * foreign state: invalid nodes are dropped and invalid children are pruned
+ * from otherwise-valid parents — never a blind cast that crashes
+ * renderResultNode mid-render (and gets re-persisted by the next saveState,
+ * crashing every reload the same way).
  */
 export function deserializeResultTree(data: unknown): ResultNode[] {
   if (!Array.isArray(data)) {
     return [];
   }
   
-  return data as ResultNode[];
+  return data
+    .map(sanitizeResultNode)
+    .filter((n): n is ResultNode => n !== null);
 }
 
 /**
@@ -371,7 +434,11 @@ export function restoreCollapsedStates(
   const newRootNodes: ResultNode[] = [];
   
   for (const node of rootNodes) {
-    const collapsed = states[node.id] ?? false;
+    // A corrupt/foreign state can carry non-boolean values (e.g. strings) —
+    // treat anything that is not a boolean as "not collapsed" instead of
+    // crashing or rendering a truthy string as collapsed.
+    const raw = states[node.id];
+    const collapsed = typeof raw === "boolean" ? raw : false;
     const updatedChildren = restoreCollapsedStates(node.children, states);
     const nodeCopy = { ...node, collapsed, children: updatedChildren };
     newRootNodes.push(nodeCopy);
