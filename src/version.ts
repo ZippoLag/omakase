@@ -6,9 +6,9 @@
  * changes automatically on every build and every commit.
  */
 export const APP_VERSION = "0.1.0";
-export const BUILD = 138;
-export const COMMITS = 55;
-export const COMMIT = "cebe490";
-export const COMMIT_DATE = "2026-09-08T00:12:31+02:00";
+export const BUILD = 139;
+export const COMMITS = 56;
+export const COMMIT = "153e8e7";
+export const COMMIT_DATE = "2026-09-08T00:16:36+02:00";
 export const VERSION = `${APP_VERSION}-build.${BUILD}`;
 export const VERSION_FULL = `${VERSION} (${COMMITS} commits, ${COMMIT})`;

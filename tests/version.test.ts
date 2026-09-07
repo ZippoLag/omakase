@@ -13,7 +13,7 @@ import { readFileSync } from "node:fs";
 import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
 import { spawnSync } from "node:child_process";
-import { APP_VERSION, BUILD, COMMITS, COMMIT, VERSION, VERSION_FULL } from "../src/version.js";
+import { APP_VERSION, BUILD, COMMITS, COMMIT, COMMIT_DATE, VERSION, VERSION_FULL } from "../src/version.js";
 
 const root = join(dirname(fileURLToPath(import.meta.url)), "..");
 
@@ -40,4 +40,19 @@ test("version.mjs --print agrees with the module and has no side effects", () =>
   assert.equal(r.stdout.trim(), `omakase ${VERSION_FULL}`);
   // Read-only mode must not rewrite the stamp (or bump the counter).
   assert.equal(readFileSync(join(root, "src", "version.ts"), "utf8"), before);
+});
+
+test("version.mjs --print --json reports the committed commitDate, not an empty string", () => {
+  const r = spawnSync(process.execPath, [join(root, "scripts", "version.mjs"), "--print", "--json"], {
+    cwd: root,
+    encoding: "utf8",
+  });
+  assert.equal(r.status, 0, r.stderr);
+  const rec = JSON.parse(r.stdout) as { build: number; commit: string; commitDate: string };
+  assert.equal(rec.build, BUILD);
+  assert.equal(rec.commit, COMMIT);
+  // The read-only record carries the module's own provenance — a real date
+  // parsed from src/version.ts, never "" (W12).
+  assert.ok(rec.commitDate.length > 0, `commitDate=${rec.commitDate}`);
+  assert.equal(rec.commitDate, COMMIT_DATE);
 });

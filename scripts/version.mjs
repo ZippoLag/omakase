@@ -12,7 +12,8 @@
  * src/version.ts is the single source of truth for both the CLI and the web
  * app — they import it, so `omakase --version` and the web app's header
  * badge always agree. The build counter itself lives in the gitignored
- * it never goes backwards because the counter is floored at the BUILD already
+ * `.build-number` file (never committed — commit src/version.ts instead); it
+ * never goes backwards because the counter is floored at the BUILD already
  * committed in src/version.ts.
  *
  * Usage:
@@ -50,6 +51,9 @@ function committedBuild() {
 
 let build;
 let printedStamp = null;
+/** Commit date parsed from the committed src/version.ts in --print mode (see
+ * the JSON output: the module's provenance, not a live git call). */
+let printedCommitDate = "";
 if (printOnly) {
   // Read-only mode is a pure viewer of the COMMITTED stamp in src/version.ts.
   // The pre-commit hook re-stamps before the commit exists, so the committed
@@ -67,6 +71,7 @@ if (printOnly) {
   build = Number(field("BUILD"));
   const commitCount = Number(field("COMMITS"));
   const commit = String(field("COMMIT"));
+  printedCommitDate = String(field("COMMIT_DATE"));
   printedStamp = `${appVersion}-build.${build} (${commitCount} commits, ${commit})`;
 } else {
   let stored = 0;
@@ -114,7 +119,7 @@ if (jsonOut) {
     build,
     commits: printedStamp ? Number(printedStamp.match(/\((\d+) commits/)?.[1] ?? 0) : commits(),
     commit: printedStamp ? printedStamp.match(/, ([0-9a-f]+)\)/)?.[1] ?? "unknown" : shortSha(),
-    commitDate: printedStamp ? "" : commitDate(),
+    commitDate: printedStamp ? printedCommitDate : commitDate(),
     versionFull,
     line: `omakase ${versionFull}`,
   }) + "\n");
