@@ -384,6 +384,19 @@ button.busy .cancel-btn:active {
   white-space: pre-wrap;
   overflow-wrap: anywhere;
   overflow-x: auto;
+  /* Collapse animation, mirroring .pane-children.hidden below: the pane's
+     own body tucks away with the nested children when the pane is
+     collapsed, leaving only the head banner. */
+  max-height: 5000px;
+  transition: max-height 0.3s ease-out, opacity 0.2s ease, padding 0.3s ease;
+}
+
+.pane.collapsed pre {
+  max-height: 0 !important;
+  opacity: 0;
+  padding-top: 0;
+  padding-bottom: 0;
+  pointer-events: none;
 }
 
 /* Skeleton rows of a streaming pane: shimmering bars the worker's streamed

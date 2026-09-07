@@ -168,25 +168,6 @@ export function findResultById(rootNodes: ResultNode[], targetId: string): Resul
 }
 
 /**
- * Find the parent node for a given node ID
- */
-export function findParentNode(rootNodes: ResultNode[], targetId: string): ResultNode | null {
-  for (const node of rootNodes) {
-    for (const child of node.children) {
-      if (child.id === targetId) {
-        return node;
-      }
-      
-      const foundInGrandchildren = findParentNode([child], targetId);
-      if (foundInGrandchildren) {
-        return foundInGrandchildren;
-      }
-    }
-  }
-  return null;
-}
-
-/**
  * Add a result node to the tree at the specified parent
  */
 export function addResultToParent(
@@ -281,62 +262,6 @@ export function toggleResultCollapse(
 }
 
 /**
- * Set collapse state for a result node
- */
-export function setResultCollapse(
-  rootNodes: ResultNode[],
-  targetId: string,
-  collapsed: boolean
-): ResultNode[] {
-  const newRootNodes: ResultNode[] = [];
-  
-  for (const node of rootNodes) {
-    if (node.id === targetId) {
-      const updatedNode = { ...node, collapsed };
-      newRootNodes.push(updatedNode);
-      continue;
-    }
-    
-    const updatedChildren = setResultCollapse(node.children, targetId, collapsed);
-    const nodeCopy = { ...node, children: updatedChildren };
-    newRootNodes.push(nodeCopy);
-  }
-  
-  return newRootNodes;
-}
-
-/**
- * Collapse or expand all children of a parent node
- */
-export function setAllChildrenCollapse(
-  rootNodes: ResultNode[],
-  parentId: string | null,
-  collapsed: boolean
-): ResultNode[] {
-  const newRootNodes: ResultNode[] = [];
-  
-  for (const node of rootNodes) {
-    let updatedChildren = [...node.children];
-    
-    if (node.id === parentId) {
-      // Set collapse state for all direct children
-      updatedChildren = node.children.map(child => ({
-        ...child,
-        collapsed
-      }));
-    } else {
-      // Recursively process children
-      updatedChildren = setAllChildrenCollapse(node.children, parentId, collapsed);
-    }
-    
-    const nodeCopy = { ...node, children: updatedChildren };
-    newRootNodes.push(nodeCopy);
-  }
-  
-  return newRootNodes;
-}
-
-/**
  * Count total results in the tree
  */
 export function countResults(rootNodes: ResultNode[]): number {
@@ -360,13 +285,6 @@ export function migrateToHierarchical(panes: LegacyPaneRecord[]): ResultNode[] {
     null, // top-level
     30 // default max
   ));
-}
-
-/**
- * Serialize result tree for localStorage
- */
-export function serializeResultTree(rootNodes: ResultNode[]): unknown[] {
-  return JSON.parse(JSON.stringify(rootNodes));
 }
 
 /**

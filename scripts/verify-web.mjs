@@ -1384,6 +1384,88 @@ async function main() {
     );
     await page.evaluate(() => document.activeElement?.blur?.());
 
+    // ---- collapse/expand: a collapsed pane reduces to its head banner ------
+    // Collapsing hides BOTH the pane's own body (pre) and its nested
+    // children, leaving only the head banner; expanding restores them; and
+    // the collapsed state survives a reload (restore renders pre-collapsed).
+    const collapseProbe = await page.evaluate(async () => {
+      const pane = document.querySelector("#panes .pane");
+      const pre = pane.querySelector("pre");
+      const children = pane.querySelector(".pane-children");
+      const toggle = pane.querySelector(".pane-collapse");
+      const before = { preH: pre.offsetHeight, childH: children ? children.offsetHeight : null };
+      toggle.click();
+      // let the max-height transition finish before measuring
+      await new Promise((r) => setTimeout(r, 450));
+      return {
+        before,
+        after: {
+          preH: pre.offsetHeight,
+          childH: children ? children.offsetHeight : null,
+          collapsedClass: pane.classList.contains("collapsed"),
+          childrenHidden: children ? children.classList.contains("hidden") : null,
+          aria: toggle.getAttribute("aria-label"),
+        },
+      };
+    });
+    check(
+      "collapse: pane reduces to its head banner (body + children hidden)",
+      !!collapseProbe && collapseProbe.after.collapsedClass && collapseProbe.after.preH === 0
+        && (collapseProbe.after.childrenHidden === true || collapseProbe.after.childH === 0)
+        && collapseProbe.after.aria === "Expand"
+        && collapseProbe.before.preH > 0,
+      JSON.stringify(collapseProbe),
+    );
+    const expandProbe = await page.evaluate(async () => {
+      const pane = document.querySelector("#panes .pane");
+      const pre = pane.querySelector("pre");
+      const toggle = pane.querySelector(".pane-collapse");
+      toggle.click();
+      await new Promise((r) => setTimeout(r, 450));
+      return {
+        preH: pre.offsetHeight,
+        collapsedClass: pane.classList.contains("collapsed"),
+        aria: toggle.getAttribute("aria-label"),
+      };
+    });
+    check(
+      "collapse: second click expands the pane again",
+      expandProbe.preH > 0 && !expandProbe.collapsedClass && expandProbe.aria === "Collapse",
+      JSON.stringify(expandProbe),
+    );
+    // collapse a pane, then reload: the restored pane must come back
+    // pre-collapsed (its body still tucked under the head banner).
+    await page.evaluate(() => {
+      document.querySelector("#panes .pane .pane-collapse").click();
+    });
+    await page.reload({ waitUntil: "load", timeout: 30000 });
+    const collapseRestored = await waitFor(
+      page,
+      () => page.evaluate(() => {
+        const s = document.querySelector("#status")?.textContent ?? "";
+        if (!s.startsWith("ready")) return null;
+        // after restore the pane order is whatever the storage held; find
+        // the pane that was collapsed by its restored state
+        const panes = [...document.querySelectorAll("#panes .pane")];
+        const collapsed = panes.filter((p) => p.classList.contains("collapsed"));
+        if (collapsed.length === 0) return null;
+        const pane = collapsed[0];
+        return {
+          count: collapsed.length,
+          preH: pane.querySelector("pre").offsetHeight,
+          aria: pane.querySelector(".pane-collapse").getAttribute("aria-label"),
+        };
+      }),
+      60000,
+      "collapsed pane restored",
+    );
+    check(
+      "collapse: collapsed state survives a reload (restored pre-collapsed)",
+      !!collapseRestored && collapseRestored.count === 1 && collapseRestored.preH === 0
+        && collapseRestored.aria === "Expand",
+      JSON.stringify(collapseRestored),
+    );
+
     // OPFS VFS logs NotFound probes for sidecar files (journals) as errors; benign.
     const realErrors = consoleLog.filter(
       (l) => !l.includes("Failed to load resource")

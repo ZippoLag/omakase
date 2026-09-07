@@ -67,8 +67,6 @@ import {
   addResultToParent,
   deleteResultFromTree,
   toggleResultCollapse,
-  setResultCollapse,
-  setAllChildrenCollapse,
   countResults,
   migrateToHierarchical,
   deserializeResultTree,
@@ -592,10 +590,8 @@ function addCancelledPane(command: string, query: string, parentId: string | nul
   const head = document.createElement("div");
   head.className = "pane-head";
   
-  // Add collapse toggle
-  const collapseToggle = createCollapseToggle(nodeId);
-  head.append(collapseToggle);
-  
+  // No collapse toggle: cancelled panes are not tree nodes (nothing to
+  // collapse), so a toggle here would be inert.
   const badge = document.createElement("span");
   badge.className = "badge";
   badge.textContent = command;
@@ -1190,34 +1186,34 @@ function createCollapseToggle(nodeId: string, initiallyCollapsed: boolean = fals
 }
 
 /**
- * Toggle collapse state for a result node in the UI and state
+ * Toggle collapse state for a result node in the UI and state. A collapsed
+ * pane reduces to its head banner: both its own body (pre) and its nested
+ * children are hidden, and restored by the same state on reload.
  */
 function toggleResult(nodeId: string): void {
   resultTree = toggleResultCollapse(resultTree, nodeId);
   
   const pane = document.querySelector(`[data-node-id="${nodeId}"]`);
-  if (pane) {
-    const toggle = pane.querySelector('.pane-collapse') as HTMLButtonElement | null;
-    const childrenContainer = pane.querySelector('.pane-children');
-    
-    if (toggle) {
-      const node = findResultById(resultTree, nodeId);
-      if (node) {
-        toggle.innerHTML = node.collapsed ? CHEVRON_RIGHT_SVG : CHEVRON_DOWN_SVG;
-        toggle.title = node.collapsed ? 'Expand' : 'Collapse';
-        toggle.setAttribute('aria-label', node.collapsed ? 'Expand' : 'Collapse');
-      }
-    }
-    
-    if (childrenContainer) {
-      const node = findResultById(resultTree, nodeId);
-      if (node) {
-        childrenContainer.classList.toggle('hidden', node.collapsed);
-      }
-    }
-    
-    saveState();
+  if (!pane) return;
+  // The node must exist in the tree — only real result panes carry a toggle
+  // (cancelled panes have none), so a miss means the pane was already
+  // deleted; nothing to update.
+  const node = findResultById(resultTree, nodeId);
+  if (!node) return;
+  
+  pane.classList.toggle('collapsed', node.collapsed);
+  const childrenContainer = pane.querySelector('.pane-children');
+  if (childrenContainer) {
+    childrenContainer.classList.toggle('hidden', node.collapsed);
   }
+  const toggle = pane.querySelector('.pane-collapse') as HTMLButtonElement | null;
+  if (toggle) {
+    toggle.innerHTML = node.collapsed ? CHEVRON_RIGHT_SVG : CHEVRON_DOWN_SVG;
+    toggle.title = node.collapsed ? 'Expand' : 'Collapse';
+    toggle.setAttribute('aria-label', node.collapsed ? 'Expand' : 'Collapse');
+  }
+  
+  saveState();
 }
 
 /**
@@ -1240,7 +1236,7 @@ function deleteResult(nodeId: string): void {
  */
 function renderResultNode(node: ResultNode): HTMLElement {
   const pane = document.createElement("section");
-  pane.className = `pane${node.parentId ? ' nested' : ''}`;
+  pane.className = `pane${node.parentId ? ' nested' : ''}${node.collapsed ? ' collapsed' : ''}`;
   pane.dataset.nodeId = node.id;
 
   // Header
