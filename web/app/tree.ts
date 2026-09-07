@@ -52,6 +52,25 @@ export function resetNodeIdGenerator(): void {
 }
 
 /**
+ * Seed the node ID counter past the highest id in a restored tree. A fresh
+ * page restarts the counter at 1 while restored nodes keep the ids they were
+ * saved with — without this, the first new lookups after a reload collide
+ * with restored ids and the tree (and its rendering) corrupts.
+ */
+export function seedNodeIdFromTree(rootNodes: ResultNode[]): void {
+  let max = 0;
+  const walk = (ns: ResultNode[]) => {
+    for (const n of ns) {
+      const m = /^node_(\d+)$/.exec(n.id);
+      if (m) max = Math.max(max, Number(m[1]));
+      walk(n.children);
+    }
+  };
+  walk(rootNodes);
+  if (nextNodeId <= max) nextNodeId = max + 1;
+}
+
+/**
  * Create a new result node
  */
 export function createResultNode(
@@ -92,12 +111,19 @@ export function createErrorResultNode(
 }
 
 /**
- * Duplicate tracker: prevents same (parent, command, query) combinations at same level
+ * Duplicate tracker for ACTIONS, keyed (parent, command, raw box value): it
+ * records what the user actually asked for — a multi-item box (制作者) is one
+ * entry under its raw contents, never one entry per expanded query (制, 作,
+ * 者) — so only identical re-requests are suppressed. The UI registers an
+ * action once at submit time; panes that render afterwards never re-register
+ * their individual queries.
  */
 const duplicateTracker = new Map<string, Set<string>>();
 
 /**
- * Check if a result would be a duplicate at the specified parent level
+ * Check if an action (same parent, command and raw box value) is already
+ * registered — i.e. its panes are up, queued, or cached from an identical
+ * earlier run.
  */
 export function hasDuplicate(parentId: string | null, command: Command, query: string): boolean {
   const parentKey = parentId ?? 'root';
@@ -112,7 +138,8 @@ export function hasDuplicate(parentId: string | null, command: Command, query: s
 }
 
 /**
- * Register a new result to prevent duplicates
+ * Register an action (parent, command, raw box value) so that an identical
+ * re-request under the same parent is suppressed.
  */
 export function registerResult(parentId: string | null, command: Command, query: string): void {
   const parentKey = parentId ?? 'root';
@@ -169,6 +196,13 @@ export function findResultById(rootNodes: ResultNode[], targetId: string): Resul
 
 /**
  * Add a result node to the tree at the specified parent
+ *
+ * This deliberately does NOT touch the duplicate tracker. The action that
+ * produced the node was already registered once, keyed on its RAW box value
+ * (see submit in main.ts); a node rendered from a multi-item action carries
+ * an individual expanded query (制作者 → 制), and re-registering that per
+ * literal is exactly what used to swallow a later box expanding to the same
+ * literals.
  */
 export function addResultToParent(
   rootNodes: ResultNode[],
@@ -180,17 +214,14 @@ export function addResultToParent(
   if (parentId === null) {
     // Top-level node
     newRootNodes.unshift(newNode);
-    registerResult(null, newNode.command, newNode.query);
   } else {
     // Find parent and add as child
     const parent = findResultById(newRootNodes, parentId);
     if (parent) {
       parent.children.unshift(newNode);
-      registerResult(parentId, newNode.command, newNode.query);
     } else {
       // Parent not found, add as top-level
       newRootNodes.unshift(newNode);
-      registerResult(null, newNode.command, newNode.query);
     }
   }
   
@@ -199,6 +230,14 @@ export function addResultToParent(
 
 /**
  * Delete a result node and all its children from the tree
+ *
+ * Each deleted node unregisters its (parent, command, node.query) action. For
+ * a node a single-item action produced, node.query IS the raw box value, so
+ * the action is freed and an identical re-click works again. For a node a
+ * multi-item action rendered, node.query is one literal of the batch and
+ * matches no entry — a harmless no-op: a batch's panes never registered their
+ * individual literals, so the batch's action entry lingers and an identical
+ * re-click stays suppressed even after all its panes are deleted.
  */
 export function deleteResultFromTree(
   rootNodes: ResultNode[],
@@ -208,7 +247,7 @@ export function deleteResultFromTree(
   
   for (const node of rootNodes) {
     if (node.id === targetId) {
-      // Remove duplicate tracking for this node
+      // Unregister the node's own action (no-op for multi-item panes — see above)
       unregisterResult(node.parentId, node.command, node.query);
       continue;
     }
@@ -217,17 +256,18 @@ export function deleteResultFromTree(
     const filteredChildren: ResultNode[] = [];
     for (const child of node.children) {
       if (child.id === targetId) {
-        // Remove duplicate tracking for this child
+        // Unregister the child's own action (no-op for multi-item panes — see above)
         unregisterResult(child.parentId, child.command, child.query);
         continue;
       }
       
-      // Recursively filter grandchildren
-      const filteredGrandchildren = deleteResultFromTree([child], targetId);
-      if (filteredGrandchildren.length > 0) {
-        const childCopy = { ...child, children: filteredGrandchildren };
-        filteredChildren.push(childCopy);
-      }
+      // Recursively filter the child's own descendants. The recursion must
+      // walk child.children (not [child] — wrapping the child would rebuild
+      // the child itself and hand it back as its own children array, nesting
+      // a self-clone under every surviving child).
+      const filteredGrandchildren = deleteResultFromTree(child.children, targetId);
+      const childCopy = { ...child, children: filteredGrandchildren };
+      filteredChildren.push(childCopy);
     }
     
     const nodeCopy = { ...node, children: filteredChildren };

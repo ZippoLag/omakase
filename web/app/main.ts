@@ -72,6 +72,7 @@ import {
   deserializeResultTree,
   serializeCollapsedStates,
   restoreCollapsedStates,
+  seedNodeIdFromTree,
   clearResultTree
 } from "./tree.js";
 
@@ -88,6 +89,9 @@ const pctEl = document.querySelector<HTMLSpanElement>("#status .pct")!;
 const versionBadge = document.querySelector<HTMLSpanElement>("#version")!;
 const clearBtn = document.querySelector<HTMLButtonElement>("#clear")!;
 const panes = document.querySelector<HTMLDivElement>("#panes")!;
+/** Cancel control for the in-flight lookup — a sibling of the command
+ * buttons (never nested inside one), overlaid on the busy button. */
+const cancelOp = document.querySelector<HTMLButtonElement>("#cancel-op")!;
 
 // Auto-scroll toggle element (will be added to header)
 let autoScrollToggle: HTMLButtonElement | null = null;
@@ -504,27 +508,34 @@ function submit(command: Command, context?: { parentId: string | null }): void {
   const parentId = context?.parentId ?? null;
   const max = parseMax();
   
+  // Action-level dedupe gate, keyed on the RAW box value — what the user
+  // actually asked — never on the individual lookups a multi-item box
+  // expands into. An identical action (same command, raw value, parent) is
+  // already registered: its panes are up, queued, or cached from an earlier
+  // identical run, so the whole batch is a no-op. Different raw strings are
+  // different actions: 制・作者 after 制作者 still renders its three pages,
+  // and a multi-word box after its words were looked up separately does too.
+  if (hasDuplicate(parentId, command, raw)) {
+    input.focus();
+    return;
+  }
+  
   const queries = command === "word"
     ? wordTokens(raw)
     : command === "kanji"
       ? kanjiQueries(raw)
       : [raw.trim()];
   
-  // Check for duplicates and existing cache
+  // Dedupe WITHIN this one action only: repeated tokens (水 水 → one 水
+  // pane) and queries already sitting in the queue are enqueued once. This
+  // never consults the duplicate tracker — a registered action with a
+  // different raw string is free to render again.
   const seen = new Set(queue.map((p) => `${p.command}\u0000${p.query}\u0000${p.parentId}`));
   const pending: { query: string; parentId: string | null; max: number }[] = [];
   
   for (const q of queries) {
     if (q.length === 0) continue;
-    
     const key = `${command}\u0000${q}\u0000${parentId}`;
-    
-    // Check if this would be a duplicate at the same level under same parent
-    if (hasDuplicate(parentId, command as Command, q)) {
-      continue;
-    }
-    
-    // Check if already in queue for this parent context
     if (!seen.has(key)) {
       seen.add(key);
       pending.push({ query: q, parentId, max });
@@ -535,6 +546,16 @@ function submit(command: Command, context?: { parentId: string | null }): void {
     input.focus();
     return;
   }
+  
+  // The action is accepted: register it ONCE, now, before anything renders
+  // or drains — a second identical click is then caught by the gate above
+  // even while this batch is still queued. Nothing downstream registers the
+  // individual expanded queries anymore: per-literal tracking is what let
+  // 制作者 be swallowed after standalone 制/作/者 lookups. Deleting a batch's
+  // panes only unregisters single-item actions (node query == the raw box);
+  // a multi-item action's entry lingers — acceptable, an identical re-click
+  // stays suppressed rather than duplicating a visible batch.
+  registerResult(parentId, command, raw);
   
   lastCommand = command;
   for (const p of pending) {
@@ -555,9 +576,6 @@ function submit(command: Command, context?: { parentId: string | null }): void {
       // Add to tree and render
       resultTree = addResultToParent(resultTree, newNode, p.parentId);
       renderResultNode(newNode);
-      
-      // Register to prevent duplicates
-      registerResult(p.parentId, command, p.query);
     } else {
       // Not cached, add to queue
       queue.push({ 
@@ -828,7 +846,6 @@ function handleResult(msg: Extract<WorkerMessage, { kind: "result" }>): void {
       const errorNode = createErrorResultNode(item.command, item.query, msg.error, item.parentId, item.max);
       resultTree = addResultToParent(resultTree, errorNode, item.parentId);
       renderResultNode(errorNode);
-      registerResult(item.parentId, item.command, item.query);
       
     } else if (msg.text !== null) {
       // Legacy whole-result path (no sections streamed).
@@ -838,7 +855,6 @@ function handleResult(msg: Extract<WorkerMessage, { kind: "result" }>): void {
       
       // Cache the result
       cacheManager.setCache(item.command, item.query, item.max, resultNode);
-      registerResult(item.parentId, item.command, item.query);
       
     } else {
       // Streamed success: the sections already rendered the pane — swap the
@@ -852,13 +868,11 @@ function handleResult(msg: Extract<WorkerMessage, { kind: "result" }>): void {
         
         // Cache the result
         cacheManager.setCache(item.command, item.query, item.max, resultNode);
-        registerResult(item.parentId, item.command, item.query);
       } else {
         // Defensive: hits always stream
         const errorNode = createErrorResultNode(item.command, item.query, "(empty result)", item.parentId, item.max);
         resultTree = addResultToParent(resultTree, errorNode, item.parentId);
         renderResultNode(errorNode);
-        registerResult(item.parentId, item.command, item.query);
       }
     }
   } catch (err) {
@@ -887,10 +901,22 @@ function setLastCommand(command: Command): void {
 
 /** Button currently showing the spinner (its label is hidden). */
 let spinnerOn: HTMLButtonElement | null = null;
-/** Cancel button for the currently running operation. */
-let cancelBtnOn: HTMLButtonElement | null = null;
 
-/** Remove the spinner and cancel button from whatever button carries it (restores the label). */
+/** Overlay the cancel control on the busy command button's right edge. */
+function showCancelButton(button: HTMLButtonElement): void {
+  const row = document.querySelector("#buttons")!;
+  const br = row.getBoundingClientRect();
+  const r = button.getBoundingClientRect();
+  cancelOp.hidden = false;
+  cancelOp.style.left = `${r.right - br.left - 28}px`;
+  cancelOp.style.top = `${r.top - br.top + (r.height - 20) / 2}px`;
+}
+
+function hideCancelButton(): void {
+  cancelOp.hidden = true;
+}
+
+/** Remove the spinner from whatever button carries it (restores the label). */
 function removeSpinner(): void {
   if (!spinnerOn) return;
   const b = spinnerOn;
@@ -898,12 +924,7 @@ function removeSpinner(): void {
   b.textContent = b.dataset.label ?? "";
   delete b.dataset.label;
   spinnerOn = null;
-  
-  // Also remove cancel button if it exists
-  if (cancelBtnOn) {
-    cancelBtnOn.remove();
-    cancelBtnOn = null;
-  }
+  hideCancelButton();
 }
 
 /**
@@ -959,19 +980,10 @@ function syncBusyUi(): void {
       spin.setAttribute("aria-hidden", "true");
       button.appendChild(spin);
       
-      // Add cancel button alongside spinner
-      const cancel = document.createElement("button");
-      cancel.type = "button";
-      cancel.className = "cancel-btn";
-      cancel.textContent = "×";
-      cancel.title = "Cancel";
-      cancel.setAttribute("aria-label", "Cancel current lookup");
-      cancel.addEventListener("click", (ev) => {
-        ev.stopPropagation();
-        cancelCurrentOperation();
-      });
-      button.appendChild(cancel);
-      cancelBtnOn = cancel;
+      // Overlay the cancel control on the busy button — a sibling of the
+      // command buttons, never a child (button-inside-button is invalid
+      // HTML and clobbered the command button's label).
+      showCancelButton(button);
       
       spinnerOn = button;
     }
@@ -1011,7 +1023,6 @@ function engineDown(message: string): void {
       const errorNode = createErrorResultNode(lost.command, lost.query, `engine error — ${message}`, lost.parentId, lost.max);
       resultTree = addResultToParent(resultTree, errorNode, lost.parentId);
       renderResultNode(errorNode);
-      registerResult(lost.parentId, lost.command, lost.query);
     } catch {
       /* never wedge on a pane */
     }
@@ -1030,7 +1041,6 @@ function engineDown(message: string): void {
         const errorNode = createErrorResultNode(item.command, item.query, `engine error — ${message}`, item.parentId, item.max);
         resultTree = addResultToParent(resultTree, errorNode, item.parentId);
         renderResultNode(errorNode);
-        registerResult(item.parentId, item.command, item.query);
       } catch {
         /* never wedge on a pane */
       }
@@ -1095,7 +1105,7 @@ const KANA_RE = /[\p{Script=Hiragana}\p{Script=Katakana}]/u;
  * compounds, multi-kanji Words, search hits, thesaurus and deconjugate rows.
  * The bracket group allows nested ruby like `食[たべ]物[もの]`.
  */
-const WORD_ROW_RE = /^(\s*)([^\[\]]*?)\s{2}\[((?:[^\[\]]|\\[[^\[\]]*\\])*)\](.*)$/;
+const WORD_ROW_RE = /^(\s*)([^\[\]]*?)\s{2}\[((?:[^\[\]]|\[[^\[\]]*\]|\\[[^\[\]]*\\])*)\](.*)$/;
 
 /** Magnifier glyph for word-lookup buttons (inline SVG, monochrome). */
 const WORD_ICON_SVG =
@@ -1120,7 +1130,9 @@ function kanjiButton(ch: string, parentId: string | null = null): HTMLButtonElem
   b.textContent = ch;
   b.title = `kanji ${ch}`;
   b.addEventListener("click", () => {
-    if (form.hasAttribute("aria-busy")) return;
+    // Token clicks stay live while a lookup runs — they are the only
+    // controls left enabled — and submit()/drain() queue them behind the
+    // in-flight lookup (see the queueing notes in the module header).
     input.value = ch;
     submit("kanji", { parentId });
   });
@@ -1135,7 +1147,7 @@ function wordIconButton(writing: string, parentId: string | null = null): HTMLBu
   b.setAttribute("aria-label", `look up "${writing}"`);
   b.innerHTML = WORD_ICON_SVG;
   b.addEventListener("click", () => {
-    if (form.hasAttribute("aria-busy")) return;
+    // Same as kanjiButton: clicks queue while the app is busy.
     input.value = writing;
     submit("word", { parentId });
   });
@@ -1236,7 +1248,7 @@ function deleteResult(nodeId: string): void {
  */
 function renderResultNode(node: ResultNode): HTMLElement {
   const pane = document.createElement("section");
-  pane.className = `pane${node.parentId ? ' nested' : ''}${node.collapsed ? ' collapsed' : ''}`;
+  pane.className = `pane${node.parentId ? ' nested' : ''}${node.collapsed ? ' collapsed' : ''}${node.error ? ' error' : ''}`;
   pane.dataset.nodeId = node.id;
 
   // Header
@@ -1314,7 +1326,6 @@ function renderResultNode(node: ResultNode): HTMLElement {
   } else {
     panes.prepend(pane);
   }
-  
   // Auto-scroll if enabled
   if (autoScrollEnabled) {
     pane.scrollIntoView({ block: "start", behavior: "smooth" });
@@ -1324,6 +1335,11 @@ function renderResultNode(node: ResultNode): HTMLElement {
   if (node.command === 'kanji' && node.strokes && node.strokes.length > 0) {
     attachStrokeWidgets(pane, node.strokes);
   }
+
+  // Every rendered pane is history: the header trashbin tracks whether there
+  // is anything to delete (regression from the nesting refactor, which lost
+  // the updateClearButton call the flat addPane used to make).
+  updateClearButton();
 
   return pane;
 }
@@ -1416,6 +1432,11 @@ function restoreState(): void {
     : "search";
   setLastCommand(command);
   
+  // New lookups must never reuse ids restored nodes already carry: seed the
+  // counter past the highest id in the restored tree (a fresh page starts at
+  // 1, which would collide with the ids deserialized above).
+  seedNodeIdFromTree(resultTree);
+  
   // Render tree
   renderResultTree();
   updateClearButton();
@@ -1493,6 +1514,7 @@ form.addEventListener("submit", (ev) => {
 input.addEventListener("input", saveState);
 maxInput.addEventListener("input", saveState);
 clearBtn.addEventListener("click", clearAll);
+cancelOp.addEventListener("click", cancelCurrentOperation);
 
 // ---- service worker (offline shell; the dictionary lives in OPFS) ----------
 if ("serviceWorker" in navigator && location.protocol !== "file:") {

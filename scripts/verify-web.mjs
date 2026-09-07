@@ -449,23 +449,37 @@ async function main() {
     // as separate lookups — one pane per character, byte-identical to looking
     // the character up alone. The panes stream in: the first renders while
     // the later lookups are still queued (never after the whole batch), which
-    // is exactly what one-request-per-kanji buys on slow devices.
-    const kanjiParts = [];
-    for (const ch of ["制", "作", "者"]) {
-      kanjiParts.push((await runLookup(page, "kanji", ch)).text);
-    }
-    // Watch a multi-item lookup land: trace the pane count at ~10 ms
-    // granularity (a fast batch must not slip between checks) until every
-    // expected pane is up and the queue has drained.
+    // is exactly what one-request-per-kanji buys on slow devices. The trace
+    // must run on a FRESH batch — a cached literal renders instantly with no
+    // queueing to observe, so the standalone 制/作/者 pages used for the
+    // byte-equality comparison are looked up AFTER the trace, not before.
+    // Watch a multi-item lookup land: the click's own task already shows the
+    // mid-batch state (skeleton up, queue badge counting what is behind), so
+    // that same-task read is the first trace tick; polling then continues at
+    // ~10 ms granularity until every expected pane is up and the queue has
+    // drained.
     const streamPanes = async (cmd, value, expect) => {
       const base = await page.$$eval("#panes .pane", (els) => els.length);
       const t0 = Date.now();
-      await page.evaluate(([c, v]) => {
+      // submit() → drain() run synchronously inside the click handler, so a
+      // read in the SAME task sees the exact mid-batch state with no timing
+      // race: the first pane's streaming skeleton is already up, aria-busy is
+      // set, and the queue badge counts the lookups still behind it. (A
+      // cached batch instead renders every pane synchronously here — count
+      // equals the whole batch and nothing ever queued.)
+      const first = await page.evaluate(([c, v, b]) => {
         const input = document.querySelector("#query");
         input.value = v;
         document.querySelector(`button[data-cmd="${c}"]`).click();
-      }, [cmd, value]);
-      const trace = [];
+        const els = [...document.querySelectorAll("#panes .pane")];
+        return {
+          count: els.length - b,
+          busy: document.querySelector("#lookup").hasAttribute("aria-busy"),
+          counter: document.querySelector(`button[data-cmd="${c}"] .btn-n`)?.textContent ?? null,
+          topQ: els[0]?.querySelector(".pane-query")?.textContent ?? "",
+        };
+      }, [cmd, value, base]);
+      const trace = [first];
       for (;;) {
         const st = await page.evaluate(([b, c]) => {
           const els = [...document.querySelectorAll("#panes .pane")];
@@ -505,6 +519,13 @@ async function main() {
       kmFirst?.topQ === "制" && kmFirst?.busy && kmFirst?.counter === "2",
       JSON.stringify(kmFirst ?? km.trace),
     );
+    // Standalone pages for the byte-equality comparison — looked up AFTER the
+    // trace so the box above was still uncached (these render instantly from
+    // the cache the box just populated).
+    const kanjiParts = [];
+    for (const ch of ["制", "作", "者"]) {
+      kanjiParts.push((await runLookup(page, "kanji", ch)).text);
+    }
     check(
       "multi-kanji: 制作者 box → one pane per kanji, byte-equal to each standalone page",
       km.panes.length === 3
@@ -534,9 +555,12 @@ async function main() {
         && ["制", "作", "者"].every((c) => multiWidgets.some((l) => l.startsWith(`${c} ·`))),
       JSON.stringify(multiWidgets),
     );
-    // search romaji readings
-    p = await runLookup(page, "search", "taberu");
-    check("search taberu → Readings", p.text.includes("Readings") && p.text.includes("食べる"), "search taberu");
+    // search romaji readings — たべる (kana) rather than the already-run
+    // taberu: the action dedupe (W2) suppresses identical re-requests, and
+    // both queries match the same reading-prefix hits, so the pane is
+    // byte-identical to the taberu search the Enter probe ran above.
+    p = await runLookup(page, "search", "たべる");
+    check("search たべる → Readings", p.text.includes("Readings") && p.text.includes("食べる"), "search たべる");
     // a single-kanji word row (the search “Kanji” section) also gets the
     // word-lookup icon, while the writing kanji stays clickable
     const singleKanjiTok = await page.evaluate(() => {
@@ -551,15 +575,29 @@ async function main() {
       singleKanjiTok.icons.includes("word 食") && singleKanjiTok.kanji.includes("食"),
       JSON.stringify({ icons: singleKanjiTok.icons, kanji: singleKanjiTok.kanji }),
     );
-    // search english meanings
-    p = await runLookup(page, "search", "eat");
-    check("search eat → Meanings", p.text.includes("Meanings") && p.text.includes("to eat"), "search eat");
+    // search english meanings — a fresh gloss query ("eat" itself was
+    // already searched by the busy probe above, so the dedupe would suppress
+    // it; the two-word query still intersects on 食べる's gloss "to eat")
+    p = await runLookup(page, "search", "to eat");
+    check("search \"to eat\" → Meanings", p.text.includes("Meanings") && p.text.includes("to eat"), "search \"to eat\"");
     // thesaurus
     p = await runLookup(page, "word", "暑い");
     check("word 暑い thesaurus/antonyms", p.text.includes("Antonyms") && p.text.includes("寒い"), "thesaurus");
     // error path (no entry)
     p = await runLookup(page, "word", "zzzznotaword");
     check("unknown word shows error pane", p.isError && p.text.includes("no entry"), p.text);
+
+    // Reset the history before the token-centric section below. The action
+    // dedupe (W2) suppresses identical re-requests, and this section — plus
+    // everything after it (queued actions, multi-word boxes, dedupe probes,
+    // max caps) — was authored to run against a fresh slate where its own
+    // lookups are the first of their kind. The header trashbin clears the
+    // tree, the duplicate tracker AND the result cache in one go.
+    await page.evaluate(() => {
+      document.querySelector("#clear").click();
+    });
+    const clearedCount = await page.$$eval("#panes .pane", (els) => els.length);
+    check("history cleared before the token section", clearedCount === 0, String(clearedCount));
 
     // ---- clickable tokens in result panes ---------------------------------
     // Every displayed kanji is individually clickable → `kanji <ch>`;
@@ -600,24 +638,32 @@ async function main() {
         .find((x) => x.title === title);
       b.click();
     }, clickTarget);
+    // Nested results: the word page opens under the pane that hosted the
+    // compound row (the top-level kanji-食 page) as its newest child — it is
+    // not a fresh top-level pane, so it is read from the hosting pane.
     const tokWordPane = await waitFor(
       page,
       () => page.evaluate((q) => {
-        const first = document.querySelector("#panes .pane");
-        if (!first || document.querySelector("#lookup").hasAttribute("aria-busy")) return null;
-        return first.querySelector(".badge")?.textContent === "word"
-          && first.querySelector(".pane-query")?.textContent === q
-          ? first.querySelector("pre")?.textContent : null;
+        const host = document.querySelector("#panes .pane:first-child");
+        if (!host || document.querySelector("#lookup").hasAttribute("aria-busy")) return null;
+        const child = host.querySelector(".pane-children > .pane");
+        if (!child) return null;
+        return child.querySelector(".badge")?.textContent === "word"
+          && child.querySelector(".pane-query")?.textContent === q
+          ? child.querySelector("pre")?.textContent : null;
       }, expectedWord),
       30000,
       `word icon click (${expectedWord})`,
     );
     check(
-      "tokens: word icon click → word pane for that compound",
+      "tokens: word icon click → word pane nested under the hosting pane",
       !!tokWordPane && tokWordPane.includes("Writings"),
       tokWordPane ? `${expectedWord}: ${tokWordPane.slice(0, 40)}` : "(none)",
     );
-    // click the 食 kanji token → same as typing it + pressing kanji
+    // click the 食 kanji token → a kanji page nests under the pane that
+    // hosts the token (the kanji-食 page) as its newest child, above the word
+    // page opened above (its 食 page was cached by the standalone lookup, so
+    // it renders immediately rather than streaming)
     await page.evaluate(() => {
       const b = [...document.querySelectorAll("#panes .pane:first-child pre .tok-kanji")]
         .find((x) => x.textContent === "食");
@@ -626,17 +672,19 @@ async function main() {
     const tokKanjiPane = await waitFor(
       page,
       () => page.evaluate(() => {
-        const first = document.querySelector("#panes .pane");
-        if (!first || document.querySelector("#lookup").hasAttribute("aria-busy")) return null;
-        return first.querySelector(".badge")?.textContent === "kanji"
-          && first.querySelector(".pane-query")?.textContent === "食"
-          ? first.querySelector("pre")?.textContent : null;
+        const host = document.querySelector("#panes .pane:first-child");
+        if (!host || document.querySelector("#lookup").hasAttribute("aria-busy")) return null;
+        const child = host.querySelector(".pane-children > .pane");
+        if (!child) return null;
+        return child.querySelector(".badge")?.textContent === "kanji"
+          && child.querySelector(".pane-query")?.textContent === "食"
+          ? child.querySelector("pre")?.textContent : null;
       }),
       30000,
       "kanji token click",
     );
     check(
-      "tokens: kanji click → kanji 食 pane",
+      "tokens: kanji click → kanji 食 pane nested under the hosting pane",
       !!tokKanjiPane && tokKanjiPane.includes("strokes"),
       tokKanjiPane ? tokKanjiPane.slice(0, 40) : "(none)",
     );
@@ -664,26 +712,40 @@ async function main() {
     // per-character kanji and magnifier tokens inside result panes stay
     // tappable. Those clicks must queue behind the running lookup — one
     // lookup at a time — and each queued action must still get its own pane,
-    // in click order, with the controls returning to an idle state after.
+    // with the controls returning to an idle state after. A click whose
+    // lookup was ALREADY CACHED this session renders instantly instead of
+    // queueing, so the probe queues lookups that are still fresh: the word
+    // 制作者 (never looked up yet) and a kanji from the 食 page's compound
+    // rows that was never looked up alone — anything but the kanji already
+    // queried above (制/作/者/食). Results nest under the pane whose token
+    // was clicked; top-level results (the word 水) stay top-level.
     const qBefore = await page.$$eval("#panes .pane", (els) => els.length);
     const busyProbe = await page.evaluate(() => {
       const input = document.querySelector("#query");
+      // The せいさくしゃ search pane carries the `word 制作者` magnifier; the
+      // top-level kanji-食 page's compound rows carry the fresh kanji tokens.
+      const topPane = (badge, q) => [...document.querySelectorAll("#panes > .pane")]
+        .find((p) => p.querySelector(".badge")?.textContent === badge
+          && p.querySelector(".pane-query")?.textContent === q);
+      const searchPane = topPane("search", "せいさくしゃ");
+      const shokuPane = topPane("kanji", "食");
+      const mag = searchPane?.querySelector('pre .tok-word[title="word 制作者"]') ?? null;
+      const used = new Set([..."制作者食"]);
+      const tok = [...(shokuPane?.querySelector("pre")?.querySelectorAll(".tok-kanji") ?? [])]
+        .find((b) => !used.has(b.textContent));
       input.value = "水";
       document.querySelector('button[data-cmd="word"]').click(); // in flight now
       // While it runs, queue a magnifier (word) click and a kanji-token click
       // behind it — both must be accepted, not dropped.
-      const mag = [...document.querySelectorAll("#panes .pane pre .tok-word")]
-        .find((b) => b.title === "word 制作者");
       mag?.click();
-      const tok = [...document.querySelectorAll("#panes .pane pre .tok-kanji")]
-        .find((b) => b.textContent === "食");
       tok?.click();
       return {
         magFound: !!mag,
         tokFound: !!tok,
+        picked: tok?.textContent ?? null,
         spinnerOnWord: !!document.querySelector('button[data-cmd="word"] .spinner'),
-        // per-command badges: word 水 is in flight; 制作者 (word) and 食 (kanji)
-        // are queued behind it — each button counts its own kind
+        // per-command badges: word 水 is in flight; 制作者 (word) and the
+        // picked kanji are queued behind it — each button counts its own kind
         wordBadge: document.querySelector('button[data-cmd="word"] .btn-n')?.textContent ?? null,
         kanjiBadge: document.querySelector('button[data-cmd="kanji"] .btn-n')?.textContent ?? null,
         searchBadge: document.querySelector('button[data-cmd="search"] .btn-n')?.textContent ?? null,
@@ -694,7 +756,7 @@ async function main() {
     });
     check(
       "busy: tokens stay tappable while a lookup runs (spinner on word)",
-      busyProbe.magFound && busyProbe.tokFound && busyProbe.spinnerOnWord
+      busyProbe.magFound && busyProbe.tokFound && !!busyProbe.picked && busyProbe.spinnerOnWord
         && busyProbe.buttonsDisabled && busyProbe.inputDisabled && busyProbe.ariaBusy === "true",
       JSON.stringify(busyProbe),
     );
@@ -703,32 +765,50 @@ async function main() {
       busyProbe.wordBadge === "1" && busyProbe.kanjiBadge === "1" && busyProbe.searchBadge === null,
       JSON.stringify({ word: busyProbe.wordBadge, kanji: busyProbe.kanjiBadge, search: busyProbe.searchBadge }),
     );
-    // All three lookups must complete, one at a time, in click order: the
-    // last-queued kanji pane lands on top, then the queued word, then the
-    // word that was already running when the tokens were clicked.
+    // All three lookups must complete, one at a time, in click order. The
+    // word 水 was already in flight → its pane is the newest TOP-LEVEL pane;
+    // the queued word 制作者 and kanji panes nest under the panes whose
+    // tokens were clicked (search せいさくしゃ / kanji 食), newest first.
     const queued = await waitFor(
       page,
-      () => page.evaluate((base) => {
+      () => page.evaluate(([base, picked]) => {
         const els = [...document.querySelectorAll("#panes .pane")];
         if (els.length < base + 3) return null;
         // The panes must be FINAL (queue drained) — a streaming skeleton for
         // the last lookup would match these queries before it has landed.
         if (document.querySelector("#lookup").hasAttribute("aria-busy")) return null;
-        const got = els.slice(0, 3).map((p) => ({
+        const read = (p) => ({
           q: p.querySelector(".pane-query")?.textContent ?? "",
           badge: p.querySelector(".badge")?.textContent ?? "",
           error: p.classList.contains("error"),
-        }));
-        return got[0].q === "食" && got[1].q === "制作者" && got[2].q === "水" ? got : null;
-      }, qBefore),
+          // text: the word-comma section compares box panes byte-equal to the
+          // standalone 水 page — which is THIS pane (a re-request would be
+          // suppressed by the action dedupe), so the text is captured here.
+          text: p.querySelector("pre")?.textContent ?? "",
+        });
+        const topPane = (badge, q) => [...document.querySelectorAll("#panes > .pane")]
+          .find((p) => p.querySelector(".badge")?.textContent === badge
+            && p.querySelector(".pane-query")?.textContent === q);
+        const top = document.querySelector("#panes > .pane");
+        const searchPane = topPane("search", "せいさくしゃ");
+        const shokuPane = topPane("kanji", "食");
+        const wordChild = searchPane?.querySelector(".pane-children > .pane") ?? null;
+        const kanjiChild = shokuPane?.querySelector(".pane-children > .pane") ?? null;
+        const mizu = top ? read(top) : null;
+        const word = wordChild ? read(wordChild) : null;
+        const kanji = kanjiChild ? read(kanjiChild) : null;
+        return mizu && word && kanji
+          && mizu.q === "水" && mizu.badge === "word"
+          && word.q === "制作者" && word.badge === "word"
+          && kanji.q === picked && kanji.badge === "kanji"
+          ? { mizu, word, kanji } : null;
+      }, [qBefore, busyProbe.picked]),
       60000,
       "three queued panes",
     );
     check(
-      "clicks during a lookup enqueue — panes in click order, one at a time",
-      queued?.length === 3
-        && queued[0].badge === "kanji" && queued[1].badge === "word" && queued[2].badge === "word"
-        && queued.every((p) => !p.error),
+      "clicks during a lookup enqueue — panes land one at a time, each under its hosting pane",
+      !!queued && !queued.mizu.error && !queued.word.error && !queued.kanji.error,
       JSON.stringify(queued),
     );
     // The queue must drain fully: spinner gone, labels restored, idle again.
@@ -752,7 +832,10 @@ async function main() {
     // A box holding several words (comma and/or space separated) must behave
     // exactly like pressing word on each word alone: one pane per word, each
     // byte-identical to its standalone lookup.
-    const soloMizu = await runLookup(page, "word", "水");
+    // 水 was already looked up by the queued-actions probe above — the
+    // action dedupe (W2) suppresses a re-request, so the standalone page is
+    // the text that probe captured, not a fresh lookup.
+    const soloMizu = { text: queued.mizu.text };
     const soloShokuji = await runLookup(page, "word", "食事");
     const twoPanes = async (value, expectTopDown) => {
       const before = await page.$$eval("#panes .pane", (els) => els.length);
@@ -853,57 +936,116 @@ async function main() {
       JSON.stringify(dd?.got.map((g) => ({ q: g.q, len: g.text.length }))),
     );
 
-    // dedupe also reaches across actions: while a kanji-食 lookup is pending
-    // (in flight after the first click), clicking the same 食 token again must
-    // not enqueue a second identical lookup — but a distinct token (作) still
-    // queues. The kanji badge therefore reads 1 (only 作 behind the running
-    // 食 — the duplicate click was dropped), and exactly two panes land:
-    // 作 (newest, on top) then 食.
-    const xBefore = await page.$$eval("#panes .pane", (els) => els.length);
+    // dedupe also reaches across actions: while a fresh kanji lookup is
+    // pending (in flight after the first click), clicking the SAME token
+    // again must not enqueue a second identical lookup — but a distinct
+    // token still queues. The kanji badge therefore reads 1 (only the second
+    // kanji behind the running first — the duplicate click was dropped), and
+    // exactly two panes land, nested under the pane whose tokens were
+    // clicked. Earlier blocks already looked up 制/作/者/食 (plus the kanji
+    // the queued-action block picked), so the targets here must be picked
+    // dynamically: a kanji queried this session renders instantly from the
+    // result cache instead of streaming, which would break the "while
+    // pending" premise. Every kanji pane's query is excluded, and the first
+    // pane (newest-first DOM order) holding two fresh kanji tokens becomes
+    // the host.
     const xProbe = await page.evaluate(() => {
-      const findTok = (ch) => [...document.querySelectorAll("#panes .pane pre .tok-kanji")]
-        .find((b) => b.textContent === ch);
-      const shoku = findTok("食");
-      const saku = findTok("作");
-      shoku?.click(); // kanji 食 in flight now
-      shoku?.click(); // same pending lookup again → must be dropped
-      saku?.click(); // distinct lookup → queues behind
+      const panes = [...document.querySelectorAll("#panes .pane")];
+      // Any kanji queried this session has a kanji pane somewhere (nested or
+      // top-level) — exclude those queries so the clicks below always hit a
+      // lookup that is still uncached.
+      const queried = new Set(
+        panes
+          .filter((p) => p.querySelector(".badge")?.textContent === "kanji")
+          .map((p) => p.querySelector(".pane-query")?.textContent ?? "")
+          .filter(Boolean),
+      );
+      let host = null;
+      let hostKidsBefore = 0;
+      let picked = [];
+      for (const p of panes) {
+        const fresh = [...new Set(
+          [...p.querySelectorAll("pre .tok-kanji")]
+            .map((b) => b.textContent)
+            .filter((c) => !queried.has(c)),
+        )];
+        if (fresh.length >= 2) {
+          host = p;
+          hostKidsBefore = p.querySelectorAll(".pane-children > .pane").length;
+          picked = fresh.slice(0, 2);
+          break;
+        }
+      }
+      if (!host || picked.length < 2) {
+        return {
+          found: false,
+          queried: [...queried],
+          panes: panes.map((p) => ({
+            q: p.querySelector(".pane-query")?.textContent ?? "",
+            kanjiTokens: p.querySelectorAll("pre .tok-kanji").length,
+          })),
+        };
+      }
+      // Tag the host so the panes can be asserted under exactly this pane.
+      host.setAttribute("data-xhost", "1");
+      const toks = [...host.querySelectorAll("pre .tok-kanji")];
+      const btn = (c) => toks.find((b) => b.textContent === c);
+      btn(picked[0]).click(); // kanji picked[0] in flight now
+      btn(picked[0]).click(); // same pending lookup again → must be dropped
+      btn(picked[1]).click(); // distinct lookup → queues behind
       return {
-        shokuFound: !!shoku,
-        sakuFound: !!saku,
+        found: true,
+        picked,
+        hostKidsBefore,
+        hostQuery: host.querySelector(".pane-query")?.textContent ?? "",
         ariaBusy: document.querySelector("#lookup").getAttribute("aria-busy"),
         kanjiBadge: document.querySelector('button[data-cmd="kanji"] .btn-n')?.textContent ?? null,
         wordBadge: document.querySelector('button[data-cmd="word"] .btn-n')?.textContent ?? null,
+        searchBadge: document.querySelector('button[data-cmd="search"] .btn-n')?.textContent ?? null,
       };
     });
     check(
       "cross-action dedupe: re-clicking a pending token does not re-enqueue",
-      xProbe.shokuFound && xProbe.sakuFound && xProbe.ariaBusy === "true" && xProbe.kanjiBadge === "1" && xProbe.wordBadge === null,
+      xProbe.found && xProbe.ariaBusy === "true" && xProbe.kanjiBadge === "1"
+        && xProbe.wordBadge === null && xProbe.searchBadge === null,
       JSON.stringify(xProbe),
     );
-    const xDone = await waitFor(
-      page,
-      () => page.evaluate((base) => {
-        const els = [...document.querySelectorAll("#panes .pane")];
-        if (els.length < base + 2) return null;
-        const got = els.slice(0, 2).map((p) => ({
-          q: p.querySelector(".pane-query")?.textContent ?? "",
-          badge: p.querySelector(".badge")?.textContent ?? "",
-          error: p.classList.contains("error"),
-        }));
-        const busy = document.querySelector("#lookup").hasAttribute("aria-busy");
-        return got[0].q === "作" && got[1].q === "食" && !busy ? got : null;
-      }, xBefore),
-      60000,
-      "cross-action dedupe panes",
-    );
+    const xDone = xProbe.found
+      ? await waitFor(
+        page,
+        () => page.evaluate(([x, y, before]) => {
+          const host = document.querySelector("#panes [data-xhost]");
+          if (!host || document.querySelector("#lookup").hasAttribute("aria-busy")) return null;
+          const kids = [...host.querySelectorAll(".pane-children > .pane")];
+          if (kids.length < before + 2) return null;
+          const read = (p) => ({
+            q: p.querySelector(".pane-query")?.textContent ?? "",
+            badge: p.querySelector(".badge")?.textContent ?? "",
+            error: p.classList.contains("error"),
+          });
+          const top = read(kids[0]);
+          const next = read(kids[1]);
+          // Newest child first: the queued distinct kanji lands on top of
+          // the first-clicked one — a leaked duplicate would add a third
+          // kanji child and fail this read.
+          return top.q === y && next.q === x ? { top, next, added: kids.length - before } : null;
+        }, [xProbe.picked[0], xProbe.picked[1], xProbe.hostKidsBefore]),
+        60000,
+        "cross-action dedupe panes",
+      )
+      : null;
     check(
-      "cross-action dedupe: two panes (作 on top, 食 below), queue drained",
-      xDone?.length === 2
-        && xDone[0].badge === "kanji" && xDone[1].badge === "kanji"
-        && xDone.every((p) => !p.error),
+      "cross-action dedupe: two fresh kanji panes nest under the clicked pane, queue drained",
+      !!xDone && xDone.added === 2
+        && xDone.top.q === xProbe.picked[1] && xDone.next.q === xProbe.picked[0]
+        && xDone.top.badge === "kanji" && xDone.next.badge === "kanji"
+        && !xDone.top.error && !xDone.next.error,
       JSON.stringify(xDone),
     );
+    // Drop the temporary host marker used to locate the nested panes.
+    await page.evaluate(() => {
+      document.querySelector("#panes [data-xhost]")?.removeAttribute("data-xhost");
+    });
 
     // ---- kanji: non-kanji characters in the box are ignored ---------------
     // Typing a word (or pasting text with punctuation) and pressing kanji
@@ -976,7 +1118,9 @@ async function main() {
 
     // the max box drives the caps end-to-end
     await page.evaluate(() => { document.querySelector("#max").value = "3"; });
-    p = await runLookup(page, "kanji", "食");
+    // 食's page is already up from the token section — the dedupe would
+    // suppress a re-request, so cap a fresh kanji page (水) instead.
+    p = await runLookup(page, "kanji", "水");
     check("max=3 caps kanji compounds", p.text.includes("… and "), p.text.slice(0, 80));
     await page.evaluate(() => { document.querySelector("#max").value = "5"; });
     p = await runLookup(page, "search", "eat");
@@ -1048,7 +1192,24 @@ async function main() {
           cmd: [...document.querySelectorAll("button[data-cmd]")]
             .find((b) => b.classList.contains("primary"))?.dataset.cmd,
           panes: document.querySelectorAll("#panes .pane").length,
+          topLevel: document.querySelectorAll("#panes > .pane").length,
+          inParents: [...document.querySelectorAll("#panes .pane-children > .pane")].length,
+          perParent: [...document.querySelectorAll("#panes > .pane")]
+            .filter((p) => p.querySelectorAll(".pane-children > .pane").length > 0)
+            .map((p) => ({
+              q: p.querySelector(".pane-query")?.textContent ?? "",
+              kids: [...p.querySelectorAll(".pane-children > .pane")].map((k) =>
+                `${k.querySelector(".pane-query")?.textContent ?? ""}(${k.dataset.nodeId})`),
+            })),
+          trace: (window.__trace ? Object.fromEntries(Object.entries(window.__trace)) : null),
           udon: [...document.querySelectorAll("#panes .pane-query")].some((el) => el.textContent === "うどん"),
+          tree: (() => {
+            try {
+              const st = JSON.parse(localStorage.getItem("omakase.state"));
+              const walk = (nodes) => nodes.map((n) => ({ q: n.query, id: n.id.slice(0, 6), kids: n.children?.length ?? 0 }));
+              return { v: st.v, top: st.resultTree.length, roots: walk(st.resultTree) };
+            } catch { return null; }
+          })(),
         } : null;
       }),
       60000,

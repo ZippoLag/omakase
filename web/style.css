@@ -213,6 +213,7 @@ h1 {
   grid-template-columns: 1fr 1fr 1fr;
   gap: 8px;
   margin-top: 8px;
+  position: relative; /* anchor for the absolutely-positioned #cancel-op */
 }
 
 button {
@@ -259,14 +260,16 @@ button.busy {
 
 @keyframes spin { to { transform: rotate(360deg); } }
 
-/* Cancel button that appears alongside the spinner on busy command buttons. */
-button.busy .cancel-btn {
-  pointer-events: auto;
+/* Cancel control: a sibling of the command buttons that overlays the busy
+   button while a lookup runs (its position is set from the busy button's
+   box in syncBusyUi). A button nested inside the command button was invalid
+   HTML and clobbered the command button's label. */
+#cancel-op {
+  position: absolute;
   font: inherit;
   font-size: 18px;
   font-weight: 600;
   padding: 0;
-  margin-left: 2px;
   border: none;
   border-radius: 4px;
   background: var(--bg-pane);
@@ -282,13 +285,17 @@ button.busy .cancel-btn {
   touch-action: manipulation;
 }
 
-button.busy .cancel-btn:hover,
-button.busy .cancel-btn:focus-visible {
+#cancel-op[hidden] {
+  display: none;
+}
+
+#cancel-op:hover,
+#cancel-op:focus-visible {
   color: var(--accent);
   background: color-mix(in srgb, var(--accent) 12%, transparent);
 }
 
-button.busy .cancel-btn:active {
+#cancel-op:active {
   transform: scale(0.9);
 }
 

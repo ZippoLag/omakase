@@ -34,6 +34,11 @@
       <button type="button" data-cmd="kanji">kanji</button>
       <button type="button" data-cmd="word">word</button>
       <button type="button" data-cmd="search" class="primary">search</button>
+      <!-- Cancel control: a SIBLING of the command buttons (a button nested
+           inside another button is invalid HTML and clobbered the command
+           button's label). It overlays the busy button while a lookup runs. -->
+      <button id="cancel-op" type="button" hidden aria-label="Cancel current lookup"
+              title="Cancel">×</button>
     </div>
   </form>
 
