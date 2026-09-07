@@ -715,7 +715,7 @@ function drain(): void {
   startOpProgress(item);
   const req: WorkerRequest = { kind: "run", id: item.id, command: item.command, query: item.query, max: item.max };
   worker.postMessage(req);
-  armWatchdog();
+  armWatchdog(item.command);
 }
 
 // ---- worker messages -------------------------------------------------------
@@ -754,8 +754,9 @@ function onWorkerMessage(ev: MessageEvent<WorkerMessage>): void {
       opSectionClaim(msg.label);
       // The worker is demonstrably alive and mid-lookup: extend the watchdog
       // so a slow-but-streaming lookup (e.g. the long meaning search on a
-      // phone) is never killed while it is still making progress.
-      armWatchdog();
+      // phone) is never killed while it is still making progress. The active
+      // op's command is in scope (gated on opActiveId above).
+      armWatchdog(opCommand!);
       break;
     }
     case "op-progress": {
@@ -771,7 +772,7 @@ function onWorkerMessage(ev: MessageEvent<WorkerMessage>): void {
       // Liveness extension: same rationale as op-section — the watchdog must
       // only fire when the worker has gone silent, not while real progress
       // messages keep arriving for the active lookup.
-      armWatchdog();
+      armWatchdog(opCommand!);
       break;
     }
     case "ready":
@@ -1062,13 +1063,20 @@ function engineDown(message: string): void {
 /** A lookup should never hang the UI: if the worker stops answering, treat
  * it as an engine failure (drops the stuck lookup with an error pane and
  * restarts the engine). Generous — the first cold lookup after the
- * dictionary import can take a while on slow devices. */
+ * dictionary import can take a while on slow devices. Search gets a longer
+ * budget (W7): its meaning search — FTS candidate discovery over the full
+ * gloss index plus scoring hundreds of loaded words — is the one lookup
+ * that can legitimately run for minutes in wasm on a phone, and the
+ * discovery phase posts no progress. */
 const LOOKUP_TIMEOUT_MS = 120000;
+const SEARCH_TIMEOUT_MS = 240000;
 let watchdog: ReturnType<typeof setTimeout> | null = null;
 
-function armWatchdog(): void {
+/** Arm the watchdog with the budget for `command` (search: 2× default). */
+function armWatchdog(command: Command): void {
   disarmWatchdog();
-  watchdog = setTimeout(() => engineDown("a lookup took too long"), LOOKUP_TIMEOUT_MS);
+  const budget = command === "search" ? SEARCH_TIMEOUT_MS : LOOKUP_TIMEOUT_MS;
+  watchdog = setTimeout(() => engineDown("a lookup took too long"), budget);
 }
 
 function disarmWatchdog(): void {

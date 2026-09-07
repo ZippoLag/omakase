@@ -418,8 +418,14 @@ function glossWordIds(db: DB, expr: string): string[] {
  */
 export type MeaningProgress = (done: number, total: number) => void | Promise<void>;
 
-/** Yield cadence of the candidate load loop (see searchMeanings). */
-const PROGRESS_CHUNK = 64;
+/** Yield cadence of the candidate load loop (see searchMeanings). Small
+ * (8) so the wasm worker yields to the event loop ~8× more often than a
+ * chunk of 64 would: progress messages reach the UI more frequently, the
+ * lookup watchdog is extended more finely, and the % readout updates
+ * smoother. Cost is negligible — one extra postMessage per 8 rows. The CLI
+ * passes no onProgress, so the loop never awaits here and output is
+ * byte-identical (timing only). */
+const PROGRESS_CHUNK = 8;
 
 export async function searchMeanings(
   db: DB,
@@ -509,7 +515,19 @@ export async function searchMeanings(
   const seen = new Set<string>();
   // The pool has no duplicates (exact ids, then any-only ids), so done runs
   // 1..total in order and the final call always reports total/total.
-  const pool = [...exactPool, ...anyPool.filter((i) => !exactSet.has(i)).slice(0, MEANING_POOL_LIMIT)];
+  //
+  // Both pools are capped at MEANING_POOL_LIMIT: ultra-common single tokens
+  // (of: ~31k, to: ~21k, the: ~18k exact gloss words in the real dictionary)
+  // would otherwise score tens of thousands of loaded words synchronously
+  // and run for tens of minutes in wasm — the watchdog would kill them as
+  // "took too long" instead of answering. Typical tokens stay far under the
+  // cap (eat: 120, water: 1153, develop: 33), so their pools are unchanged;
+  // only the truly pathological ones are bounded, at the cost of ranking
+  // within a capped pool for those (acceptable — the alternative is a hang).
+  const pool = [
+    ...exactPool.slice(0, MEANING_POOL_LIMIT),
+    ...anyPool.filter((i) => !exactSet.has(i)).slice(0, MEANING_POOL_LIMIT),
+  ];
   const total = pool.length;
   let done = 0;
   for (const id of pool) {
@@ -540,7 +558,9 @@ export async function searchMeanings(
   return out;
 }
 
-/** Max prefix-only words scored per meaning search (beyond the exact pool). */
+/** Max words scored per meaning search from each candidate pool (exact and
+ * prefix-only alike): caps the pathological ultra-common-token case without
+ * ever touching typical queries. */
 const MEANING_POOL_LIMIT = 2000;
 
 /** ASCII-only input check (gloss + romaji paths). */

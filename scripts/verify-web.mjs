@@ -284,24 +284,45 @@ async function main() {
       const input = document.querySelector("#query");
       input.value = "water";
       document.querySelector('button[data-cmd="search"]').click();
-      // Let the eased creep / first counted progress values land.
+      // Sample 1 — synchronously after the click: the pane appears immediately
+      // (header + skeleton rows), before the worker's first reply can land.
+      const immediate = (() => {
+        const p = document.querySelector("#panes .pane.streaming");
+        return {
+          skel: !!p && p.querySelectorAll(".skel-line").length > 0,
+          paneQ: p?.querySelector(".pane-query")?.textContent ?? "",
+          prog0: getComputedStyle(document.documentElement).getPropertyValue("--progress").trim(),
+        };
+      })();
+      // Sample 2 — after the first worker messages land: the search header
+      // section streams immediately (it only echoes the query), clearing the
+      // skeleton rows, and the worker's pre-discovery heartbeat claims the
+      // readings floor at once — so the bar has already left the dot well
+      // before the long meaning search produces its first counted value
+      // (W7: it must never park at 0% through the silent stretch).
       await new Promise((r) => setTimeout(r, 600));
       const streamPane = document.querySelector("#panes .pane.streaming");
       const pct = document.querySelector("#status .pct");
       const prog = getComputedStyle(document.documentElement).getPropertyValue("--progress").trim();
       const status = document.querySelector("#status .status-msg")?.textContent ?? "";
+      const barPct = Number.parseFloat(prog);
       return {
-        skel: !!streamPane && streamPane.querySelectorAll(".skel-line").length > 0,
-        paneQ: streamPane?.querySelector(".pane-query")?.textContent ?? "",
+        ...immediate,
+        laterSkel: !!streamPane && streamPane.querySelectorAll(".skel-line").length > 0,
+        paneText: streamPane?.querySelector("pre")?.textContent ?? "",
         pctVisible: !!pct && !pct.hidden && /\d+%/.test(pct.textContent ?? ""),
         prog,
         mid: prog !== "0%" && prog !== "100%",
+        barPastDot: Number.isFinite(barPct) && barPct >= 10,
         status,
       };
     });
     check(
-      "op: skeleton pane + live % readout + divider mid-fill during a slow lookup",
-      streamProbe.skel && streamProbe.paneQ === "water" && streamProbe.pctVisible && streamProbe.mid
+      "op: pane streams instantly, header clears the skeleton, bar leaves 0% promptly",
+      streamProbe.skel && streamProbe.paneQ === "water"
+        && streamProbe.prog0 === "0%"
+        && !streamProbe.laterSkel && streamProbe.paneText.startsWith("water")
+        && streamProbe.pctVisible && streamProbe.mid && streamProbe.barPastDot
         && (streamProbe.status.includes("looking up") || streamProbe.status.includes("searching")),
       JSON.stringify(streamProbe),
     );

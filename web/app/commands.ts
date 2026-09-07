@@ -179,6 +179,20 @@ export async function streamSearch(
   onProgress?: (done: number, total: number) => Promise<void> | void,
 ): Promise<StreamResult> {
   const trimmed = query.trim();
+  // The header section only echoes the query (section 0 of searchSections) —
+  // emit it BEFORE any lookup runs so the pane claims its ladder floor (0)
+  // and the bar leaves the dot immediately, instead of sitting at 0% through
+  // the whole meaning search. Byte-identity is untouched: the concatenation
+  // is header + "\n" + section1 + "\n" + … exactly as before, and the CLI
+  // echoes the same trimmed query (cmdSearch / renderSearch).
+  //
+  // NOTE the readings section CANNOT be emitted early: whether it is shown
+  // at all depends on `keepReadings`, which depends on `meanings` (a kana
+  // query keeps readings; an ASCII search keeps them only when there is no
+  // meaning match or an exact reading hit). Emitting readings before
+  // meanings were known would break the byte-identical contract — do not
+  // "optimize" this.
+  await emit("header", `${trimmed}\n`);
   // Reading rows are ranked and capped at `max` inside the lookup (SQL
   // LIMIT); `total` feeds the header/remainder note.
   const { hits: readings, total: readingsTotal } = searchReadingPrefix(db, trimmed, max);
@@ -195,19 +209,19 @@ export async function streamSearch(
     color: false,
     totals: { readings: keepReadings ? readingsTotal : 0 },
   });
-  // Ladder labels per section, derived from what is actually present:
-  // searchSections omits empty blocks, so an index-based label would misname
-  // e.g. a meanings-only result as "readings" (under-claiming its floor) or
-  // a kanji-only one as "readings" instead of "kanji". Mirror the same
-  // presence rules in the same order; the one remaining shape is the sole
-  // "(no results)" block, labeled "none".
-  const labels = ["header"];
+  // Ladder labels for the sections AFTER the header, derived from what is
+  // actually present: searchSections omits empty blocks, so an index-based
+  // label would misname e.g. a meanings-only result as "readings"
+  // (under-claiming its floor) or a kanji-only one as "readings" instead of
+  // "kanji". Mirror the same presence rules in the same order; the one
+  // remaining shape is the sole "(no results)" block, labeled "none".
+  const labels: string[] = [];
   if (shownReadings.length > 0) labels.push("readings");
   if (meanings.length > 0) labels.push("meanings");
   if (kanjiHits.length > 0) labels.push("kanji");
-  if (labels.length === 1) labels.push("none"); // the "(no results)" block
-  for (let i = 0; i < secs.length; i++) {
-    await emit(labels[i]!, (i === 0 ? "" : "\n") + secs[i]!);
+  if (labels.length === 0) labels.push("none"); // the "(no results)" block
+  for (let i = 1; i < secs.length; i++) {
+    await emit(labels[i - 1]!, "\n" + secs[i]!);
   }
   if (shownReadings.length === 0 && meanings.length === 0 && kanjiHits.length === 0 && isAscii(trimmed)) {
     await emit("hint", webSearchHint(db, trimmed));

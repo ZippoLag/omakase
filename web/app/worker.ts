@@ -272,6 +272,13 @@ async function handleRun(req: WorkerRequest & { kind: "run" }): Promise<void> {
             text: `searching meanings… (${done.toLocaleString()} / ${total.toLocaleString()})`,
           });
         };
+        // Heartbeat BEFORE the discovery phase: the candidate FTS scan
+        // (glossWordIds per token) posts no progress and can take seconds on
+        // a phone, so claim the readings floor immediately — the main thread
+        // follows it verbatim (and extends the watchdog on it), keeping the
+        // bar moving and the lookup alive through the silent stretch. The
+        // header section streamed by streamSearch re-arms the watchdog again.
+        send({ kind: "op-progress", id: req.id, pct: base, text: "searching meanings…" });
         const r = await streamSearch(db, q, req.max, emit, onProgress);
         send({ kind: "result", id: req.id, text: null, error: r.error });
         return;
