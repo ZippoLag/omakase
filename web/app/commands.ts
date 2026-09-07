@@ -34,6 +34,25 @@ import {
   renderWordBody,
 } from "../../src/format.js";
 
+/**
+ * Cheap integrity probe for the opened dictionary: `PRAGMA quick_check` must
+ * return exactly one row whose value is `ok`. Anything else — extra rows, or
+ * a thrown error (`database disk image is malformed` / `file is not a
+ * database`) — means the copy was truncated or damaged (an interrupted
+ * import, storage eviction) and must be re-imported rather than trusted.
+ * Runs through the WasmDb shim in the worker and any DbLike driver in tests
+ * (node:sqlite / better-sqlite3), so it is testable against a real
+ * truncated fixture.
+ */
+export function dbLooksHealthy(db: DbLike): boolean {
+  try {
+    const rows = db.prepare("PRAGMA quick_check").all() as { quick_check?: unknown }[];
+    return rows.length === 1 && rows[0]?.quick_check === "ok";
+  } catch {
+    return false;
+  }
+}
+
 /** JMdict tag -> description map, stored in the meta table (like cli.loadTags). */
 export function loadTags(db: DbLike): Record<string, string> {
   const row = db.prepare("SELECT value FROM meta WHERE key = 'tags'").get() as { value: string } | undefined;

@@ -9,7 +9,7 @@
  */
 import sqlite3InitModule, { type OpfsDatabase, type Sqlite3Static } from "../vendor/index.mjs";
 import { WasmDb } from "./shim.js";
-import { kanjiStrokePages, loadTags, streamKanji, streamSearch, streamWord } from "./commands.js";
+import { dbLooksHealthy, kanjiStrokePages, loadTags, streamKanji, streamSearch, streamWord } from "./commands.js";
 import { OP_LADDERS } from "./worker-api.js";
 import type { WorkerMessage, WorkerRequest } from "./worker-api.js";
 
@@ -93,21 +93,33 @@ async function ensureDb(engine: Sqlite3Static): Promise<OpfsDatabase> {
 
   // Already imported on a previous visit? Read its build stamp to detect a
   // newer served dictionary (rebuilt DBs carry new tables/rows — e.g. the
-  // stroke_order index — that old OPFS copies lack).
+  // stroke_order index — that old OPFS copies lack), and probe its
+  // integrity: a truncated or interrupted import can leave a copy whose meta
+  // (the first table — front of the file) reads fine while data pages past
+  // the cut are gone — trusting it boots "ready" while every lookup fails.
   let localStamp: string | null = null;
+  let localHealthy = false;
   try {
     const existing = new OpfsDb(DB_PATH, "r");
     try {
       const probe = new WasmDb(existing);
       const row = probe.prepare("SELECT value FROM meta WHERE key = 'version'").get() as { value?: string } | undefined;
       localStamp = row?.value ?? null;
+      localHealthy = dbLooksHealthy(probe);
     } finally {
       existing.close();
     }
   } catch {
-    /* no dictionary in OPFS yet — first visit */
+    /* no dictionary in OPFS yet (or unreadable copy) — first visit / re-import */
   }
 
+  // A stamped copy that fails the integrity probe is damaged: re-import it
+  // (importDb truncates + rewrites the OPFS file, so no explicit delete is
+  // needed) rather than trust it until the first lookup blows up.
+  if (localStamp !== null && !localHealthy) {
+    send({ kind: "status", text: "Dictionary copy is damaged — re-importing…" });
+    return importDictionary(OpfsDb, "Re-downloading dictionary…");
+  }
   if (localStamp !== null && serverStamp !== null && serverStamp !== localStamp) {
     send({ kind: "status", text: "Newer dictionary build found — updating…" });
     return importDictionary(OpfsDb, "Updating dictionary into device storage…");
@@ -149,31 +161,64 @@ async function importDictionary(OpfsDb: OpfsDbCtor, status: string): Promise<Opf
   return new OpfsDb(DB_PATH, "r");
 }
 
+/**
+ * One-shot guard for the boot repair below: a failed boot is retried exactly
+ * once (re-import + reopen) before giving up, so a genuinely broken
+ * environment — no network, unsupported browser — fails fast instead of
+ * looping. Per worker instance: the UI's own restart loop (MAX_BOOT_FAILURES)
+ * spawns fresh instances, each with one repair attempt.
+ */
+let repairAttempted = false;
+
+/** Dictionary open + tag/count reads + `ready`, shared by the normal boot and
+ * the one-shot repair retry. ensureDb is where the dictionary is checked and
+ * (re)imported, so re-running this path is also the repair. */
+async function openAndReady(engine: Sqlite3Static): Promise<void> {
+  const raw = await ensureDb(engine);
+  // After an import the ladder already sits past these floors, so the main
+  // thread ignores them (its gauge only ever moves forward); on a no-import
+  // boot they are the real milestones.
+  send({ kind: "boot", pct: BOOT_OPEN_PCT });
+  db = new WasmDb(raw);
+  tags = loadTags(db);
+  send({ kind: "boot", pct: BOOT_TAGS_PCT });
+  send({ kind: "boot", pct: BOOT_TAIL_PCT });
+  const n = db.prepare("SELECT COUNT(*) AS n FROM words").get() as { n: number } | undefined;
+  const row = db.prepare("SELECT value FROM meta WHERE key = 'version'").get() as { value: string } | undefined;
+  send({
+    kind: "ready",
+    version: engine.version.libVersion,
+    words: typeof n?.n === "number" ? n.n : 0,
+    dict: row?.value ?? null,
+  });
+}
+
 async function boot(): Promise<void> {
   try {
     // sqlite engine init: no measurable sub-progress — bootProgress keeps the
     // gauge moving while it runs (see the ladder comment above).
     const engine = await bootProgress(sqlite3InitModule(), BOOT_ENGINE_PCT);
-    // Dictionary check + import (byte-accurate progress) or plain open. After
-    // an import the ladder already sits past these floors, so the main thread
-    // ignores them (its gauge only ever moves forward); on a no-import boot
-    // they are the real milestones.
-    const raw = await ensureDb(engine);
-    send({ kind: "boot", pct: BOOT_OPEN_PCT });
-    db = new WasmDb(raw);
-    tags = loadTags(db);
-    send({ kind: "boot", pct: BOOT_TAGS_PCT });
-    send({ kind: "boot", pct: BOOT_TAIL_PCT });
-    const n = db.prepare("SELECT COUNT(*) AS n FROM words").get() as { n: number } | undefined;
-    const row = db.prepare("SELECT value FROM meta WHERE key = 'version'").get() as { value: string } | undefined;
-    send({
-      kind: "ready",
-      version: engine.version.libVersion,
-      words: typeof n?.n === "number" ? n.n : 0,
-      dict: row?.value ?? null,
-    });
+    await openAndReady(engine);
   } catch (err) {
-    send({ kind: "fatal", message: err instanceof Error ? err.message : String(err) });
+    const message = err instanceof Error ? err.message : String(err);
+    if (repairAttempted) {
+      send({ kind: "fatal", message });
+      return;
+    }
+    repairAttempted = true;
+    // One self-healing attempt: a dictionary copy torn by an interrupted
+    // import (or a flaky network that cut one short) strands the app until a
+    // manual reload — re-run the whole open path once; ensureDb's integrity
+    // probe re-imports a damaged copy from the server. Only if that fails too
+    // is the environment genuinely broken.
+    send({ kind: "status", text: "Dictionary damaged — retrying once…" });
+    try {
+      const engine = await bootProgress(sqlite3InitModule(), BOOT_ENGINE_PCT);
+      await openAndReady(engine);
+    } catch {
+      /* repaired or not, report the original failure below */
+    }
+    send({ kind: "fatal", message });
   }
 }
 
@@ -233,11 +278,21 @@ async function handleRun(req: WorkerRequest & { kind: "run" }): Promise<void> {
       }
     }
   } catch (err) {
+    const message = err instanceof Error ? err.message : String(err);
+    // A dictionary that booted cleanly can still be torn later (storage
+    // eviction on phones reclaims OPFS pages mid-session), so every lookup
+    // fails with these SQLite errors. Don't paper over it with error panes:
+    // tell the UI the engine is broken so it restarts the worker, whose boot
+    // path now re-checks the file and re-imports a damaged copy.
+    if (/database disk image is malformed|not a database/i.test(message)) {
+      send({ kind: "fatal", message: `dictionary is corrupt — restarting to re-import (${message})` });
+      return;
+    }
     send({
       kind: "result",
       id: req.id,
       text: null,
-      error: `lookup failed: ${err instanceof Error ? err.message : String(err)}`,
+      error: `lookup failed: ${message}`,
     });
   }
 }

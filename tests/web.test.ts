@@ -4,6 +4,23 @@
  */
 import { test } from "node:test";
 import assert from "node:assert/strict";
+import { mkdtempSync, rmSync, statSync, truncateSync, writeFileSync } from "node:fs";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
+import { dbLooksHealthy } from "../web/app/commands.js";
+
+// node:sqlite only exists unflagged on Node ≥22.13 (absent on Node 20, behind
+// --experimental-sqlite on 22.5–22.12). The dbLooksHealthy tests below need a
+// real SQLite file, so gate them instead of crashing the whole suite on older
+// runtimes — the project still supports Node 20 for the better-sqlite3-driven
+// tests, and CI runs .nvmrc=22 (≥22.13), where these do run.
+const DatabaseSync = await import("node:sqlite").then(
+  (m) => m.DatabaseSync as typeof import("node:sqlite").DatabaseSync | undefined,
+  () => undefined,
+);
+const sqliteSkip = DatabaseSync === undefined
+  ? "node:sqlite unavailable (needs Node ≥22.13)"
+  : false;
 
 // =============================================================================
 // Test suites for cancel functionality
@@ -383,4 +400,72 @@ test("composable: cache key differentiates by command", () => {
   assert.ok(wordKey !== kanjiKey);
   assert.ok(wordKey !== searchKey);
   assert.ok(kanjiKey !== searchKey);
+});
+
+// =============================================================================
+// W5: dictionary integrity probe (dbLooksHealthy) against real SQLite files
+// =============================================================================
+
+/** Build a small real dictionary-shaped DB: meta at the front (the first
+ * table, like src/db/schema.ts) plus enough data pages to make a tail cut
+ * meaningful. Returns the file path; the DB is closed. Only called when
+ * `sqliteSkip` is false. */
+function makeDictDb(dir: string): string {
+  const path = join(dir, "dict.db");
+  const db = new DatabaseSync!(path);
+  db.exec("CREATE TABLE meta (key TEXT PRIMARY KEY, value TEXT)");
+  db.exec("CREATE TABLE words (id INTEGER PRIMARY KEY, w TEXT)");
+  db.prepare("INSERT INTO meta VALUES ('version', 'v1')").run();
+  // One transaction: node:sqlite would otherwise fsync per row (implicit
+  // transactions), making the fixture build take tens of seconds.
+  db.exec("BEGIN");
+  const insert = db.prepare("INSERT INTO words (w) VALUES (?)");
+  for (let i = 0; i < 50000; i++) insert.run(`word${i}_${"x".repeat(50)}`);
+  db.exec("COMMIT");
+  db.close();
+  return path;
+}
+
+test("dbLooksHealthy: accepts an intact dictionary", { skip: sqliteSkip }, () => {
+  const dir = mkdtempSync(join(tmpdir(), "omakase-db-"));
+  try {
+    const path = makeDictDb(dir);
+    const db = new DatabaseSync!(path, { readOnly: true });
+    assert.strictEqual(dbLooksHealthy(db), true);
+    db.close();
+  } finally {
+    rmSync(dir, { recursive: true, force: true });
+  }
+});
+
+test("dbLooksHealthy: rejects a tail-truncated dictionary (interrupted import)", { skip: sqliteSkip }, () => {
+  const dir = mkdtempSync(join(tmpdir(), "omakase-db-"));
+  try {
+    const path = makeDictDb(dir);
+    // Cut 40% off the end — the interrupted-import shape: the front of the
+    // file (header + meta) still opens and reads, but data pages past the cut
+    // are gone, so quick_check must flag the copy as corrupt.
+    const size = statSync(path).size;
+    truncateSync(path, Math.floor(size * 0.6));
+    const db = new DatabaseSync!(path, { readOnly: true });
+    assert.strictEqual(dbLooksHealthy(db), false);
+    db.close();
+  } finally {
+    rmSync(dir, { recursive: true, force: true });
+  }
+});
+
+test("dbLooksHealthy: rejects a garbage file that still opens", { skip: sqliteSkip }, () => {
+  const dir = mkdtempSync(join(tmpdir(), "omakase-db-"));
+  try {
+    const path = join(dir, "garbage.db");
+    // Random bytes (not a SQLite file): the open may succeed, but the first
+    // query throws — the probe must never throw past the caller.
+    writeFileSync(path, Buffer.alloc(4096, 0xa5));
+    const db = new DatabaseSync!(path, { readOnly: true });
+    assert.strictEqual(dbLooksHealthy(db), false);
+    db.close();
+  } finally {
+    rmSync(dir, { recursive: true, force: true });
+  }
 });
