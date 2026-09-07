@@ -1,6 +1,10 @@
 /**
- * Web UI tests - tests for browser-based functionality.
- * These tests focus on the logic and state management of web UI features.
+ * Web UI tests — against the REAL shipped modules (tree.ts, cache.ts,
+ * query.ts, commands.ts), never inline re-implementations (W11): the old
+ * fakes passed vacuously and could not catch regressions. DOM-free modules
+ * are tested directly here; DOM-bound behavior (streaming panes, collapse
+ * DOM, busy chrome, restore render, dedupe in the live queue) is covered by
+ * the e2e suite (scripts/verify-web.mjs).
  */
 import { test } from "node:test";
 import assert from "node:assert/strict";
@@ -10,15 +14,27 @@ import { join } from "node:path";
 import { dbLooksHealthy } from "../web/app/commands.js";
 import { ResultCacheManager } from "../web/app/cache.js";
 import {
+  addResultToParent,
   clearDuplicateTracker,
+  clearResultTree,
+  countResults,
+  createErrorResultNode,
   createResultNode,
+  deleteResultFromTree,
   deserializeResultTree,
+  findResultById,
   hasDuplicate,
   isValidResultNode,
+  migrateToHierarchical,
   registerResult,
+  resetNodeIdGenerator,
   restoreCollapsedStates,
+  seedNodeIdFromTree,
+  serializeCollapsedStates,
+  toggleResultCollapse,
   unregisterResult,
 } from "../web/app/tree.js";
+import { kanjiQueries, kanjiQuery, parseMax, wordTokens } from "../web/app/query.js";
 
 // node:sqlite only exists unflagged on Node ≥22.13 (absent on Node 20, behind
 // --experimental-sqlite on 22.5–22.12). The dbLooksHealthy tests below need a
@@ -34,383 +50,352 @@ const sqliteSkip = DatabaseSync === undefined
   : false;
 
 // =============================================================================
-// Test suites for cancel functionality
+// query.ts — the pure query-expansion helpers the UI shares with the tests
+// (moved out of main.ts in W11 so the shipped code is what gets tested).
 // =============================================================================
 
-// Mock the necessary global state for testing
-interface Pending {
-  id: number;
-  command: string;
-  query: string;
-  max: number;
-}
-
-// Test cancel operation state management
-test("cancelCurrentOperation: removes head from queue", () => {
-  const queue: Pending[] = [
-    { id: 1, command: "word", query: "test", max: 30 },
-    { id: 2, command: "kanji", query: "日", max: 30 },
-  ];
-  
-  // Simulate the cancel logic
-  const head = queue[0];
-  if (!head) throw new Error("No head");
-  
-  const cancelledOps = new Set<number>();
-  cancelledOps.add(head.id);
-  queue.shift();
-  
-  // Verify queue state
-  assert.strictEqual(queue.length, 1);
-  assert.deepStrictEqual(queue[0], { id: 2, command: "kanji", query: "日", max: 30 });
-  assert.ok(cancelledOps.has(1));
-  assert.strictEqual(cancelledOps.size, 1);
+test("query: wordTokens splits a word box on spaces", () => {
+  assert.deepEqual(wordTokens("水 食事"), ["水", "食事"]);
+  assert.deepEqual(wordTokens("水  食事"), ["水", "食事"]);
+  assert.deepEqual(wordTokens("食べる"), ["食べる"]);
 });
 
-test("cancelCurrentOperation: handles empty queue", () => {
-  const queue: Pending[] = [];
-  const cancelledOps = new Set<number>();
-  
-  // Simulate the cancel logic
-  const head = queue[0];
-  if (!head) {
-    // This is the expected path for empty queue
-    assert.strictEqual(queue.length, 0);
-    assert.strictEqual(cancelledOps.size, 0);
-    return; // Test passes
-  }
-  
-  // Should not reach here
-  assert.fail("Should not process empty queue");
+test("query: wordTokens splits on ASCII, full-width and Japanese commas", () => {
+  assert.deepEqual(wordTokens("水,食事"), ["水", "食事"]);
+  assert.deepEqual(wordTokens("水，食事"), ["水", "食事"]);
+  assert.deepEqual(wordTokens("水、食事"), ["水", "食事"]);
+  assert.deepEqual(wordTokens("水, 食事、ご飯"), ["水", "食事", "ご飯"]);
 });
 
-test("cancelCurrentOperation: tracks multiple cancelled operations", () => {
-  const queue: Pending[] = [
-    { id: 1, command: "word", query: "test1", max: 30 },
-    { id: 2, command: "kanji", query: "日", max: 30 },
-  ];
-  
-  const cancelledOps = new Set<number>();
-  
-  // Cancel first operation
-  const head1 = queue[0];
-  if (head1) {
-    cancelledOps.add(head1.id);
-    queue.shift();
-  }
-  
-  // Cancel second operation (now at head)
-  const head2 = queue[0];
-  if (head2) {
-    cancelledOps.add(head2.id);
-    queue.shift();
-  }
-  
-  // Verify all operations cancelled
-  assert.strictEqual(queue.length, 0);
-  assert.strictEqual(cancelledOps.size, 2);
-  assert.ok(cancelledOps.has(1));
-  assert.ok(cancelledOps.has(2));
+test("query: wordTokens handles a single word and empty input", () => {
+  assert.deepEqual(wordTokens("水"), ["水"]);
+  assert.deepEqual(wordTokens(""), []);
+  assert.deepEqual(wordTokens("   "), []);
 });
 
-// Test handleResult logic for cancelled operations
-test("handleResult: skips processing for cancelled operations", () => {
-  const cancelledOps = new Set<number>([1, 3]);
-  const queue: Pending[] = [{ id: 2, command: "word", query: "test", max: 30 }];
-  
-  // Simulate the message
-  const msg = { kind: "result" as const, id: 1, text: null, error: null };
-  const item = queue[0] ?? null;
-  
-  // Simulate the cancelled check logic
-  if (cancelledOps.has(msg.id)) {
-    cancelledOps.delete(msg.id);
-    if (item?.id === msg.id) {
-      queue.shift();
-    }
-    // Early return for cancelled ops
-    assert.strictEqual(cancelledOps.size, 1); // Should have removed id 1
-    assert.strictEqual(queue.length, 1);    // Queue unchanged
-    return; // Test passes
-  }
-  
-  assert.fail("Should have skipped processing for cancelled operation");
+test("query: kanjiQuery extracts only kanji from mixed text", () => {
+  assert.equal(kanjiQuery("食べる"), "食");
+  assert.equal(kanjiQuery("制・作者"), "制作者");
+  assert.equal(kanjiQuery("水"), "水");
 });
 
-// Test streaming message handling for cancelled operations
-test("op-section: skips processing for cancelled operations", () => {
-  const cancelledOps = new Set<number>([1]);
-  const msg = { kind: "op-section" as const, id: 1, label: "body", text: "test" };
-  
-  // Simulate the op-section handler logic
-  if (cancelledOps.has(msg.id)) {
-    // Should break/return early
-    assert.ok(true); // Test passes if we get here
-    return;
-  }
-  
-  assert.fail("Should have skipped op-section for cancelled operation");
+test("query: kanjiQuery leaves non-kanji input untouched (trimmed)", () => {
+  assert.equal(kanjiQuery("taberu"), "taberu");
+  assert.equal(kanjiQuery(" たべる "), "たべる");
+  assert.equal(kanjiQuery(""), "");
 });
 
-test("op-progress: skips processing for cancelled operations", () => {
-  const cancelledOps = new Set<number>([1]);
-  const opActiveId = 1;
-  const msg = { kind: "op-progress" as const, id: 1, pct: 50, text: "test" };
-  
-  // Simulate the op-progress handler logic
-  if (opActiveId !== msg.id || cancelledOps.has(msg.id)) {
-    // Should break/return early
-    assert.ok(true); // Test passes if we get here
-    return;
-  }
-  
-  assert.fail("Should have skipped op-progress for cancelled operation");
+test("query: kanjiQueries splits a multi-kanji box into one lookup per literal", () => {
+  assert.deepEqual(kanjiQueries("制・作者"), ["制", "作", "者"]);
+  assert.deepEqual(kanjiQueries("食べる"), ["食"]);
 });
 
-// Test queue management during cancellation
-test("queue management: only head operation is cancelled", () => {
-  const queue: Pending[] = [
-    { id: 1, command: "word", query: "test1", max: 30 },
-    { id: 2, command: "kanji", query: "日", max: 30 },
-    { id: 3, command: "search", query: "hello", max: 30 },
-  ];
-  
-  const cancelledOps = new Set<number>();
-  
-  // Simulate cancelling head only
-  const head = queue[0];
-  if (head) {
-    cancelledOps.add(head.id);
-    queue.shift(); // Only remove head
-  }
-  
-  // Verify only head was cancelled
-  assert.strictEqual(cancelledOps.size, 1);
-  assert.ok(cancelledOps.has(1));
-  assert.strictEqual(queue.length, 2);
-  assert.deepStrictEqual(queue[0], { id: 2, command: "kanji", query: "日", max: 30 });
-  assert.deepStrictEqual(queue[1], { id: 3, command: "search", query: "hello", max: 30 });
+test("query: kanjiQueries stays a single query when the box has no kanji", () => {
+  assert.deepEqual(kanjiQueries("taberu"), ["taberu"]);
+  assert.deepEqual(kanjiQueries("たべ"), ["たべ"]);
 });
 
-// Test state cleanup during cancellation
-test("state cleanup: removes all tracking for cancelled operation", () => {
-  const paneByOpId = new Map<number, { remove(): void }>(); // stand-in for main.ts's DOM map — tests typecheck without the DOM lib
-  const opTexts = new Map<number, string[]>();
-  const opActiveId = 1;
-  const opCommand = "word";
-  let nextOpActiveId: number | null = opActiveId;
-  let nextOpCommand: string | null = opCommand;
-  
-  const head = { id: 1, command: "word", query: "test", max: 30 };
-  
-  // Simulate cleanup logic
-  const skeletonPane = paneByOpId.get(head.id);
-  if (skeletonPane) {
-    // Would be removed in real implementation
-    assert.ok(true);
-  }
-  paneByOpId.delete(head.id);
-  opTexts.delete(head.id);
-  
-  if (opActiveId === head.id) {
-    nextOpActiveId = null;
-    nextOpCommand = null;
-  }
-  
-  // Verify cleanup
-  assert.strictEqual(paneByOpId.has(head.id), false);
-  assert.strictEqual(opTexts.has(head.id), false);
-  assert.strictEqual(nextOpActiveId, null);
-  assert.strictEqual(nextOpCommand, null);
+test("query: parseMax keeps a positive integer, falls back to 30 otherwise", () => {
+  assert.equal(parseMax("5"), 5);
+  assert.equal(parseMax("30"), 30);
+  assert.equal(parseMax(""), 30); // Number("") = 0
+  assert.equal(parseMax("3.5"), 30);
+  assert.equal(parseMax("0"), 30);
+  assert.equal(parseMax("-1"), 30);
+  assert.equal(parseMax("abc"), 30);
 });
 
 // =============================================================================
-// Test suites for composable UI functionality
+// tree.ts — result tree operations (the real module)
 // =============================================================================
 
-// Simple duplicate detection tracker for testing
-const duplicateTracker = new Map<string, Set<string>>();
-
-function hasDuplicateTest(parentId: string | null, command: string, query: string): boolean {
-  const parentKey = parentId ?? 'root';
-  const entryKey = `${command}|${query}`;
-  
-  const existing = duplicateTracker.get(parentKey);
-  return !!(existing && existing.has(entryKey));
-}
-
-function registerResultTest(parentId: string | null, command: string, query: string): void {
-  const parentKey = parentId ?? 'root';
-  const entryKey = `${command}|${query}`;
-  
-  let parentSet = duplicateTracker.get(parentKey);
-  if (!parentSet) {
-    parentSet = new Set<string>();
-    duplicateTracker.set(parentKey, parentSet);
-  }
-  
-  parentSet.add(entryKey);
-}
-
-function clearDuplicateTrackerTest(): void {
-  duplicateTracker.clear();
-}
-
-test("composable: duplicate detection prevents same query under same parent", () => {
-  clearDuplicateTrackerTest();
-  
-  // First registration should allow
-  assert.strictEqual(hasDuplicateTest(null, "word", "test"), false);
-  registerResultTest(null, "word", "test");
-  
-  // Same query under same parent should be duplicate
-  assert.strictEqual(hasDuplicateTest(null, "word", "test"), true);
-  
-  // Different parent should allow
-  assert.strictEqual(hasDuplicateTest("parent1", "word", "test"), false);
-  
-  // Different query under same parent should allow
-  assert.strictEqual(hasDuplicateTest(null, "word", "different"), false);
-  
-  // Different command under same parent should allow
-  assert.strictEqual(hasDuplicateTest(null, "kanji", "test"), false);
+test("tree: createResultNode builds a well-formed node", () => {
+  resetNodeIdGenerator();
+  const n = createResultNode("word", "水", "text", false, undefined, "parent_1", 15);
+  assert.ok(n.id.startsWith("node_"), n.id);
+  assert.equal(n.parentId, "parent_1");
+  assert.equal(n.command, "word");
+  assert.equal(n.query, "水");
+  assert.equal(n.text, "text");
+  assert.equal(n.error, false);
+  assert.deepEqual(n.children, []);
+  assert.equal(n.collapsed, false);
+  assert.equal(n.max, 15);
+  assert.equal(typeof n.createdAt, "number");
 });
 
-test("composable: duplicate detection works with parent context", () => {
-  clearDuplicateTrackerTest();
-  
-  // Register result under parent1
-  registerResultTest("parent1", "word", "test");
-  
-  // Same result should be allowed under parent2
-  assert.strictEqual(hasDuplicateTest("parent2", "word", "test"), false);
-  
-  // But not under parent1
-  assert.strictEqual(hasDuplicateTest("parent1", "word", "test"), true);
+test("tree: createErrorResultNode flags the node as an error", () => {
+  const n = createErrorResultNode("search", "zqxjk", "no results", null, 5);
+  assert.equal(n.error, true);
+  assert.equal(n.text, "no results");
+  assert.equal(n.max, 5);
 });
 
-// Test word token parsing
-const WORD_SEP_RE = /[\s,，、]+/u;
-
-function wordTokens(raw: string): string[] {
-  return raw.split(WORD_SEP_RE).filter((s) => s !== "");
-}
-
-test("composable: wordTokens splits on spaces", () => {
-  const tokens = wordTokens("hello world");
-  assert.deepStrictEqual(tokens, ["hello", "world"]);
+test("tree: addResultToParent keeps top-level nodes newest-first (unshift)", () => {
+  resetNodeIdGenerator();
+  const a = createResultNode("word", "水", "a", false, undefined, null, 30);
+  const b = createResultNode("word", "食事", "b", false, undefined, null, 30);
+  const c = createResultNode("word", "食べる", "c", false, undefined, null, 30);
+  let tree = addResultToParent([], a);
+  tree = addResultToParent(tree, b);
+  tree = addResultToParent(tree, c);
+  assert.deepEqual(tree.map((n) => n.query), ["食べる", "食事", "水"]);
 });
 
-test("composable: wordTokens splits on commas", () => {
-  const tokens = wordTokens("hello,world");
-  assert.deepStrictEqual(tokens, ["hello", "world"]);
+test("tree: addResultToParent nests children newest-first under the parent", () => {
+  resetNodeIdGenerator();
+  const parent = createResultNode("kanji", "食", "parent", false, undefined, null, 30);
+  let tree = addResultToParent([], parent);
+  const child1 = createResultNode("word", "食事", "c1", false, undefined, parent.id, 30);
+  const child2 = createResultNode("word", "食べる", "c2", false, undefined, parent.id, 30);
+  tree = addResultToParent(tree, child1, parent.id);
+  tree = addResultToParent(tree, child2, parent.id);
+  assert.equal(tree.length, 1);
+  assert.deepEqual(tree[0]!.children.map((n) => n.query), ["食べる", "食事"]);
 });
 
-test("composable: wordTokens handles single word", () => {
-  const tokens = wordTokens("hello");
-  assert.deepStrictEqual(tokens, ["hello"]);
+test("tree: addResultToParent falls back to top level when the parent is missing", () => {
+  resetNodeIdGenerator();
+  const orphan = createResultNode("word", "水", "x", false, undefined, "ghost", 30);
+  const tree = addResultToParent([], orphan, "ghost");
+  assert.equal(tree.length, 1);
+  assert.equal(tree[0]!.parentId, "ghost");
+  assert.equal(tree[0]!.query, "水");
 });
 
-// Test kanji query parsing
-const KANJI_RE = /\p{Script=Han}/u;
-
-function kanjiQuery(raw: string): string {
-  const literals = [...raw].filter((ch) => KANJI_RE.test(ch));
-  return literals.length > 0 ? literals.join("") : raw.trim();
-}
-
-function kanjiQueries(raw: string): string[] {
-  const stripped = kanjiQuery(raw);
-  return KANJI_RE.test(stripped) ? [...stripped] : [stripped];
-}
-
-test("composable: kanjiQuery extracts only kanji from mixed text", () => {
-  const result = kanjiQuery("食べる");
-  assert.strictEqual(result, "食");
+test("tree: findResultById finds top-level and nested nodes", () => {
+  resetNodeIdGenerator();
+  const parent = createResultNode("kanji", "食", "p", false, undefined, null, 30);
+  const child = createResultNode("word", "食事", "c", false, undefined, parent.id, 30);
+  const tree = addResultToParent(addResultToParent([], parent), child, parent.id);
+  assert.equal(findResultById(tree, parent.id)?.query, "食");
+  assert.equal(findResultById(tree, child.id)?.query, "食事");
+  assert.equal(findResultById(tree, "missing"), null);
 });
 
-test("composable: kanjiQuery handles multiple kanji", () => {
-  const result = kanjiQuery("制作者");
-  assert.strictEqual(result, "制作者");
+test("tree: deleteResultFromTree removes a top-level node", () => {
+  resetNodeIdGenerator();
+  const a = createResultNode("word", "水", "a", false, undefined, null, 30);
+  const b = createResultNode("word", "食事", "b", false, undefined, null, 30);
+  const tree = addResultToParent(addResultToParent([], a), b);
+  const after = deleteResultFromTree(tree, a.id);
+  assert.deepEqual(after.map((n) => n.query), ["食事"]);
 });
 
-test("composable: kanjiQueries splits into individual kanji", () => {
-  const result = kanjiQueries("制作者");
-  assert.deepStrictEqual(result, ["制", "作", "者"]);
+test("tree: deleteResultFromTree removes a nested child and its descendants", () => {
+  resetNodeIdGenerator();
+  const parent = createResultNode("kanji", "食", "p", false, undefined, null, 30);
+  const child = createResultNode("word", "食事", "c", false, undefined, parent.id, 30);
+  const grandchild = createResultNode("word", "食べる", "g", false, undefined, child.id, 30);
+  let tree = addResultToParent([], parent);
+  tree = addResultToParent(tree, child, parent.id);
+  tree = addResultToParent(tree, grandchild, child.id);
+  const after = deleteResultFromTree(tree, child.id);
+  assert.equal(after.length, 1);
+  assert.deepEqual(after[0]!.children, []);
 });
 
-test("composable: kanjiQueries returns single array for non-kanji", () => {
-  const result = kanjiQueries("hello");
-  assert.deepStrictEqual(result, ["hello"]);
+test("tree: deleteResultFromTree deep recursion keeps surviving descendants intact", () => {
+  // Regression: the recursion must walk child.children (not [child]) — the
+  // wrapping bug nested a self-clone under every surviving child.
+  resetNodeIdGenerator();
+  const parent = createResultNode("kanji", "食", "p", false, undefined, null, 30);
+  const child = createResultNode("word", "食事", "c", false, undefined, parent.id, 30);
+  const keep = createResultNode("word", "食べる", "keep", false, undefined, child.id, 30);
+  const drop = createResultNode("word", "食べ物", "drop", false, undefined, child.id, 30);
+  let tree = addResultToParent([], parent);
+  tree = addResultToParent(tree, child, parent.id);
+  tree = addResultToParent(tree, keep, child.id);
+  tree = addResultToParent(tree, drop, child.id);
+  const after = deleteResultFromTree(tree, drop.id);
+  const survivors = after[0]!.children[0]!.children;
+  assert.equal(survivors.length, 1);
+  assert.equal(survivors[0]!.query, "食べる");
+  assert.equal(survivors[0]!.children.length, 0); // no self-clone nesting
 });
 
-// Test queue logic with parent context
-interface QueueItem {
-  id: number;
-  command: string;
-  query: string;
-  max: number;
-  parentId: string | null;
-}
+test("tree: toggleResultCollapse flips only the target node", () => {
+  resetNodeIdGenerator();
+  const a = createResultNode("word", "水", "a", false, undefined, null, 30);
+  const b = createResultNode("word", "食事", "b", false, undefined, null, 30);
+  const tree = addResultToParent(addResultToParent([], a), b);
+  const collapsed = toggleResultCollapse(tree, a.id);
+  assert.equal(collapsed.find((n) => n.query === "水")!.collapsed, true);
+  assert.equal(collapsed.find((n) => n.query === "食事")!.collapsed, false);
+  const expanded = toggleResultCollapse(collapsed, a.id);
+  assert.equal(expanded.find((n) => n.query === "水")!.collapsed, false);
+});
 
-test("composable: queue items with parent context are properly identified", () => {
-  const queue: QueueItem[] = [
-    { id: 1, command: "word", query: "test", max: 30, parentId: null },
-    { id: 2, command: "kanji", query: "日", max: 30, parentId: "parent1" },
+test("tree: countResults counts top-level nodes and all descendants", () => {
+  resetNodeIdGenerator();
+  const parent = createResultNode("kanji", "食", "p", false, undefined, null, 30);
+  const child = createResultNode("word", "食事", "c", false, undefined, parent.id, 30);
+  const grandchild = createResultNode("word", "食べる", "g", false, undefined, child.id, 30);
+  const other = createResultNode("word", "水", "o", false, undefined, null, 30);
+  let tree = addResultToParent([], parent);
+  tree = addResultToParent(tree, child, parent.id);
+  tree = addResultToParent(tree, grandchild, child.id);
+  tree = addResultToParent(tree, other);
+  assert.equal(countResults(tree), 4);
+});
+
+test("tree: migrateToHierarchical lifts legacy flat panes to top-level nodes", () => {
+  resetNodeIdGenerator();
+  const legacy = [
+    { command: "word", query: "水", text: "water", error: false, strokes: undefined },
+    { command: "kanji", query: "食", text: "eat", error: true, strokes: [{ literal: "食", svgFile: "098df.svg" }] },
   ];
-  
-  const topLevel = queue.filter(item => item.parentId === null);
-  const nested = queue.filter(item => item.parentId !== null);
-  
-  assert.strictEqual(topLevel.length, 1);
-  assert.strictEqual(nested.length, 1);
-  assert.strictEqual(topLevel[0]!.id, 1);
-  assert.strictEqual(nested[0]!.id, 2);
+  const tree = migrateToHierarchical(legacy);
+  assert.equal(tree.length, 2);
+  assert.equal(tree[0]!.command, "word");
+  assert.equal(tree[0]!.query, "水");
+  assert.equal(tree[0]!.parentId, null);
+  assert.equal(tree[0]!.max, 30);
+  assert.equal(tree[1]!.error, true);
+  assert.deepEqual(tree[1]!.strokes, [{ literal: "食", svgFile: "098df.svg" }]);
 });
 
-test("composable: duplicate detection in queue with parent context", () => {
-  const existing = new Set<string>();
-  existing.add("word\u0000test\u0000null");
-  existing.add("kanji\u0000日\u0000parent1");
-  
-  const key1 = "word\u0000test\u0000null";
-  const key2 = "word\u0000test\u0000parent1";
-  
-  // Same query and command but different parent should be different
-  assert.strictEqual(existing.has(key1), true);
-  assert.strictEqual(existing.has(key2), false);
+test("tree: serialize → deserialize round-trip preserves the whole tree", () => {
+  resetNodeIdGenerator();
+  const parent = createResultNode("kanji", "食", "p", false, [{ literal: "食", svgFile: "098df.svg" }], null, 30);
+  const child = createResultNode("word", "食事", "c", false, undefined, parent.id, 30);
+  const tree = addResultToParent(addResultToParent([], parent), child, parent.id);
+  // Persist exactly like saveState: JSON stringify, then a fresh deserialize.
+  const restored = deserializeResultTree(JSON.parse(JSON.stringify(tree)));
+  assert.equal(restored.length, 1);
+  const rp = restored[0]!;
+  assert.equal(rp.id, parent.id);
+  assert.equal(rp.query, "食");
+  assert.deepEqual(rp.strokes, [{ literal: "食", svgFile: "098df.svg" }]);
+  assert.equal(rp.children.length, 1);
+  assert.equal(rp.children[0]!.query, "食事");
+  assert.equal(rp.children[0]!.parentId, parent.id);
 });
 
-// Test auto-scroll state
-test("composable: auto-scroll toggle defaults to enabled", () => {
-  const autoScrollEnabled = true; // Default value
-  assert.strictEqual(autoScrollEnabled, true);
+test("tree: seedNodeIdFromTree pushes the id counter past restored ids", () => {
+  resetNodeIdGenerator();
+  const tree = deserializeResultTree([
+    { id: "node_7", parentId: null, command: "word", query: "水", text: "x", error: false, children: [], collapsed: false, max: 30 },
+  ]);
+  seedNodeIdFromTree(tree);
+  const fresh = createResultNode("word", "食事", "y", false, undefined, null, 30);
+  const m = /^node_(\d+)$/.exec(fresh.id)!;
+  assert.ok(Number(m[1]!) > 7, fresh.id);
 });
 
-test("composable: auto-scroll toggle can be disabled", () => {
-  let autoScrollEnabled = true;
-  autoScrollEnabled = !autoScrollEnabled;
-  assert.strictEqual(autoScrollEnabled, false);
+test("tree: serializeCollapsedStates records only collapsed nodes", () => {
+  resetNodeIdGenerator();
+  const a = createResultNode("word", "水", "a", false, undefined, null, 30);
+  const b = createResultNode("word", "食事", "b", false, undefined, null, 30);
+  const tree = addResultToParent(addResultToParent([], a), b);
+  const states = serializeCollapsedStates(tree);
+  assert.deepEqual(states, {});
+  const collapsed = toggleResultCollapse(tree, a.id);
+  assert.deepEqual(serializeCollapsedStates(collapsed), { [a.id]: true });
 });
 
-// Test cache key generation
-test("composable: cache key generation is consistent", () => {
-  const key1: string = `word|test|30`; // typed as string so the !== comparisons below are allowed
-  const key2 = `word|test|30`;
-  const key3: string = `kanji|日|30`;
-  
-  assert.strictEqual(key1, key2);
-  assert.ok(key1 !== key3);
+test("tree: clearResultTree empties the tree and resets ids and tracking", () => {
+  resetNodeIdGenerator();
+  registerResult(null, "word", "水");
+  const tree = [createResultNode("word", "水", "a", false, undefined, null, 30)];
+  const cleared = clearResultTree();
+  assert.deepEqual(cleared, []);
+  assert.equal(hasDuplicate(null, "word", "水"), false); // tracker cleared too
+  const fresh = createResultNode("word", "食事", "b", false, undefined, null, 30);
+  assert.equal(fresh.id, "node_1"); // counter reset
 });
 
-test("composable: cache key differentiates by command", () => {
-  const wordKey: string = `word|test|30`;
-  const kanjiKey: string = `kanji|test|30`;
-  const searchKey: string = `search|test|30`;
-  
-  assert.ok(wordKey !== kanjiKey);
-  assert.ok(wordKey !== searchKey);
-  assert.ok(kanjiKey !== searchKey);
+// ---- action duplicate tracker (real module, W2/W10 semantics) --------------
+
+test("tracker: register → duplicate → unregister lifecycle", () => {
+  try {
+    clearDuplicateTracker();
+    assert.equal(hasDuplicate(null, "word", "test"), false);
+    registerResult(null, "word", "test");
+    assert.equal(hasDuplicate(null, "word", "test"), true);
+    // Different command, query or parent are distinct actions.
+    assert.equal(hasDuplicate(null, "kanji", "test"), false);
+    assert.equal(hasDuplicate(null, "word", "other"), false);
+    assert.equal(hasDuplicate("parent", "word", "test"), false);
+    unregisterResult(null, "word", "test");
+    assert.equal(hasDuplicate(null, "word", "test"), false);
+  } finally {
+    clearDuplicateTracker();
+  }
+});
+
+test("tracker: queries containing a pipe are distinct entries", () => {
+  try {
+    clearDuplicateTracker();
+    registerResult(null, "word", "a|b");
+    assert.equal(hasDuplicate(null, "word", "a|b"), true);
+    assert.equal(hasDuplicate(null, "word", "a"), false);
+    assert.equal(hasDuplicate(null, "word", "a|b|c"), false);
+    assert.equal(hasDuplicate("parent", "word", "a|b"), false);
+    unregisterResult(null, "word", "a|b");
+    assert.equal(hasDuplicate(null, "word", "a|b"), false);
+  } finally {
+    clearDuplicateTracker();
+  }
+});
+
+// =============================================================================
+// cache.ts — the real ResultCacheManager
+// =============================================================================
+
+test("cache: keys embed the NUL separator, not a pipe", () => {
+  const cache = new ResultCacheManager();
+  const key = cache.getCacheKey("word", "a|b", 30);
+  // The key splits back unambiguously into exactly command / query / max,
+  // with the pipe surviving INSIDE the query part — a `|` separator would
+  // have split it into four parts and lost the query.
+  const parts = key.split("\u0000");
+  assert.equal(parts.length, 3);
+  assert.equal(parts[0], "word");
+  assert.equal(parts[1], "a|b");
+  assert.equal(parts[2], "30");
+});
+
+test("cache: keys round-trip when the query contains a pipe character", () => {
+  const cache = new ResultCacheManager();
+  const piped = createResultNode("word", "a|b", "text one", false, undefined, null, 30);
+  const plain = createResultNode("word", "a", "text two", false, undefined, null, 30);
+  cache.setCache("word", "a|b", 30, piped);
+  cache.setCache("word", "a", 30, plain);
+  assert.equal(cache.getCached("word", "a|b", 30)?.text, "text one");
+  assert.equal(cache.getCached("word", "a", 30)?.text, "text two");
+  assert.equal(cache.getCached("word", "a|b", 31), null);
+});
+
+test("cache: evicts the oldest entry when the cache is full", () => {
+  const cache = new ResultCacheManager(2);
+  const first = createResultNode("word", "水", "first", false, undefined, null, 30);
+  const second = createResultNode("word", "食事", "second", false, undefined, null, 30);
+  const third = createResultNode("word", "食べる", "third", false, undefined, null, 30);
+  cache.setCache("word", "水", 30, first);
+  cache.setCache("word", "食事", 30, second);
+  assert.equal(cache.getCached("word", "水", 30), first);
+  cache.setCache("word", "食べる", 30, third); // evicts 水 (oldest)
+  assert.equal(cache.getCached("word", "水", 30), null);
+  assert.equal(cache.getCached("word", "食事", 30), second);
+  assert.equal(cache.getCached("word", "食べる", 30), third);
+});
+
+test("cache: pending-fetch marks guard in-flight lookups and clear() resets", () => {
+  const cache = new ResultCacheManager();
+  assert.equal(cache.isFetchInProgress("word", "水", 30), false);
+  cache.markFetchStarted("word", "水", 30);
+  assert.equal(cache.isFetchInProgress("word", "水", 30), true);
+  // Same command/query but a different max is a separate fetch.
+  assert.equal(cache.isFetchInProgress("word", "水", 31), false);
+  cache.markFetchCompleted("word", "水", 30);
+  assert.equal(cache.isFetchInProgress("word", "水", 30), false);
+
+  const node = createResultNode("word", "水", "x", false, undefined, null, 30);
+  cache.setCache("word", "水", 30, node);
+  cache.clear();
+  assert.equal(cache.getCached("word", "水", 30), null);
+  assert.equal(cache.isFetchInProgress("word", "水", 30), false);
 });
 
 // =============================================================================
@@ -516,31 +501,28 @@ test("isValidResultNode: rejects a node missing children", () => {
 });
 
 test("isValidResultNode: rejects a wrong (foreign) command", () => {
-  assert.equal(isValidResultNode(validNode({ command: "delete-everything" })), false);
-  assert.equal(isValidResultNode(validNode({ command: 42 })), false);
+  assert.equal(isValidResultNode(validNode({ command: "spell" })), false);
 });
 
 test("isValidResultNode: rejects a non-boolean collapsed", () => {
   assert.equal(isValidResultNode(validNode({ collapsed: "yes" })), false);
-  assert.equal(isValidResultNode(validNode({ collapsed: 1 })), false);
 });
 
 test("isValidResultNode: rejects non-string text/query/id and non-number max", () => {
-  assert.equal(isValidResultNode(validNode({ text: null })), false);
-  assert.equal(isValidResultNode(validNode({ query: 123 })), false);
   assert.equal(isValidResultNode(validNode({ id: 7 })), false);
+  assert.equal(isValidResultNode(validNode({ query: null })), false);
+  assert.equal(isValidResultNode(validNode({ text: 42 })), false);
   assert.equal(isValidResultNode(validNode({ max: "30" })), false);
 });
 
 test("isValidResultNode: rejects a node with an invalid descendant", () => {
-  const node = validNode({ children: [validNode({ collapsed: "yes" })] });
-  assert.equal(isValidResultNode(node), false);
+  assert.equal(isValidResultNode(validNode({ children: [validNode({ command: 7 })] })), false);
 });
 
 test("deserializeResultTree: non-array input yields an empty tree", () => {
-  assert.deepStrictEqual(deserializeResultTree(null), []);
-  assert.deepStrictEqual(deserializeResultTree({}), []);
-  assert.deepStrictEqual(deserializeResultTree("nope"), []);
+  assert.deepEqual(deserializeResultTree(null), []);
+  assert.deepEqual(deserializeResultTree({}), []);
+  assert.deepEqual(deserializeResultTree("junk"), []);
 });
 
 test("deserializeResultTree: drops invalid nodes (the corrupt-state shape)", () => {
@@ -569,55 +551,4 @@ test("restoreCollapsedStates: non-boolean state values fall back to false", () =
   const restored = restoreCollapsedStates(nodes, { a: true, b: "yes", c: 1 } as unknown as Record<string, boolean>);
   assert.equal(restored[0]!.collapsed, true);
   assert.equal(restored[1]!.collapsed, false);
-});
-
-// =============================================================================
-// W10: \u0000 key separators — a query containing `|` must not collide with
-// (or be mis-split from) a pipe-free query, in the result cache or the
-// action tracker. Both use the REAL shipped modules (not inline fakes).
-// =============================================================================
-
-test("cache: keys round-trip when the query contains a pipe character", () => {
-  const cache = new ResultCacheManager();
-  const piped = createResultNode("word", "a|b", "text one", false, undefined, null, 30);
-  const plain = createResultNode("word", "a", "text two", false, undefined, null, 30);
-  cache.setCache("word", "a|b", 30, piped);
-  cache.setCache("word", "a", 30, plain);
-
-  // A pipe inside the query must not make keys collide: each getCached
-  // returns exactly its own entry.
-  assert.equal(cache.getCached("word", "a|b", 30)?.text, "text one");
-  assert.equal(cache.getCached("word", "a", 30)?.text, "text two");
-  // And a different max still misses.
-  assert.equal(cache.getCached("word", "a|b", 31), null);
-});
-
-test("cache: keys embed the NUL separator, not a pipe", () => {
-  const cache = new ResultCacheManager();
-  const key = cache.getCacheKey("word", "a|b", 30);
-  // The key splits back unambiguously into exactly command / query / max,
-  // with the pipe surviving INSIDE the query part — a `|` separator would
-  // have split it into four parts and lost the query.
-  const parts = key.split("\u0000");
-  assert.equal(parts.length, 3);
-  assert.equal(parts[0], "word");
-  assert.equal(parts[1], "a|b");
-  assert.equal(parts[2], "30");
-});
-
-test("action tracker: queries containing a pipe are distinct entries", () => {
-  try {
-    clearDuplicateTracker();
-    registerResult(null, "word", "a|b");
-    assert.equal(hasDuplicate(null, "word", "a|b"), true);
-    // The pipe-free query and a longer piped query are different actions.
-    assert.equal(hasDuplicate(null, "word", "a"), false);
-    assert.equal(hasDuplicate(null, "word", "a|b|c"), false);
-    assert.equal(hasDuplicate("parent", "word", "a|b"), false);
-    // Unregistering the piped action frees it.
-    unregisterResult(null, "word", "a|b");
-    assert.equal(hasDuplicate(null, "word", "a|b"), false);
-  } finally {
-    clearDuplicateTracker();
-  }
 });

@@ -50,6 +50,7 @@
  */
 import { OP_LADDERS } from "./worker-api.js";
 import type { Command, StrokePage, WorkerMessage, WorkerRequest } from "./worker-api.js";
+import { KANJI_RE, kanjiQueries, kanjiQuery, parseMax, wordTokens } from "./query.js";
 import { strokeWidgetFigure } from "./stroke-widget.js";
 import { VERSION, VERSION_FULL } from "../../src/version.js";
 import { cacheManager } from "./cache.js";
@@ -203,7 +204,7 @@ function saveState(): void {
         v: 2,
         query: input.value,
         command: lastCommand,
-        max: parseMax(),
+        max: parseMax(maxInput.value),
         autoScrollEnabled,
         resultTree: resultTree,
         collapsedStates
@@ -229,14 +230,7 @@ function saveStateSoon(): void {
   }, 300);
 }
 
-/**
- * Per-list row cap from the "max" input: a positive integer, else the
- * default (30). Non-integer / empty / out-of-range values fall back.
- */
-function parseMax(): number {
-  const v = Number(maxInput.value);
-  return Number.isInteger(v) && v >= 1 ? v : 30;
-}
+
 
 function setStatus(text: string, extraClass = ""): void {
   statusMsg.textContent = text;
@@ -478,44 +472,6 @@ function appendSectionText(pre: HTMLElement, text: string, parentId: string | nu
   pre.append(...nodes);
 }
 
-// ---- query expansion -------------------------------------------------------
-/** CJK ideographs — every displayed kanji is individually clickable. */
-const KANJI_RE = /\p{Script=Han}/u;
-/** Separators between words in a `word` box: commas (ASCII `,`, full-width
- * `，`, Japanese `、`) and any whitespace. */
-const WORD_SEP_RE = /[\s,，、]+/u;
-
-/**
- * The individual words of a `word` box, in order (runs between separators).
- */
-function wordTokens(raw: string): string[] {
-  return raw.split(WORD_SEP_RE).filter((s) => s !== "");
-}
-
-/**
- * The query a `kanji` click actually runs: when the box holds at least one
- * kanji, every non-kanji character is ignored — 食べる → 食, 制・作者 →
- * 制作者 — so the page for each individual kanji still comes back. A box
- * with no kanji at all (kana or romaji, e.g. a reading search) is left
- * untouched.
- */
-function kanjiQuery(raw: string): string {
-  const literals = [...raw].filter((ch) => KANJI_RE.test(ch));
-  return literals.length > 0 ? literals.join("") : raw.trim();
-}
-
-/**
- * The lookups a `kanji` click enqueues, in box order: when the box holds
- * kanji, ONE lookup per kanji literal — 制・作者 → 制, 作, 者 — so each
- * character's page is its own lookup, landing (and rendering) one at a time
- * instead of after the whole batch, byte-identical to looking it up alone.
- * A box with no kanji at all (kana or romaji, e.g. a reading search) stays a
- * single query, unchanged.
- */
-function kanjiQueries(raw: string): string[] {
-  const stripped = kanjiQuery(raw);
-  return KANJI_RE.test(stripped) ? [...stripped] : [stripped];
-}
 
 // ---- queue -----------------------------------------------------------------
 /**
@@ -531,7 +487,7 @@ function submit(command: Command, context?: { parentId: string | null }): void {
   if (engineDead) return;
   const raw = input.value;
   const parentId = context?.parentId ?? null;
-  const max = parseMax();
+  const max = parseMax(maxInput.value);
   
   // Action-level dedupe gate, keyed on the RAW box value — what the user
   // actually asked — never on the individual lookups a multi-item box
