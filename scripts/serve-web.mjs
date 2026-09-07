@@ -59,11 +59,24 @@ function parseArgs(argv) {
   return args;
 }
 
+/** Interface names that are never the LAN a phone can reach: VPN/tunnel
+ * adapters (utun = macOS WireGuard/OpenVPN/Tailscale/ZeroTier, tun/tap, ppp),
+ * Apple wireless-direct (awdl/llw), and VM/container bridges
+ * (vmnet/vboxnet/vEthernet/docker/br-). The server still listens on them
+ * (0.0.0.0) — they are only excluded from the "open this on your phone"
+ * hint, which must point at a real LAN NIC, and from the TLS cert SANs.
+ * Link-local APIPA addresses (169.254.x) are excluded too: they are not
+ * routable from a phone. */
+const VIRTUAL_IFACE_RE = /^(utun|tun|tap|ppp|awdl|llw|vmnet|vboxnet|vEthernet|tailscale|zerotier|docker|br-)/i;
+
 function lanAddresses() {
   const out = [];
-  for (const ifaces of Object.values(networkInterfaces())) {
+  for (const [name, ifaces] of Object.entries(networkInterfaces())) {
     for (const iface of ifaces ?? []) {
-      if (iface.family === "IPv4" && !iface.internal) out.push(iface.address);
+      if (iface.family === "IPv4" && !iface.internal
+        && !VIRTUAL_IFACE_RE.test(name) && !iface.address.startsWith("169.254.")) {
+        out.push(iface.address);
+      }
     }
   }
   return out;
