@@ -181,10 +181,20 @@ interface StoredState {
 const STORAGE_KEY = "omakase.state";
 const COMMANDS: readonly string[] = ["kanji", "word", "search"];
 
+/** Pending debounced full-save armed by input events (see saveStateSoon). */
+let saveTimer: ReturnType<typeof setTimeout> | null = null;
+
 /**
- * Write input, last command, max, auto-scroll and the pane history to localStorage.
+ * Write input, last command, max, auto-scroll and the pane history to
+ * localStorage. This is the IMMEDIATE writer — called on every pane mutation
+ * and action — so it cancels any pending debounced save: a queued debounce
+ * would only re-serialize the same (or a superseded) state after the fact.
  */
 function saveState(): void {
+  if (saveTimer !== null) {
+    clearTimeout(saveTimer);
+    saveTimer = null;
+  }
   try {
     const collapsedStates = serializeCollapsedStates(resultTree);
     localStorage.setItem(
@@ -202,6 +212,21 @@ function saveState(): void {
   } catch {
     /* storage unavailable (private mode / quota) — persistence is a nicety */
   }
+}
+
+/**
+ * Debounced full save for INPUT events (W9): serializing the whole result
+ * tree on every keystroke janks phones with many panes and silently eats
+ * storage quota. The write is deferred until typing pauses (~300 ms); pane
+ * mutations (lookup, delete, collapse, clear, auto-scroll) still persist
+ * immediately through saveState, so a mid-typing reload keeps its history.
+ */
+function saveStateSoon(): void {
+  if (saveTimer !== null) clearTimeout(saveTimer);
+  saveTimer = setTimeout(() => {
+    saveTimer = null;
+    saveState();
+  }, 300);
 }
 
 /**
@@ -1538,8 +1563,8 @@ form.addEventListener("submit", (ev) => {
   ev.preventDefault();
   submit(lastCommand);
 });
-input.addEventListener("input", saveState);
-maxInput.addEventListener("input", saveState);
+input.addEventListener("input", saveStateSoon);
+maxInput.addEventListener("input", saveStateSoon);
 clearBtn.addEventListener("click", clearAll);
 cancelOp.addEventListener("click", cancelCurrentOperation);
 
