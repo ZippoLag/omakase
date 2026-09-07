@@ -118,6 +118,12 @@ export function createErrorResultNode(
  * action once at submit time; panes that render afterwards never re-register
  * their individual queries.
  */
+/** Separator in action-tracker entry keys (parent, command, raw box value).
+ * NUL, like the queue's `seen` keys in main.ts: a raw box value may
+ * legitimately contain `|`, and a `|` separator would make a key ambiguous
+ * to any code that splits it back apart. */
+const ACTION_KEY_SEP = "\u0000";
+
 const duplicateTracker = new Map<string, Set<string>>();
 
 /**
@@ -127,7 +133,7 @@ const duplicateTracker = new Map<string, Set<string>>();
  */
 export function hasDuplicate(parentId: string | null, command: Command, query: string): boolean {
   const parentKey = parentId ?? 'root';
-  const entryKey = `${command}|${query}`;
+  const entryKey = `${command}${ACTION_KEY_SEP}${query}`;
   
   const existing = duplicateTracker.get(parentKey);
   if (existing && existing.has(entryKey)) {
@@ -143,7 +149,7 @@ export function hasDuplicate(parentId: string | null, command: Command, query: s
  */
 export function registerResult(parentId: string | null, command: Command, query: string): void {
   const parentKey = parentId ?? 'root';
-  const entryKey = `${command}|${query}`;
+  const entryKey = `${command}${ACTION_KEY_SEP}${query}`;
   
   let parentSet = duplicateTracker.get(parentKey);
   if (!parentSet) {
@@ -159,7 +165,7 @@ export function registerResult(parentId: string | null, command: Command, query:
  */
 export function unregisterResult(parentId: string | null, command: Command, query: string): void {
   const parentKey = parentId ?? 'root';
-  const entryKey = `${command}|${query}`;
+  const entryKey = `${command}${ACTION_KEY_SEP}${query}`;
   
   const parentSet = duplicateTracker.get(parentKey);
   if (parentSet) {

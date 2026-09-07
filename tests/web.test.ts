@@ -8,10 +8,16 @@ import { mkdtempSync, rmSync, statSync, truncateSync, writeFileSync } from "node
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { dbLooksHealthy } from "../web/app/commands.js";
+import { ResultCacheManager } from "../web/app/cache.js";
 import {
+  clearDuplicateTracker,
+  createResultNode,
   deserializeResultTree,
+  hasDuplicate,
   isValidResultNode,
+  registerResult,
   restoreCollapsedStates,
+  unregisterResult,
 } from "../web/app/tree.js";
 
 // node:sqlite only exists unflagged on Node ≥22.13 (absent on Node 20, behind
@@ -563,4 +569,55 @@ test("restoreCollapsedStates: non-boolean state values fall back to false", () =
   const restored = restoreCollapsedStates(nodes, { a: true, b: "yes", c: 1 } as unknown as Record<string, boolean>);
   assert.equal(restored[0]!.collapsed, true);
   assert.equal(restored[1]!.collapsed, false);
+});
+
+// =============================================================================
+// W10: \u0000 key separators — a query containing `|` must not collide with
+// (or be mis-split from) a pipe-free query, in the result cache or the
+// action tracker. Both use the REAL shipped modules (not inline fakes).
+// =============================================================================
+
+test("cache: keys round-trip when the query contains a pipe character", () => {
+  const cache = new ResultCacheManager();
+  const piped = createResultNode("word", "a|b", "text one", false, undefined, null, 30);
+  const plain = createResultNode("word", "a", "text two", false, undefined, null, 30);
+  cache.setCache("word", "a|b", 30, piped);
+  cache.setCache("word", "a", 30, plain);
+
+  // A pipe inside the query must not make keys collide: each getCached
+  // returns exactly its own entry.
+  assert.equal(cache.getCached("word", "a|b", 30)?.text, "text one");
+  assert.equal(cache.getCached("word", "a", 30)?.text, "text two");
+  // And a different max still misses.
+  assert.equal(cache.getCached("word", "a|b", 31), null);
+});
+
+test("cache: keys embed the NUL separator, not a pipe", () => {
+  const cache = new ResultCacheManager();
+  const key = cache.getCacheKey("word", "a|b", 30);
+  // The key splits back unambiguously into exactly command / query / max,
+  // with the pipe surviving INSIDE the query part — a `|` separator would
+  // have split it into four parts and lost the query.
+  const parts = key.split("\u0000");
+  assert.equal(parts.length, 3);
+  assert.equal(parts[0], "word");
+  assert.equal(parts[1], "a|b");
+  assert.equal(parts[2], "30");
+});
+
+test("action tracker: queries containing a pipe are distinct entries", () => {
+  try {
+    clearDuplicateTracker();
+    registerResult(null, "word", "a|b");
+    assert.equal(hasDuplicate(null, "word", "a|b"), true);
+    // The pipe-free query and a longer piped query are different actions.
+    assert.equal(hasDuplicate(null, "word", "a"), false);
+    assert.equal(hasDuplicate(null, "word", "a|b|c"), false);
+    assert.equal(hasDuplicate("parent", "word", "a|b"), false);
+    // Unregistering the piped action frees it.
+    unregisterResult(null, "word", "a|b");
+    assert.equal(hasDuplicate(null, "word", "a|b"), false);
+  } finally {
+    clearDuplicateTracker();
+  }
 });
