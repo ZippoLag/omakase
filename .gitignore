@@ -1,7 +1,8 @@
 node_modules/
 dist/
 data/raw/
-.build-number  # per-build version counter (scripts/version.mjs)
+# per-build version counter (scripts/version.mjs)
+.build-number
 *.tgz
 .DS_Store
 web/.certs/
