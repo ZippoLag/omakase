@@ -1345,12 +1345,22 @@ function renderResultNode(node: ResultNode): HTMLElement {
 }
 
 /**
- * Render the entire result tree
+ * Render the entire result tree.
+ *
+ * Top-level nodes are stored newest-first (addResultToParent unshifts) and
+ * live insertion PREPENDS into #panes, so the newest pane sits on top.
+ * renderResultNode also prepends into #panes — rendering the stored order
+ * directly would therefore flip the history after a reload (the oldest pane
+ * would end up on top). Iterate in reverse: the oldest renders first, each
+ * subsequent prepend lands above it, and the newest ends up on top — the
+ * same top-down order the live DOM shows. Nested children need no reversal:
+ * renderResultNode appends them in array order (also newest-first), matching
+ * live prepend.
  */
 function renderResultTree(): void {
   panes.replaceChildren();
-  for (const node of resultTree) {
-    renderResultNode(node);
+  for (let i = resultTree.length - 1; i >= 0; i--) {
+    renderResultNode(resultTree[i]!);
   }
 }
 

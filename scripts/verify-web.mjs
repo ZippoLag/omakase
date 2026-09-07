@@ -1193,12 +1193,17 @@ async function main() {
 
     // reload (online): input, max, command highlight and history come back,
     // and the deleted pane stays deleted (it was removed from storage too).
+    // W4: capture the top-down pane order too — the existing reload check only
+    // compared counts, which let the restored tree render in the wrong order
+    // (oldest on top) without failing.
     const beforeReload = await page.evaluate(() => ({
       query: document.querySelector("#query").value,
       max: document.querySelector("#max").value,
       cmd: [...document.querySelectorAll("button[data-cmd]")]
         .find((b) => b.classList.contains("primary"))?.dataset.cmd,
       panes: document.querySelectorAll("#panes .pane").length,
+      topOrder: [...document.querySelectorAll("#panes > .pane > .pane-head > .pane-query")]
+        .map((el) => el.textContent),
     }));
     await page.reload({ waitUntil: "load", timeout: 30000 });
     const restored = await waitFor(
@@ -1211,6 +1216,8 @@ async function main() {
           cmd: [...document.querySelectorAll("button[data-cmd]")]
             .find((b) => b.classList.contains("primary"))?.dataset.cmd,
           panes: document.querySelectorAll("#panes .pane").length,
+          topOrder: [...document.querySelectorAll("#panes > .pane > .pane-head > .pane-query")]
+            .map((el) => el.textContent),
           topLevel: document.querySelectorAll("#panes > .pane").length,
           inParents: [...document.querySelectorAll("#panes .pane-children > .pane")].length,
           perParent: [...document.querySelectorAll("#panes > .pane")]
@@ -1241,6 +1248,13 @@ async function main() {
       JSON.stringify({ before: beforeReload, after: restored }),
     );
     check("deleted pane stays deleted after reload", !restored.udon, `udon present: ${restored.udon}`);
+    // W4: the restored tree must render the same top-down order as the live
+    // DOM (newest pane on top) — a reload must not flip the history.
+    check(
+      "reload preserves top-down pane order",
+      JSON.stringify(restored.topOrder) === JSON.stringify(beforeReload.topOrder),
+      JSON.stringify({ before: beforeReload.topOrder, after: restored.topOrder }),
+    );
 
     // header trashbin: all results gone, button disables itself
     const cleared = await page.evaluate(() => {
