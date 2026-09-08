@@ -156,6 +156,33 @@ async function main() {
       if (m.type() === "error" || m.type() === "warn") consoleLog.push(`${m.type()}: ${t}`);
     });
     page.on("pageerror", (e) => consoleLog.push(`pageerror: ${e.message}`));
+    // W13 helper: a window.fetch patch so the stroke-widget tests can hold or
+    // fail stroke-svg requests deterministically. The svg fetch runs on the
+    // main thread (window.fetch) but goes through the service worker, whose
+    // network fetches are NOT visible to puppeteer request interception — the
+    // patch (installed before the app loads, applied on every document) is
+    // the only reliable hook. Mode is switched at runtime via
+    // window.__strokeFetchMode: "pass" (default) lets requests through,
+    // "delay" holds stroke-svg responses 800 ms, "abort" rejects them.
+    await page.evaluateOnNewDocument(() => {
+      const origFetch = window.fetch.bind(window);
+      window.__strokeFetchMode = "pass";
+      window.fetch = (input, init) => {
+        const url = typeof input === "string" ? input : input.url;
+        if (/\/strokes\/[^/]+\.svg$/.test(url)) {
+          const mode = window.__strokeFetchMode;
+          if (mode === "abort") {
+            return Promise.reject(new TypeError("Failed to fetch (stroke svg aborted by test)"));
+          }
+          if (mode === "delay") {
+            return new Promise((resolve, reject) => {
+              setTimeout(() => origFetch(input, init).then(resolve, reject), 800);
+            });
+          }
+        }
+        return origFetch(input, init);
+      };
+    });
 
     console.log("→ first visit (imports dictionary into OPFS)…");
     await page.goto(URL, { waitUntil: "load", timeout: 60000 });
@@ -478,6 +505,191 @@ async function main() {
       "stroke widget replay keeps all strokes",
       replayWidget.before === 9 && replayWidget.after === 9,
       JSON.stringify(replayWidget),
+    );
+    // ---- W13: char box + skeleton + stepping + failure fallback ------------
+    // The widget pairs the animation with a font-rendered twin of the kanji
+    // in a box the same size (so a character is always visible), shows a
+    // shimmer skeleton while the svg loads, steps one stroke at a time with
+    // ‹/›, and keeps the character when the diagram cannot be fetched.
+    const charProbe = await page.evaluate(() => {
+      const fig = document.querySelector("#panes .pane:first-child .stroke-widget");
+      const char = fig?.querySelector(".stroke-char");
+      const svg = fig?.querySelector("svg.stroke-svg");
+      const cr = char?.getBoundingClientRect();
+      const sr = svg?.getBoundingClientRect();
+      return {
+        char: char?.textContent ?? "",
+        prev: !!fig?.querySelector(".stroke-prev"),
+        replay: !!fig?.querySelector(".stroke-replay"),
+        next: !!fig?.querySelector(".stroke-next"),
+        sameSize: !!(cr && sr && Math.abs(cr.width - sr.width) < 1 && Math.abs(cr.height - sr.height) < 1),
+        sizes: cr && sr ? { char: `${cr.width}x${cr.height}`, svg: `${sr.width}x${sr.height}` } : null,
+      };
+    });
+    check(
+      "W13: font-rendered kanji box beside the animation, same size + step buttons",
+      charProbe.char === "食" && charProbe.prev && charProbe.replay && charProbe.next && charProbe.sameSize,
+      JSON.stringify(charProbe),
+    );
+    // stepping: ‹ / › move one stroke at a time; the boundary buttons disable.
+    // Start from a settled state (replay until every stroke is drawn).
+    await page.evaluate(() => {
+      document.querySelector("#panes .pane:first-child .stroke-widget .stroke-replay").click();
+    });
+    await waitFor(
+      page,
+      () => page.evaluate(() => {
+        const fig = document.querySelector("#panes .pane:first-child .stroke-widget");
+        const next = fig?.querySelector(".stroke-next");
+        return next && next.disabled ? true : null;
+      }),
+      15000,
+      "auto-play finished (all strokes drawn)",
+    );
+    const stepBack = await page.evaluate(() => {
+      const fig = document.querySelector("#panes .pane:first-child .stroke-widget");
+      const prev = fig.querySelector(".stroke-prev");
+      const next = fig.querySelector(".stroke-next");
+      const paths = [...fig.querySelectorAll("svg.stroke-svg path")];
+      const visible = () => paths.filter((p) => Math.abs(parseFloat(p.style.strokeDashoffset) || 0) < 0.5).length;
+      for (let i = 0; i < 9; i++) prev.click();
+      return { visible: visible(), prevDisabled: prev.disabled, nextDisabled: next.disabled };
+    });
+    check(
+      "W13: ‹ steps backward one stroke at a time (0 left, prev disabled)",
+      stepBack.visible === 0 && stepBack.prevDisabled && !stepBack.nextDisabled,
+      JSON.stringify(stepBack),
+    );
+    const stepFwd = await page.evaluate(() => {
+      const fig = document.querySelector("#panes .pane:first-child .stroke-widget");
+      const prev = fig.querySelector(".stroke-prev");
+      const next = fig.querySelector(".stroke-next");
+      const paths = [...fig.querySelectorAll("svg.stroke-svg path")];
+      const visible = () => paths.filter((p) => Math.abs(parseFloat(p.style.strokeDashoffset) || 0) < 0.5).length;
+      for (let i = 0; i < 9; i++) next.click();
+      return { visible: visible(), prevDisabled: prev.disabled, nextDisabled: next.disabled };
+    });
+    check(
+      "W13: › steps forward one stroke at a time (all 9, next disabled)",
+      stepFwd.visible === 9 && stepFwd.nextDisabled && !stepFwd.prevDisabled,
+      JSON.stringify(stepFwd),
+    );
+    // › pressed mid-play cancels the auto-play and draws exactly one more.
+    const midPlay = await page.evaluate(async () => {
+      const fig = document.querySelector("#panes .pane:first-child .stroke-widget");
+      const replay = fig.querySelector(".stroke-replay");
+      const next = fig.querySelector(".stroke-next");
+      const paths = [...fig.querySelectorAll("svg.stroke-svg path")];
+      const visible = () => paths.filter((p) => Math.abs(parseFloat(p.style.strokeDashoffset) || 0) < 0.5).length;
+      replay.click(); // starts the auto-play (stroke 1 draws synchronously)
+      next.click(); // same task: cancels the play, draws exactly one more
+      const rightAfter = visible();
+      await new Promise((r) => setTimeout(r, 1200));
+      const later = visible();
+      return { rightAfter, later };
+    });
+    check(
+      "W13: › mid-play cancels the auto-play and draws exactly one stroke",
+      midPlay.rightAfter === 2 && midPlay.later === 2,
+      JSON.stringify(midPlay),
+    );
+    // loading skeleton + failure fallback — deterministic via the
+    // window.fetch patch installed before the app loaded (SW fetches bypass
+    // puppeteer request interception): "delay" holds the stroke-svg response
+    // 800 ms so the skeleton is observable, "abort" rejects it so the widget
+    // keeps only the font-rendered character.
+    await page.evaluate(() => { window.__strokeFetchMode = "delay"; });
+    await page.evaluate(() => {
+      const input = document.querySelector("#query");
+      input.value = "語";
+      document.querySelector('button[data-cmd="kanji"]').click();
+    });
+    const skeletonProbe = await waitFor(
+      page,
+      () => page.evaluate(() => {
+        const fig = document.querySelector("#panes .pane:first-child .stroke-widget");
+        if (!fig?.querySelector(".stroke-skeleton")) return null;
+        return {
+          char: fig.querySelector(".stroke-char")?.textContent ?? "",
+          controlsDisabled: !!(fig.querySelector(".stroke-prev")?.disabled
+            && fig.querySelector(".stroke-replay")?.disabled
+            && fig.querySelector(".stroke-next")?.disabled),
+        };
+      }),
+      8000,
+      "stroke skeleton visible while the svg is delayed",
+      100,
+    );
+    check(
+      "W13: shimmer skeleton + char while the svg loads (controls disabled)",
+      !!skeletonProbe && skeletonProbe.char === "語" && skeletonProbe.controlsDisabled,
+      JSON.stringify(skeletonProbe),
+    );
+    await page.evaluate(() => { window.__strokeFetchMode = "pass"; });
+    const afterDelay = await waitFor(
+      page,
+      () => page.evaluate(() => {
+        const fig = document.querySelector("#panes .pane:first-child .stroke-widget");
+        const svg = fig?.querySelector("svg.stroke-svg");
+        if (!fig || fig.querySelector(".stroke-skeleton") || !svg || svg.querySelectorAll("path").length === 0) return null;
+        return {
+          paths: svg.querySelectorAll("path").length,
+          label: fig.querySelector(".stroke-label")?.textContent ?? "",
+        };
+      }),
+      10000,
+      "delayed svg finishes loading (skeleton cleared)",
+      100,
+    );
+    check(
+      "W13: skeleton clears once the svg lands (stroke count in the label)",
+      !!afterDelay && afterDelay.paths > 0 && /^語 · \d+ strokes$/.test(afterDelay.label),
+      JSON.stringify(afterDelay),
+    );
+
+    await page.evaluate(() => { window.__strokeFetchMode = "abort"; });
+    await page.evaluate(() => {
+      const input = document.querySelector("#query");
+      input.value = "漢";
+      document.querySelector('button[data-cmd="kanji"]').click();
+    });
+    const abortProbe = await waitFor(
+      page,
+      () => page.evaluate(() => {
+        const fig = document.querySelector("#panes .pane:first-child .stroke-widget");
+        // fetch aborted → animation cell + control bar removed, char kept
+        if (!fig || fig.querySelector("svg.stroke-svg") || fig.querySelector(".stroke-bar")) return null;
+        return { char: fig.querySelector(".stroke-char")?.textContent ?? "" };
+      }),
+      10000,
+      "aborted svg leaves only the font-rendered kanji",
+      100,
+    );
+    check(
+      "W13: failed svg fetch keeps the same-size font-rendered kanji",
+      abortProbe?.char === "漢",
+      JSON.stringify(abortProbe),
+    );
+
+    await page.evaluate(() => { window.__strokeFetchMode = "pass"; });
+    // W13: a collapsed kanji pane hides its stroke widgets too — only the
+    // head banner stays (the strip is a sibling of the pane body, so the
+    // .pane.collapsed pre rule never reached it). Probe on the 漢 pane, then
+    // re-expand so the collapse block below sees an expanded first pane.
+    const stripCollapse = await page.evaluate(() => {
+      const pane = document.querySelector("#panes .pane:first-child");
+      const strip = pane.querySelector(".stroke-strip");
+      const toggle = pane.querySelector(".pane-collapse");
+      const before = strip.offsetHeight > 0;
+      toggle.click();
+      const collapsedHidden = strip.offsetHeight === 0 && pane.classList.contains("collapsed");
+      toggle.click();
+      return { before, collapsedHidden, restored: strip.offsetHeight > 0 };
+    });
+    check(
+      "W13: collapse hides the stroke strip, expand restores it",
+      stripCollapse.before && stripCollapse.collapsedHidden && stripCollapse.restored,
+      JSON.stringify(stripCollapse),
     );
     // kanji (reading search)
     p = await runLookup(page, "kanji", "makase");

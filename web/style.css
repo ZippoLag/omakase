@@ -406,6 +406,13 @@ button.busy {
   pointer-events: none;
 }
 
+/* A collapsed pane keeps only its head banner: the stroke strip (the kanji
+   character + animation widgets) hides with the body. The strip is a sibling
+   of the pane's <pre>, so the collapsed-pre rule above never reached it. */
+.pane.collapsed .stroke-strip {
+  display: none;
+}
+
 /* Skeleton rows of a streaming pane: shimmering bars the worker's streamed
    sections progressively replace. Kept short (result-line height) so the
    pane reads as text loading in, not a placeholder block. */
@@ -426,6 +433,7 @@ button.busy {
 
 @media (prefers-reduced-motion: reduce) {
   .skel-line { animation: none; }
+  .stroke-skeleton { animation: none; }
 }
 
 /* ---- clickable result tokens ---------------------------------------------- */
@@ -483,9 +491,11 @@ button.busy {
 
 /* ---- stroke-order widgets -------------------------------------------------- */
 /* One figure per kanji page character, between the pane header and the text:
-   a square svg the strokes draw themselves into, then a small bar with the
-   stroke count and a ↻ replay button. The svg is always on a light surface
-   so the dark kanji strokes read the same in both color schemes. */
+   a two-cell row — the font-rendered kanji (`.stroke-char`) beside the square
+   svg the strokes draw themselves into — over a small bar with the stroke
+   count and ‹ / ↻ / › controls. The svg and the character share one light
+   surface and one dark ink, so the two boxes read identically in both color
+   schemes. */
 .stroke-strip {
   display: flex;
   flex-wrap: wrap;
@@ -500,17 +510,62 @@ button.busy {
   display: flex;
   flex-direction: column;
   align-items: stretch;
-  width: clamp(120px, 32vw, 168px);
+  gap: 5px;
+}
+
+.stroke-row {
+  display: flex;
+  gap: 10px;
+  align-items: stretch;
+}
+
+/* The character and the animation are exactly the same square size. */
+.stroke-char,
+.stroke-cell {
+  width: clamp(96px, 28vw, 150px);
+  aspect-ratio: 1 / 1;
+}
+
+/* Font-rendered twin of the animation: the kanji in a box the same size as
+   the svg, on the same light surface with the same dark ink. Always present
+   — including while the svg loads and when the diagram is missing (then the
+   animation box is removed and only this character remains). */
+.stroke-char {
+  display: grid;
+  place-items: center;
+  background: #ffffff;
+  border: 1px solid var(--line);
+  border-radius: 10px;
+  font-size: clamp(80px, 24vw, 128px);
+  line-height: 1;
+  color: #26282c;
+  font-weight: 600;
+  user-select: none;
+}
+
+.stroke-cell {
+  position: relative;
 }
 
 .stroke-svg {
   display: block;
   width: 100%;
-  height: auto;
-  aspect-ratio: 1 / 1;
+  height: 100%;
   background: #ffffff;
   border: 1px solid var(--line);
   border-radius: 10px;
+}
+
+/* Loading skeleton: a shimmer over the animation box (same treatment as the
+   pane's skeleton rows) until the stroke paths have been parsed and mounted.
+   inset 1px keeps the svg's border visible around it. */
+.stroke-skeleton {
+  position: absolute;
+  inset: 1px;
+  background: linear-gradient(90deg, var(--line) 25%, color-mix(in srgb, var(--bg-pane) 50%, var(--line)) 50%, var(--line) 75%);
+  background-size: 200% 100%;
+  animation: skel-shimmer 1.2s linear infinite;
+  pointer-events: none;
 }
 
 .stroke-draw path {
@@ -525,19 +580,23 @@ button.busy {
 .stroke-bar {
   display: flex;
   align-items: center;
-  justify-content: space-between;
-  gap: 6px;
+  gap: 4px;
   margin-top: 5px;
   font-size: 12px;
   color: var(--muted);
 }
 
+/* The label flexes to fill the row, pushing the control buttons to the end. */
 .stroke-label {
+  flex: 1;
+  min-width: 0;
   font-weight: 600;
   color: var(--ink);
 }
 
-.stroke-replay {
+.stroke-prev,
+.stroke-replay,
+.stroke-next {
   flex: none;
   display: inline-flex;
   align-items: center;
@@ -552,8 +611,12 @@ button.busy {
   background: var(--bg-pane);
 }
 
+.stroke-prev:hover:not(:disabled),
+.stroke-prev:focus-visible,
 .stroke-replay:hover:not(:disabled),
-.stroke-replay:focus-visible {
+.stroke-replay:focus-visible,
+.stroke-next:hover:not(:disabled),
+.stroke-next:focus-visible {
   border-color: var(--accent);
   color: var(--accent);
 }
