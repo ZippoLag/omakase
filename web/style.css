@@ -1,24 +1,63 @@
 /* omakase web UI — deliberately minimal: control row + stacked result panes. */
 
 :root {
+  /* Final W16 revision — the tone system: the configurable color moved OUT
+     of the page background into the surfaces. --bg is now the neutral
+     tint-less app background; --tint (tone-1, JS-set from the settings
+     picker) colors the input, the command buttons and the even-depth (0, 2,
+     …) result panes; --tint-soft (tone-2, the pane-head shade) colors every
+     pane head, the stroke strip and the odd-depth nested panes, so nested
+     results alternate between the two tones. */
   --bg: #f7f7f5;
   --bg-pane: #ffffff;
+  /* Tone-1: the configurable background color — overridden inline by
+     applyTheme from the settings picker; this value is only the pre-JS
+     default. */
+  --tint: #A6DDCF;
+  /* Tone-2: the softer shade (the pane-head color) — the tint blended
+     toward the neutral card surface. */
+  --tint-soft: color-mix(in srgb, var(--bg-pane) 60%, var(--tint));
   --ink: #1a1d21;
   --muted: #6b7280;
   --line: #e3e3de;
-  --accent: #b91c1c;
+  /* One configurable accent shared by both themes (the old light-mode red
+     is gone): --accent is overridden inline by applyTheme from the
+     settings picker; the stylesheet value is only the pre-JS default. */
+  --accent: #ef6a5e;
   --progress: 0%;
+  /* Softened wood-block (post-W16 revision): the mono chrome identity
+     stays, but the double-frame inset ring was dropped in favor of a single
+     border + modest radii (8px cards, 6px controls, 4px chips) so the
+     tinted background reads calm instead of stamped. Shared type stacks:
+     the UI chrome — headings, buttons, badges, pane heads, footer, settings
+     labels — is monospace; prose (the credits panel body) keeps the sans
+     stack. The JP fonts at the end let Japanese queries inside mono chrome
+     render properly. */
+  --sans: system-ui, -apple-system, "Segoe UI", Roboto, "Helvetica Neue",
+          "Noto Sans JP", "Hiragino Kaku Gothic ProN", "Yu Gothic UI", Meiryo, sans-serif;
+  --mono: ui-monospace, "SF Mono", Menlo, Consolas, "Noto Sans JP",
+          "Hiragino Kaku Gothic ProN", Meiryo, monospace;
 }
 
-@media (prefers-color-scheme: dark) {
-  :root {
-    --bg: #111418;
-    --bg-pane: #181c21;
-    --ink: #e8e6e3;
-    --muted: #9aa0a6;
-    --line: #2a2f36;
-    --accent: #ef6a5e;
-  }
+/* Dark theme is driven by data-theme on <html> (set by main.ts applyTheme
+   from the settings pane), not by the media query — the system preference is
+   only the JS first-boot default. The JS-applied inline --bg / --accent
+   (configurable colors) override these stylesheet values; the rest of the
+   palette stays theme-derived. */
+:root[data-theme="dark"] {
+  --bg: #111418;
+  --bg-pane: #181c21;
+  /* Pre-JS dark tint: the aqua at 45% strength (#4B635D) — matches
+     effectiveTint("dark", ...) so there is no flash before the JS applies
+     the capped picker color (dark mode caps the tint so the light ink stays
+     readable on tinted surfaces). */
+  --tint: #4B635D;
+  --tint-soft: color-mix(in srgb, var(--bg-pane) 60%, var(--tint));
+  --ink: #e8e6e3; /* soft warm white — the harsh ivory + fuzzy text-shadow
+                     were dropped in the softened revision */
+  --muted: #9aa0a6;
+  --line: #2a2f36;
+  --accent: #ef6a5e;
 }
 
 * { box-sizing: border-box; }
@@ -29,8 +68,7 @@ body {
   margin: 0;
   background: var(--bg);
   color: var(--ink);
-  font: 16px/1.45 system-ui, -apple-system, "Segoe UI", Roboto, "Helvetica Neue",
-        "Noto Sans JP", "Hiragino Kaku Gothic ProN", "Yu Gothic UI", Meiryo, sans-serif;
+  font: 16px/1.45 var(--sans);
 }
 
 /* ---- header + status ------------------------------------------------------ */
@@ -49,13 +87,14 @@ h1 {
   font-size: 17px;
   font-weight: 650;
   letter-spacing: 0.02em;
+  font-family: var(--mono); /* chrome: mono (W16) */
 }
 
 /* Build version badge (e.g. v0.1.0-build.12) — set by main.ts from the
    version stamp shared with the CLI; hover for the full stamp + dictionary. */
 #version {
   font-size: 11px;
-  font-family: ui-monospace, "SF Mono", Menlo, Consolas, monospace;
+  font-family: var(--mono);
   color: var(--muted);
   white-space: nowrap;
   align-self: center;
@@ -103,7 +142,7 @@ h1 {
   height: 30px;
   padding: 0;
   border: 1px solid color-mix(in srgb, var(--accent) 40%, var(--line));
-  border-radius: 8px;
+  border-radius: 6px;
   background: none;
   color: var(--accent);
 }
@@ -173,40 +212,15 @@ h1 {
   font-size: 18px;
   padding: 12px 14px;
   border: 1px solid var(--line);
-  border-radius: 10px;
-  background: var(--bg-pane);
+  border-radius: 6px;
+  background: var(--tint); /* tone-1: the input is a tinted control */
   color: var(--ink);
   outline: none;
   -webkit-appearance: none;
   appearance: none;
 }
 
-/* The max box: a small integer stepper on the same line as the query input. */
-#max {
-  flex: 0 0 10%;
-  width: 10%;
-  min-width: 52px;
-  font: inherit;
-  font-size: 16px;
-  text-align: center;
-  padding: 12px 4px;
-  border: 1px solid var(--line);
-  border-radius: 10px;
-  background: var(--bg-pane);
-  color: var(--ink);
-  outline: none;
-  -webkit-appearance: none;
-  appearance: none;
-  -moz-appearance: textfield;
-}
-
-#max::-webkit-outer-spin-button,
-#max::-webkit-inner-spin-button {
-  -webkit-appearance: inner-spin-button;
-  opacity: 1;
-}
-
-#query:disabled, #max:disabled { opacity: 0.55; }
+#query:disabled, #settings-max:disabled { opacity: 0.55; }
 
 #buttons {
   display: grid;
@@ -218,12 +232,13 @@ h1 {
 
 button {
   font: inherit;
+  font-family: var(--mono); /* chrome: mono (W16) */
   font-size: 16px;
   font-weight: 600;
   padding: 11px 0;
   border: 1px solid var(--line);
-  border-radius: 10px;
-  background: var(--bg-pane);
+  border-radius: 6px;
+  background: var(--tint); /* tone-1: the command buttons are tinted controls */
   color: var(--ink);
   cursor: pointer;
   -webkit-tap-highlight-color: transparent;
@@ -237,7 +252,8 @@ button.primary { border-color: var(--accent); color: var(--accent); }
    whole-button opacity would wash it out along with the label. */
 button:disabled {
   color: var(--muted);
-  background: color-mix(in srgb, var(--bg-pane) 55%, var(--bg));
+  /* a dimmed tint: clearly inactive, but stays in the tone family */
+  background: color-mix(in srgb, var(--tint) 55%, var(--bg-pane));
   cursor: default;
 }
 
@@ -267,6 +283,7 @@ button.busy {
 #cancel-op {
   position: absolute;
   font: inherit;
+  font-family: var(--mono);
   font-size: 18px;
   font-weight: 600;
   padding: 0;
@@ -309,7 +326,7 @@ button.busy {
   line-height: 1;
   padding: 3px 5px;
   margin-left: 6px;
-  border-radius: 999px;
+  border-radius: 4px;
   border: 1px solid color-mix(in srgb, var(--accent) 55%, var(--line));
   color: var(--accent);
   background: var(--bg-pane);
@@ -326,10 +343,18 @@ button.busy {
 }
 
 .pane {
-  background: var(--bg-pane);
+  background: var(--tint); /* tone-1: top-level + even-depth panes */
   border: 1px solid var(--line);
-  border-radius: 12px;
+  border-radius: 8px;
+  box-shadow: 0 1px 2px rgba(0, 0, 0, 0.05); /* soft lift off the neutral bg */
   overflow: hidden;
+}
+
+/* tone-2: odd-depth nested panes — the same shade as the pane heads, so
+   nested results alternate (tint, soft, tint, …) down the tree. The class
+   is set by main.ts from each pane's nesting depth. */
+.pane.tone-soft {
+  background: var(--tint-soft);
 }
 
 .pane-head {
@@ -339,8 +364,9 @@ button.busy {
   padding: 6px 12px;
   border-bottom: 1px solid var(--line);
   font-size: 12px;
+  font-family: var(--mono); /* chrome: mono (W16) */
   color: var(--muted);
-  background: color-mix(in srgb, var(--bg-pane) 60%, var(--bg));
+  background: var(--tint-soft); /* tone-2: every pane head shares this shade */
 }
 
 .badge {
@@ -348,15 +374,17 @@ button.busy {
   font-size: 10px;
   letter-spacing: 0.08em;
   font-weight: 700;
+  font-family: var(--mono); /* chrome: mono (W16) */
   padding: 1px 6px;
-  border-radius: 999px;
-  border: 1px solid var(--line);
-  color: var(--muted);
+  border-radius: 4px;
+  /* The accent's new role in the tree: every pane's command tag carries the
+     accent (like the pending-count badges on the command buttons), tying the
+     panes to the accent-driven chrome. Error/cancelled panes read through
+     their accent body text instead of a special badge. */
+  border: 1px solid color-mix(in srgb, var(--accent) 55%, var(--line));
+  color: var(--accent);
 }
 
-.pane.error .badge { color: var(--accent); border-color: var(--accent); }
-
-.pane.cancelled .badge { color: var(--accent); border-color: var(--accent); }
 .pane.cancelled pre { color: var(--accent); }
 
 .pane-query { font-weight: 600; color: var(--ink); overflow-wrap: anywhere; }
@@ -373,7 +401,7 @@ button.busy {
   height: 26px;
   padding: 0;
   border: none;
-  border-radius: 8px;
+  border-radius: 6px;
   background: none;
   color: var(--accent);
 }
@@ -386,8 +414,7 @@ button.busy {
 .pane pre {
   margin: 0;
   padding: 12px 14px;
-  font: 13px/1.5 ui-monospace, "SF Mono", Menlo, Consolas, "Noto Sans JP",
-        "Hiragino Kaku Gothic ProN", Meiryo, monospace;
+  font: 13px/1.5 var(--mono);
   white-space: pre-wrap;
   overflow-wrap: anywhere;
   overflow-x: auto;
@@ -420,7 +447,7 @@ button.busy {
   display: block;
   height: 11px;
   margin: 5px 0;
-  border-radius: 4px;
+  border-radius: 2px;
   background: linear-gradient(90deg, var(--line) 25%, color-mix(in srgb, var(--bg-pane) 50%, var(--line)) 50%, var(--line) 75%);
   background-size: 200% 100%;
   animation: skel-shimmer 1.2s linear infinite;
@@ -444,6 +471,7 @@ button.busy {
   color: inherit;
   background: none;
   border: none;
+  box-shadow: none; /* inline text token — no frame */
   padding: 0;
   margin: 0;
   border-radius: 0;
@@ -502,7 +530,7 @@ button.busy {
   gap: 10px;
   padding: 12px 14px 2px;
   border-bottom: 1px solid var(--line);
-  background: color-mix(in srgb, var(--bg-pane) 60%, var(--bg));
+  background: var(--tint-soft); /* tone-2: reads as the pane head's banner */
 }
 
 .stroke-widget {
@@ -535,7 +563,7 @@ button.busy {
   place-items: center;
   background: #ffffff;
   border: 1px solid var(--line);
-  border-radius: 10px;
+  border-radius: 8px;
   font-size: clamp(80px, 24vw, 128px);
   line-height: 1;
   color: #26282c;
@@ -553,7 +581,7 @@ button.busy {
   height: 100%;
   background: #ffffff;
   border: 1px solid var(--line);
-  border-radius: 10px;
+  border-radius: 8px;
 }
 
 /* Loading skeleton: a shimmer over the animation box (same treatment as the
@@ -583,6 +611,7 @@ button.busy {
   gap: 4px;
   margin-top: 5px;
   font-size: 12px;
+  font-family: var(--mono); /* chrome: mono (W16) */
   color: var(--muted);
 }
 
@@ -606,7 +635,7 @@ button.busy {
   padding: 0;
   font-size: 15px;
   font-weight: 400;
-  border-radius: 999px;
+  border-radius: 6px;
   color: var(--ink);
   background: var(--bg-pane);
 }
@@ -631,6 +660,7 @@ footer {
   gap: 10px;
   color: var(--muted);
   font-size: 12px;
+  font-family: var(--mono); /* chrome: mono (W16) */
   line-height: 1.5;
 }
 
@@ -672,7 +702,7 @@ footer {
   border-radius: 50%;
   background: var(--bg-pane);
   color: var(--muted);
-  font: italic 700 14px/1 ui-monospace, "SF Mono", Menlo, Consolas, monospace;
+  font: italic 700 14px/1 var(--mono);
   user-select: none;
   -webkit-tap-highlight-color: transparent;
   touch-action: manipulation;
@@ -697,9 +727,11 @@ footer {
   padding: 14px 16px;
   background: var(--bg-pane);
   border: 1px solid var(--line);
-  border-radius: 12px;
+  border-radius: 8px;
   box-shadow: 0 8px 24px rgba(0, 0, 0, 0.18);
   color: var(--ink);
+  /* prose keeps the sans stack — mono body text is unreadable (W16) */
+  font-family: var(--sans);
   font-size: 12px;
   line-height: 1.55;
 }
@@ -718,8 +750,8 @@ footer {
    tap never leaves sticky emphasis behind; :focus-visible gives keyboard
    users the same cue. Text inputs are the one exception: their “label” is the
    user's own typed query, and emboldening it on hover or focus would make the
-   text jump every time — so #query/#max never change weight, and their active
-   state reads purely through the accent ring below. */
+   text jump every time — so #query and the settings' text inputs never change
+   weight, and their active state reads purely through the accent ring below. */
 @media (hover: hover) {
   button:not(:disabled):hover,
   a:hover,
@@ -744,13 +776,15 @@ summary:focus-visible {
    they report :focus-visible on any focus, which shows the ring rather than
    the old border-color change. The outline applies on :focus-visible only, so a
    mouse click that merely focuses a button does not leave a stray ring
-   behind. #query/#max keep an outline:none at rest, so their ring selectors
-   must be id-scoped to outrank that base rule. */
+   behind. The text inputs keep an outline:none at rest, so their ring
+   selectors must be id-scoped to outrank that base rule. */
 button:not(:disabled):focus-visible,
 a:focus-visible,
 summary:focus-visible,
 #query:focus-visible,
-#max:focus-visible {
+#settings-max:focus-visible,
+#bg-color:focus-visible,
+#accent-color:focus-visible {
   outline: 2px solid var(--accent);
   outline-offset: 2px;
 }
@@ -807,7 +841,7 @@ summary:focus-visible,
   padding: 0;
   margin-right: 8px;
   border: none;
-  border-radius: 8px;
+  border-radius: 6px;
   background: var(--bg-pane);
   color: var(--muted);
   cursor: pointer;
@@ -834,53 +868,229 @@ summary:focus-visible,
   stroke-width: 2.5;
 }
 
-/* ---- Auto-scroll toggle in header ------------------------------------------ */
-#auto-scroll-toggle {
+/* ---- Settings pane -------------------------------------------------------- */
+/* The gear lives at the right end of the header (after the trashbin) and
+   opens the settings dialog. */
+#settings-gear {
   flex: none;
   align-self: center;
-  padding: 6px 12px;
-  font-size: 12px;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 30px;
+  height: 30px;
+  padding: 0;
   border: 1px solid var(--line);
-  border-radius: 8px;
-  background: var(--bg-pane);
-  color: var(--ink);
-  cursor: pointer;
-  margin-right: 8px;
-  -webkit-tap-highlight-color: transparent;
-  touch-action: manipulation;
+  border-radius: 6px;
+  background: none;
+  color: var(--muted);
 }
 
-#auto-scroll-toggle:hover:not(:disabled),
-#auto-scroll-toggle:focus-visible {
+#settings-gear:hover:not(:disabled),
+#settings-gear:focus-visible {
   border-color: var(--accent);
   color: var(--accent);
+  background: color-mix(in srgb, var(--accent) 12%, transparent);
 }
 
-#auto-scroll-toggle:active {
-  transform: translateY(1px);
+/* The dialog: centered, viewport-constrained, scrollable body; closed with
+   the ✕ button or ESC (no backdrop-click close — avoids accidental
+   dismissal on phones). */
+#settings {
+  border: 1px solid var(--line);
+  border-radius: 8px;
+  /* The settings box follows the pane anatomy: a tone-2 head over a tone-1
+     body (the original intent — the box is a shade of the picked color),
+     with the form controls keeping their neutral card surfaces so they pop. */
+  background: var(--tint);
+  color: var(--ink);
+  padding: 0;
+  width: min(440px, calc(100vw - 32px));
+  max-height: min(80dvh, 560px);
+  box-shadow: 0 8px 24px rgba(0, 0, 0, 0.18);
+}
+/* A closed dialog must stay hidden. The UA hides it via
+   dialog:not([open]) { display: none }, but an author `display` rule would
+   override that (author origin beats UA origin) and leave the settings pane
+   permanently visible in the page flow — a styled window whose ✕ cannot
+   close it (close() on a never-modal dialog is a no-op). So the flex column
+   layout is scoped to the open state only, and the closed state is hidden
+   explicitly. */
+#settings:not([open]) { display: none; }
+#settings[open] {
+  display: flex;
+  flex-direction: column;
 }
 
-/* ---- Header toggle base styles -------------------------------------------- */
-.header-toggle {
-  font: inherit;
-  font-size: 12px;
+#settings::backdrop {
+  background: rgba(0, 0, 0, 0.4);
+}
+
+.settings-head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+  padding: 10px 14px;
+  border-bottom: 1px solid var(--line);
+  background: var(--tint-soft); /* tone-2, matching the pane heads */
+  flex: none;
+}
+
+.settings-head h2 {
+  margin: 0;
+  font-size: 16px;
+  font-family: var(--mono); /* chrome: mono (W16) */
+}
+
+#settings-close {
+  flex: none;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 30px;
+  height: 30px;
+  padding: 0;
+  font-size: 18px;
+  border-radius: 6px;
+  background: none;
+  color: var(--muted);
+}
+
+#settings-close:hover,
+#settings-close:focus-visible {
+  color: var(--accent);
+  background: color-mix(in srgb, var(--accent) 12%, transparent);
+}
+
+.settings-body {
+  padding: 12px 14px 16px;
+  overflow-y: auto;
+}
+
+.setting {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  margin-bottom: 16px;
+}
+
+.setting:last-child {
+  margin-bottom: 0;
+}
+
+.setting-check {
+  flex-direction: row;
+  align-items: center;
+  gap: 8px;
+  cursor: pointer;
+}
+
+.setting-check input {
+  width: 18px;
+  height: 18px;
+  accent-color: var(--accent);
+}
+
+.setting-label {
+  font-size: 13px;
   font-weight: 600;
-  padding: 6px 12px;
-  border: 1px solid var(--line);
-  border-radius: 8px;
-  background: var(--bg-pane);
-  color: var(--ink);
-  cursor: pointer;
-  -webkit-tap-highlight-color: transparent;
-  touch-action: manipulation;
+  font-family: var(--mono); /* chrome: mono (W16) */
+  color: var(--muted);
 }
 
-.header-toggle:hover:not(:disabled),
-.header-toggle:focus-visible {
-  border-color: var(--accent);
+#settings-max {
+  font: inherit;
+  font-family: var(--mono);
+  font-size: 16px;
+  padding: 8px 10px;
+  width: 100%;
+  border: 1px solid var(--line);
+  border-radius: 6px;
+  background: var(--bg-pane);
+  color: var(--ink);
+  outline: none;
+  -webkit-appearance: none;
+  appearance: none;
+  -moz-appearance: textfield;
+}
+
+#settings-max::-webkit-outer-spin-button,
+#settings-max::-webkit-inner-spin-button {
+  -webkit-appearance: inner-spin-button;
+  opacity: 1;
+}
+
+/* Theme segmented control: two equal buttons, the active one in accent. */
+.segmented {
+  display: inline-flex;
+  align-self: flex-start;
+  border: 1px solid var(--line);
+  border-radius: 6px;
+  overflow: hidden;
+}
+
+.segmented button {
+  border: none;
+  border-radius: 0;
+  padding: 8px 18px;
+  font-size: 14px;
+  background: var(--bg-pane);
+  color: var(--muted);
+}
+
+.segmented button + button {
+  border-left: 1px solid var(--line);
+}
+
+.segmented button.active {
+  background: color-mix(in srgb, var(--accent) 14%, var(--bg-pane));
   color: var(--accent);
 }
 
-.header-toggle:active {
-  transform: translateY(1px);
+/* Color pickers: hex text input + preview square (and, for the background,
+   the 0–100% intensity slider underneath). */
+.color-row {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+
+.color-preview {
+  flex: none;
+  width: 34px;
+  height: 34px;
+  border: 1px solid var(--line);
+  border-radius: 6px;
+  background: transparent;
+}
+
+.color-row input[type="text"] {
+  flex: 1;
+  min-width: 0;
+  font: inherit;
+  font-size: 15px;
+  font-family: var(--mono);
+  padding: 8px 10px;
+  border: 1px solid var(--line);
+  border-radius: 6px;
+  background: var(--bg-pane);
+  color: var(--ink);
+  outline: none;
+  -webkit-appearance: none;
+  appearance: none;
+}
+
+.color-row input[type="text"].invalid {
+  border-color: var(--accent);
+}
+
+#bg-mix {
+  width: 100%;
+  accent-color: var(--accent);
+}
+
+.setting-hint {
+  font-size: 12px;
+  color: var(--muted);
 }

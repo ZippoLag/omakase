@@ -3,6 +3,9 @@
 <head>
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+  <!-- theme-color is kept in sync with the effective background at runtime
+       (main.ts applyTheme); the manifest's baked-in theme_color stays static
+       (a PWA install limitation — documented). -->
   <meta name="theme-color" content="#111418">
   <meta name="mobile-web-app-capable" content="yes">
   <meta name="apple-mobile-web-app-status-bar-style" content="black-translucent">
@@ -18,6 +21,8 @@
     <span id="version" class="version" title=""></span>
     <button id="clear" type="button" aria-label="Delete all results"
             title="Delete all results" disabled></button>
+    <button id="settings-gear" type="button" aria-label="Settings"
+            title="Settings"></button>
     <div id="status" class="busy" role="status"><span class="status-msg">starting…</span><span class="pct" aria-hidden="true" hidden></span></div>
   </header>
 
@@ -26,9 +31,6 @@
       <input id="query" type="search" placeholder="e.g. 食べる, 食, eat, taberu"
              autocapitalize="none" autocorrect="off" spellcheck="false"
              enterkeyhint="go" aria-label="Look up">
-      <input id="max" type="number" inputmode="numeric" min="1" step="1" value="30"
-             aria-label="Max results" title="Max results per list"
-             enterkeyhint="go">
     </div>
     <div id="buttons">
       <button type="button" data-cmd="kanji">kanji</button>
@@ -97,6 +99,55 @@
       </div>
     </details>
   </footer>
+
+  <dialog id="settings" aria-labelledby="settings-title">
+    <div class="settings-head">
+      <h2 id="settings-title">Settings</h2>
+      <button id="settings-close" type="button" aria-label="Close settings"
+              title="Close">×</button>
+    </div>
+    <div class="settings-body">
+      <label class="setting setting-check">
+        <input type="checkbox" id="settings-auto-scroll" checked>
+        <span>Auto-scroll to new results</span>
+      </label>
+      <label class="setting">
+        <span class="setting-label">Maximum results per list</span>
+        <input type="number" id="settings-max" min="1" step="1" value="5"
+               aria-label="Maximum results per list" title="Maximum results per list">
+      </label>
+      <div class="setting">
+        <span class="setting-label" id="theme-label">Theme</span>
+        <div class="segmented" role="group" aria-labelledby="theme-label">
+          <button type="button" id="theme-light" aria-pressed="false">light</button>
+          <button type="button" id="theme-dark" aria-pressed="false">dark</button>
+        </div>
+      </div>
+      <div class="setting">
+        <span class="setting-label" id="bg-color-label">Background color</span>
+        <div class="color-row">
+          <span id="bg-preview" class="color-preview" aria-hidden="true"></span>
+          <input type="text" id="bg-color" inputmode="text"
+                 pattern="#[0-9a-fA-F]{6}" maxlength="7" value="#A6DDCF"
+                 aria-label="Background color (hex)" spellcheck="false"
+                 autocomplete="off">
+        </div>
+        <input type="range" id="bg-mix" min="0" max="100" step="1" value="100"
+               aria-label="Background intensity">
+        <span class="setting-hint">0% = theme base (white/black), 100% = the picked color (dimmed in dark mode so tinted surfaces stay readable)</span>
+      </div>
+      <div class="setting">
+        <span class="setting-label" id="accent-color-label">Accent color</span>
+        <div class="color-row">
+          <span id="accent-preview" class="color-preview" aria-hidden="true"></span>
+          <input type="text" id="accent-color" inputmode="text"
+                 pattern="#[0-9a-fA-F]{6}" maxlength="7" value="#EF6A5E"
+                 aria-label="Accent color (hex)" spellcheck="false"
+                 autocomplete="off">
+        </div>
+      </div>
+    </div>
+  </dialog>
 
   <script type="module" src="./web/app/main.js"></script>
 </body>

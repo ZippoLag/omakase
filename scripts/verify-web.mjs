@@ -256,13 +256,85 @@ async function main() {
     });
     check("default highlight is search", hl.search && !hl.word && !hl.kanji, JSON.stringify(hl));
 
-    // the "max" box: a small number input on the same line as the query,
-    // defaulting to 30
+    // the per-list "max" cap moved into the settings pane (W14): a number
+    // input there defaulting to 5, and the input row holds only the query.
     const maxBox = await page.evaluate(() => {
-      const el = document.querySelector("#max");
-      return { exists: !!el, type: el?.type, value: el?.value };
+      const el = document.querySelector("#settings-max");
+      return {
+        exists: !!el,
+        type: el?.type,
+        value: el?.value,
+        inlineMaxGone: !document.querySelector("#inputrow #max"),
+      };
     });
-    check("max box: number input, default 30", maxBox.exists && maxBox.type === "number" && maxBox.value === "30", JSON.stringify(maxBox));
+    check(
+      "settings max box: number input in the settings pane, default 5",
+      maxBox.exists && maxBox.type === "number" && maxBox.value === "5" && maxBox.inlineMaxGone,
+      JSON.stringify(maxBox),
+    );
+    // ---- W14: settings pane ------------------------------------------------
+    // The gear at the right end of the header opens the settings dialog,
+    // which hosts auto-scroll, the max count, the theme toggle and the
+    // background/accent color pickers.
+    // The closed dialog must be truly hidden (display:none / zero rect), not
+    // merely !open — an author display:flex rule on #settings would override
+    // the UA's dialog:not([open]) hiding and leave the styled settings
+    // window permanently visible in the page flow, with an ✕ that cannot
+    // close it (close() on a never-modal dialog is a no-op).
+    const closedHidden = await page.evaluate(() => {
+      const d = document.querySelector("#settings");
+      const s = getComputedStyle(d);
+      const r = d.getBoundingClientRect();
+      return s.display === "none" || r.width === 0 || r.height === 0;
+    });
+    check("W14: closed settings dialog is hidden (not in the page flow)", closedHidden);
+    const gearProbe = await page.evaluate(() => {
+      const gear = document.querySelector("#settings-gear");
+      const clear = document.querySelector("#clear");
+      gear.click();
+      const dialog = document.querySelector("#settings");
+      return {
+        gear: !!gear,
+        // gear sits after clear: PRECEDING is set when the argument (clear)
+        // comes before the reference (gear)
+        afterClear: !!(gear && clear && (gear.compareDocumentPosition(clear) & Node.DOCUMENT_POSITION_PRECEDING)),
+        dialogOpen: dialog.open,
+        modal: dialog.matches(":modal"),
+        close: !!document.querySelector("#settings-close"),
+        autoScroll: !!document.querySelector("#settings-auto-scroll"),
+        maxInSettings: !!document.querySelector("#settings-max"),
+        themeLight: !!document.querySelector("#theme-light"),
+        themeDark: !!document.querySelector("#theme-dark"),
+        bgColor: document.querySelector("#bg-color")?.value ?? "",
+        accentColor: document.querySelector("#accent-color")?.value ?? "",
+      };
+    });
+    check(
+      "W14: gear opens the settings dialog (auto-scroll, max, theme, colors)",
+      gearProbe.gear && gearProbe.afterClear && gearProbe.dialogOpen && gearProbe.modal && gearProbe.close
+        && gearProbe.autoScroll && gearProbe.maxInSettings
+        && gearProbe.themeLight && gearProbe.themeDark
+        && gearProbe.bgColor === "#A6DDCF" && gearProbe.accentColor === "#EF6A5E",
+      JSON.stringify(gearProbe),
+    );
+    // close it with a REAL pointer click (mouse at the button's coordinates,
+    // not el.click()) — the programmatic path bypasses hit-testing, so it
+    // could never catch a close button a real user cannot press. Then assert
+    // the dialog is gone from both the top layer and the page flow.
+    const closeBtn = await page.$("#settings-close");
+    const closeBox = await closeBtn.boundingBox();
+    await page.mouse.click(closeBox.x + closeBox.width / 2, closeBox.y + closeBox.height / 2);
+    const closedAfter = await page.evaluate(() => {
+      const d = document.querySelector("#settings");
+      const s = getComputedStyle(d);
+      const r = d.getBoundingClientRect();
+      return { open: d.open, hidden: s.display === "none" || r.width === 0 || r.height === 0 };
+    });
+    check(
+      "W14: real click on the close button dismisses the dialog completely",
+      !closedAfter.open && closedAfter.hidden,
+      JSON.stringify(closedAfter),
+    );
 
     // busy state while a query is in flight: pressed button shows a spinner
     // and is disabled; other buttons and the input are disabled too.
@@ -285,6 +357,112 @@ async function main() {
     check("busy: other buttons + input disabled", busy.othersDisabled && busy.inputDisabled && busy.ariaBusy === "true", JSON.stringify(busy));
     let p = await runLookup(page, "search", "eat");
     check("busy lookup still returns result", p.text.includes("Meanings"), `err=${p.isError}`);
+
+    // ---- W16: tone system (final revision) + configurable colors ----------
+    // The headless-Chrome environment's system preference is dark, so the
+    // “fresh profile” here is not a light one — force the theme to light
+    // through the settings pane first, then probe the computed styles. The
+    // final revision moved the configurable color OUT of the page background
+    // into the surfaces: the app background is the neutral tint-less tone
+    // (#f7f7f5 light / #111418 dark), while the muted aquamarine (#A6DDCF at
+    // 100% intensity, driven by theme.ts) is the TINT (tone-1) that colors
+    // the input, the command buttons and the top-level panes. Pane heads use
+    // the softer tone-2 (#DBF1EC in light — --tint-soft) and nested results
+    // alternate between the two tones by depth (checked in the tokens
+    // block). The accent gained a role in the tree: every pane's command
+    // badge carries it. Live controls: a valid accent hex flips --accent and
+    // the progress bar; the bg slider blends the tint toward the theme base
+    // (0% = plain white in light mode; the dark 0% = black + capped tint are
+    // probed in the W14 dark block below).
+    const w16Base = await page.evaluate(() => {
+      const setVal = (sel, v) => {
+        const el = document.querySelector(sel);
+        el.value = v;
+        el.dispatchEvent(new Event("input", { bubbles: true }));
+      };
+      document.querySelector("#settings-gear").click();
+      const light = document.querySelector("#theme-light");
+      if (document.documentElement.dataset.theme !== "light") light.click();
+      // --tint-soft is a color-mix(), which computed style reports as
+      // `color(srgb r g b)` floats — normalize to the rgb() form every other
+      // color comes back as.
+      const normBg = (el) => {
+        const v = getComputedStyle(el).backgroundColor;
+        const m = /^rgba?\(\s*(\d+)\s*,\s*(\d+)\s*,\s*(\d+)/.exec(v);
+        if (m) return `rgb(${m[1]}, ${m[2]}, ${m[3]})`;
+        const c = /^color\(\s*srgb\s+([\d.]+)\s+([\d.]+)\s+([\d.]+)/.exec(v);
+        if (c) return `rgb(${Math.round(+c[1] * 255)}, ${Math.round(+c[2] * 255)}, ${Math.round(+c[3] * 255)})`;
+        return v;
+      };
+      // Capture the resting styles BEFORE the live-control mutations below.
+      const body = getComputedStyle(document.body);
+      const input = getComputedStyle(document.querySelector("#query"));
+      const btn = getComputedStyle(document.querySelector('button[data-cmd="search"]'));
+      const pane = document.querySelector("#panes .pane");
+      const pst = pane ? getComputedStyle(pane) : null;
+      const headEl = pane?.querySelector(".pane-head") ?? null;
+      const badge = pane ? getComputedStyle(pane.querySelector(".badge")) : null;
+      const h1 = getComputedStyle(document.querySelector("h1"));
+      const root = document.documentElement;
+      setVal("#accent-color", "#3366FF");
+      const accent = root.style.getPropertyValue("--accent").trim();
+      const bar = getComputedStyle(document.querySelector("#lookup"), "::after").backgroundColor;
+      setVal("#bg-mix", "0");
+      const tintZero = getComputedStyle(document.querySelector("#query")).backgroundColor;
+      setVal("#bg-mix", "100");
+      const tintFull = getComputedStyle(document.querySelector("#query")).backgroundColor;
+      // restore the stock colors so the rest of the suite sees them
+      setVal("#accent-color", "#EF6A5E");
+      document.querySelector("#settings-close").click();
+      return {
+        bodyBg: body.backgroundColor,
+        bodyShadow: body.textShadow,
+        inputBg: input.backgroundColor,
+        btnBg: btn.backgroundColor,
+        paneBg: pst?.backgroundColor ?? null,
+        paneRadius: pst?.borderRadius ?? null,
+        paneShadow: pst?.boxShadow ?? null,
+        headBg: headEl ? normBg(headEl) : null,
+        badgeColor: badge?.color ?? null,
+        h1Font: h1.fontFamily,
+        btnFont: btn.fontFamily,
+        accent, bar, tintZero, tintFull,
+      };
+    });
+    check(
+      "W16: neutral app background with tinted controls (input + buttons)",
+      w16Base.bodyBg === "rgb(247, 247, 245)" && w16Base.bodyShadow === "none"
+        && w16Base.inputBg === "rgb(166, 221, 207)" && w16Base.btnBg === "rgb(166, 221, 207)",
+      JSON.stringify(w16Base),
+    );
+    check(
+      "W16: panes are softly rounded with a single border (no inset double frame)",
+      w16Base.paneRadius === "8px" && !/inset/.test(w16Base.paneShadow),
+      JSON.stringify(w16Base),
+    );
+    check(
+      "W16: top-level panes carry the tint, heads the soft tone, badges the accent",
+      w16Base.paneBg === "rgb(166, 221, 207)" && w16Base.headBg === "rgb(219, 241, 236)"
+        && w16Base.badgeColor === "rgb(239, 106, 94)",
+      JSON.stringify(w16Base),
+    );
+    check(
+      "W16: header + buttons use the monospace chrome stack",
+      /monospace|SF Mono|Menlo|Consolas/i.test(w16Base.h1Font)
+        && /monospace|SF Mono|Menlo|Consolas/i.test(w16Base.btnFont),
+      JSON.stringify(w16Base),
+    );
+    check(
+      "W16: accent hex drives --accent and the progress bar color",
+      w16Base.accent === "#3366FF" && w16Base.bar === "rgb(51, 102, 255)",
+      JSON.stringify(w16Base),
+    );
+    check(
+      "W16: bg slider blends the tint toward the theme base (0% = white in light)",
+      w16Base.tintZero === "rgb(255, 255, 255)" && w16Base.tintFull === "rgb(166, 221, 207)",
+      JSON.stringify(w16Base),
+    );
+
     const idle = await page.evaluate(() => {
       const s = document.querySelector('button[data-cmd="search"]');
       return {
@@ -940,6 +1118,58 @@ async function main() {
       !!tokKanjiPane && tokKanjiPane.includes("strokes"),
       tokKanjiPane ? tokKanjiPane.slice(0, 40) : "(none)",
     );
+    // W16 tone alternation: nested results take the opposite tone from their
+    // host — every pane's tone class must match its real DOM nesting depth
+    // (even depth = tint, odd = soft), and a depth-1 child renders on the
+    // soft shade while its head shares it. Light theme is still active here
+    // (the W16 block forced it; the dark flip happens in the reload block).
+    const toneProbe = await page.evaluate(() => {
+      const panes = [...document.querySelectorAll("#panes .pane")];
+      return panes.map((p) => {
+        let depth = 0;
+        let el = p.parentElement;
+        while (el) {
+          if (el.classList.contains("pane")) depth++;
+          el = el.parentElement;
+        }
+        return {
+          q: p.querySelector(".pane-query")?.textContent ?? "",
+          depth,
+          cls: p.classList.contains("tone-tint") ? "tint"
+            : p.classList.contains("tone-soft") ? "soft" : "?",
+        };
+      });
+    });
+    check(
+      "tokens: pane tones alternate by nesting depth (even = tint, odd = soft)",
+      toneProbe.length > 0
+        && toneProbe.every((t) => t.cls === (t.depth % 2 === 0 ? "tint" : "soft")),
+      JSON.stringify(toneProbe.slice(0, 8)),
+    );
+    const nestedTone = await page.evaluate(() => {
+      const host = document.querySelector("#panes .pane:first-child");
+      const child = host?.querySelector(".pane-children > .pane");
+      if (!child) return null;
+      // --tint-soft is a color-mix(): normalize the `color(srgb …)` form.
+      const normBg = (el) => {
+        const v = getComputedStyle(el).backgroundColor;
+        const m = /^rgba?\(\s*(\d+)\s*,\s*(\d+)\s*,\s*(\d+)/.exec(v);
+        if (m) return `rgb(${m[1]}, ${m[2]}, ${m[3]})`;
+        const c = /^color\(\s*srgb\s+([\d.]+)\s+([\d.]+)\s+([\d.]+)/.exec(v);
+        if (c) return `rgb(${Math.round(+c[1] * 255)}, ${Math.round(+c[2] * 255)}, ${Math.round(+c[3] * 255)})`;
+        return v;
+      };
+      return {
+        childBg: normBg(child),
+        childHead: normBg(child.querySelector(".pane-head")),
+      };
+    });
+    check(
+      "tokens: a nested pane renders on the soft tone (body + head)",
+      !!nestedTone && nestedTone.childBg === "rgb(219, 241, 236)"
+        && nestedTone.childHead === "rgb(219, 241, 236)",
+      JSON.stringify(nestedTone),
+    );
     // A search result list is one two-space word row per hit: the exact
     // reading せいさくしゃ matches 制作者 alone, and that row carries the
     // word icon + keeps its kanji clickable — a `word 制作者` magnifier
@@ -1368,16 +1598,17 @@ async function main() {
       JSON.stringify(searchBox ? { badge: searchBox.badge, len: searchBox.text.length } : null),
     );
 
-    // the max box drives the caps end-to-end
-    await page.evaluate(() => { document.querySelector("#max").value = "3"; });
+    // the settings max box drives the caps end-to-end (it lives in the
+    // settings dialog since W14; submit reads its value live)
+    await page.evaluate(() => { document.querySelector("#settings-max").value = "3"; });
     // 食's page is already up from the token section — the dedupe would
     // suppress a re-request, so cap a fresh kanji page (水) instead.
     p = await runLookup(page, "kanji", "水");
     check("max=3 caps kanji compounds", p.text.includes("… and "), p.text.slice(0, 80));
-    await page.evaluate(() => { document.querySelector("#max").value = "5"; });
+    await page.evaluate(() => { document.querySelector("#settings-max").value = "5"; });
     p = await runLookup(page, "search", "eat");
     check("max=5 caps search sections", p.text.includes("… and "), p.text.slice(0, 80));
-    await page.evaluate(() => { document.querySelector("#max").value = "30"; });
+    await page.evaluate(() => { document.querySelector("#settings-max").value = "5"; });
 
     const paneCount = await waitFor(
       page,
@@ -1429,9 +1660,63 @@ async function main() {
     // W4: capture the top-down pane order too — the existing reload check only
     // compared counts, which let the restored tree render in the wrong order
     // (oldest on top) without failing.
+    // W14: flip auto-scroll + theme through the settings pane before the
+    // reload — they must survive alongside the rest of the state.
+    await page.evaluate(() => {
+      document.querySelector("#settings-gear").click();
+      const auto = document.querySelector("#settings-auto-scroll");
+      if (auto.checked) auto.click();
+      document.querySelector("#theme-dark").click();
+      document.querySelector("#settings-close").click();
+    });
+    // W16: in dark mode the ink is the soft warm white (#E8E6E3) with no
+    // text-shadow, and the TINT (tone-1) is capped toward black so the light
+    // ink stays readable on tinted surfaces: the bg slider's 0% lands on the
+    // dark base (black) and 100% on the 45%-strength shade (#4B635D) rather
+    // than the raw pastel. The pane head's tone-2 follows (#2C3839). The
+    // dialog is already closed, but dispatching input on its controls still
+    // applies the theme.
+    const w16Dark = await page.evaluate(() => {
+      const root = document.documentElement;
+      const setVal = (sel, v) => {
+        const el = document.querySelector(sel);
+        el.value = v;
+        el.dispatchEvent(new Event("input", { bubbles: true }));
+      };
+      const ink = getComputedStyle(root).getPropertyValue("--ink").trim();
+      const bodyShadow = getComputedStyle(document.body).textShadow;
+      setVal("#bg-mix", "0");
+      const tintZero = getComputedStyle(document.querySelector("#query")).backgroundColor;
+      setVal("#bg-mix", "100");
+      const tintFull = getComputedStyle(document.querySelector("#query")).backgroundColor;
+      // --tint-soft is a color-mix(): normalize the `color(srgb …)` form
+      // Chrome reports for computed backgrounds.
+      const normBg = (el) => {
+        const v = getComputedStyle(el).backgroundColor;
+        const m = /^rgba?\(\s*(\d+)\s*,\s*(\d+)\s*,\s*(\d+)/.exec(v);
+        if (m) return `rgb(${m[1]}, ${m[2]}, ${m[3]})`;
+        const c = /^color\(\s*srgb\s+([\d.]+)\s+([\d.]+)\s+([\d.]+)/.exec(v);
+        if (c) return `rgb(${Math.round(+c[1] * 255)}, ${Math.round(+c[2] * 255)}, ${Math.round(+c[3] * 255)})`;
+        return v;
+      };
+      const headBg = normBg(document.querySelector("#panes .pane .pane-head"));
+      setVal("#bg-mix", "100"); // restore so the reload persists the stock mix
+      return { ink, bodyShadow, tintZero, tintFull, headBg };
+    });
+    check(
+      "W16: dark mode caps the tint for readable light ink (0% = black, 100% = dark shade)",
+      w16Dark.ink.toLowerCase() === "#e8e6e3" && w16Dark.bodyShadow === "none"
+        && w16Dark.tintZero === "rgb(0, 0, 0)" && w16Dark.tintFull === "rgb(75, 99, 93)"
+        && w16Dark.headBg === "rgb(44, 56, 57)",
+      JSON.stringify(w16Dark),
+    );
     const beforeReload = await page.evaluate(() => ({
       query: document.querySelector("#query").value,
-      max: document.querySelector("#max").value,
+      max: document.querySelector("#settings-max").value,
+      theme: document.documentElement.dataset.theme ?? "",
+      autoScroll: (() => {
+        try { return JSON.parse(localStorage.getItem("omakase.state")).autoScrollEnabled; } catch { return null; }
+      })(),
       cmd: [...document.querySelectorAll("button[data-cmd]")]
         .find((b) => b.classList.contains("primary"))?.dataset.cmd,
       panes: document.querySelectorAll("#panes .pane").length,
@@ -1445,7 +1730,11 @@ async function main() {
         const s = document.querySelector("#status")?.textContent ?? "";
         return s.startsWith("ready") ? {
           query: document.querySelector("#query").value,
-          max: document.querySelector("#max").value,
+          max: document.querySelector("#settings-max").value,
+          theme: document.documentElement.dataset.theme ?? "",
+          autoScroll: (() => {
+            try { return JSON.parse(localStorage.getItem("omakase.state")).autoScrollEnabled; } catch { return null; }
+          })(),
           cmd: [...document.querySelectorAll("button[data-cmd]")]
             .find((b) => b.classList.contains("primary"))?.dataset.cmd,
           panes: document.querySelectorAll("#panes .pane").length,
@@ -1488,6 +1777,20 @@ async function main() {
       JSON.stringify(restored.topOrder) === JSON.stringify(beforeReload.topOrder),
       JSON.stringify({ before: beforeReload.topOrder, after: restored.topOrder }),
     );
+    // W14: the theme + auto-scroll choices persisted through the reload
+    check(
+      "W14: theme + auto-scroll survive a reload",
+      beforeReload.theme === "dark" && restored.theme === "dark" && restored.autoScroll === false,
+      JSON.stringify({ before: { theme: beforeReload.theme, autoScroll: beforeReload.autoScroll }, after: { theme: restored.theme, autoScroll: restored.autoScroll } }),
+    );
+    // restore the defaults so the probes below see a light, auto-scrolling app
+    await page.evaluate(() => {
+      document.querySelector("#settings-gear").click();
+      const auto = document.querySelector("#settings-auto-scroll");
+      if (!auto.checked) auto.click();
+      document.querySelector("#theme-light").click();
+      document.querySelector("#settings-close").click();
+    });
 
     // header trashbin: all results gone, button disables itself
     const cleared = await page.evaluate(() => {
@@ -1682,12 +1985,14 @@ async function main() {
       "feedback-section ready",
     );
     // Keyboard focus (Tab) emboldens like hover — but only controls with a
-    // real label. The app focuses the query input on ready, so blurring keeps
-    // the browser's tab start-point there and one Tab lands on the next
-    // top-level control (#max, a text input): it must keep its resting weight
-    // (no bolding of the user's typed text) and show the accent ring instead.
-    await page.evaluate(() => document.activeElement?.blur?.());
-    await page.keyboard.press("Tab");
+    // real label. The settings pane's text inputs (the per-list max and the
+    // color hex inputs) are text inputs: they must keep their resting weight
+    // (no bolding of the typed text) and show the accent ring instead. (The
+    // old inline #max box moved into the settings dialog in W14.)
+    await page.evaluate(() => {
+      document.querySelector("#settings-gear").click();
+      document.querySelector("#settings-max").focus();
+    });
     const focusState = await page.evaluate(() => {
       const el = document.activeElement;
       if (!el) return null;
@@ -1700,25 +2005,31 @@ async function main() {
       };
     });
     check(
-      "keyboard focus rings the max input without emboldening it",
-      focusState?.tag === "INPUT" && focusState.id === "max"
+      "keyboard focus rings the settings max input without emboldening it",
+      focusState?.tag === "INPUT" && focusState.id === "settings-max"
         && focusState.weight === "400"
         && focusState.outlineStyle === "solid" && focusState.outlineWidth === "2px"
         && focusState.outlineColor === focusState.accent,
       JSON.stringify(focusState),
     );
-    // The control after the inputs is a real command button — keyboard focus
-    // must embolden it exactly like hover does.
-    await page.keyboard.press("Tab");
-    const btnState = await page.evaluate(() => {
-      const el = document.activeElement;
-      return el
-        ? { tag: el.tagName, id: el.id ?? "", cmd: el.dataset?.cmd ?? "", weight: getComputedStyle(el).fontWeight }
-        : null;
-    });
+    // Back to the app: closing the dialog returns focus to the gear, and the
+    // next real command button after the inputs (query → kanji) is a button —
+    // keyboard focus must embolden it exactly like hover does.
+    await page.evaluate(() => document.querySelector("#settings-close").click());
+    let btnState = null;
+    for (let i = 0; i < 6 && btnState === null; i++) {
+      await page.keyboard.press("Tab");
+      btnState = await page.evaluate(() => {
+        const el = document.activeElement;
+        return el
+          ? { tag: el.tagName, id: el.id ?? "", cmd: el.dataset?.cmd ?? "", weight: getComputedStyle(el).fontWeight }
+          : null;
+      });
+      if (btnState && !(btnState.tag === "BUTTON" && btnState.cmd === "kanji")) btnState = null;
+    }
     check(
       "keyboard focus emboldens command buttons",
-      btnState?.tag === "BUTTON" && btnState.cmd === "kanji" && btnState.weight === "700",
+      !!btnState && btnState.cmd === "kanji" && btnState.weight === "700",
       JSON.stringify(btnState),
     );
     // The same focus must draw the shared accent ring — that is what makes
@@ -1756,15 +2067,15 @@ async function main() {
     );
     // The query input must show the identical ring — the same rule and shape
     // as every other control — replacing its old accent border-color change.
-    // Tab until it holds focus (clear → query → max → …); while blurred,
-    // record its rest border so we can assert it is untouched, and log where
-    // focus actually lands so a failure shows the real tab order.
+    // Tab until it holds focus (clear → settings gear → query → …); while
+    // blurred, record its rest border so we can assert it is untouched, and
+    // log where focus actually lands so a failure shows the real tab order.
     const inputRest = await page.evaluate(() => {
       const q = document.querySelector("#query");
       const s = getComputedStyle(q);
       return {
         borderColor: s.borderColor,
-        queryDisabled: q.disabled, maxDisabled: document.querySelector("#max").disabled,
+        queryDisabled: q.disabled, maxDisabled: document.querySelector("#settings-max").disabled,
         kanjiDisabled: document.querySelector('button[data-cmd="kanji"]').disabled,
         ariaBusy: document.querySelector("#lookup")?.getAttribute("aria-busy"),
       };
@@ -1803,8 +2114,8 @@ async function main() {
       JSON.stringify({ rest: inputRest, focused: inputRing, seen }),
     );
     // keyboard focus rings + emboldens the inline result tokens too: keep
-    // tabbing (clear → query → max → kanji → word → search → pane → …) until
-    // a kanji token inside a result pane is focused.
+    // tabbing (… → kanji → word → search → pane → …) until a kanji token
+    // inside a result pane is focused.
     let tokState = null;
     for (let i = 0; i < 40 && tokState === null; i++) {
       await page.keyboard.press("Tab");
@@ -1917,6 +2228,10 @@ async function main() {
         query: "",
         command: "search",
         max: 30,
+        theme: "pink", // corrupt: not a valid theme
+        bgColor: "not-a-color", // corrupt: not a hex
+        bgMix: "huge", // corrupt: not a number
+        accentColor: 42, // corrupt: not a string
         resultTree: [{ id: "x" }], // missing children/command/query/text/error/collapsed/max
         collapsedStates: { x: "not-a-boolean" }, // non-boolean collapsed value
       }));
@@ -1930,6 +2245,9 @@ async function main() {
           ? {
             panes: document.querySelectorAll("#panes .pane").length,
             query: document.querySelector("#query").value,
+            theme: document.documentElement.dataset.theme ?? "",
+            tint: document.documentElement.style.getPropertyValue("--tint").trim(),
+            accent: document.documentElement.style.getPropertyValue("--accent").trim(),
           }
           : null;
       }),
@@ -1939,6 +2257,14 @@ async function main() {
     check(
       "corrupt state: app boots ready with no panes (bad tree dropped, no crash)",
       !!corruptBoot && corruptBoot.panes === 0,
+      JSON.stringify(corruptBoot),
+    );
+    // W14: the corrupt settings values fell back to valid defaults — the
+    // theme is a real light/dark value and the applied colors are hex.
+    check(
+      "W14: corrupt settings restore as defaults without crashing",
+      !!corruptBoot && ["light", "dark"].includes(corruptBoot.theme)
+        && /^#[0-9a-f]{6}$/i.test(corruptBoot.tint) && /^#[0-9a-f]{6}$/i.test(corruptBoot.accent),
       JSON.stringify(corruptBoot),
     );
     // The app is fully usable again: a fresh lookup renders normally — the

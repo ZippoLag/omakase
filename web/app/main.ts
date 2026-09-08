@@ -52,6 +52,7 @@ import { OP_LADDERS } from "./worker-api.js";
 import type { Command, StrokePage, WorkerMessage, WorkerRequest } from "./worker-api.js";
 import { KANJI_RE, kanjiQueries, kanjiQuery, parseMax, wordTokens } from "./query.js";
 import { strokeWidgetFigure } from "./stroke-widget.js";
+import { DEFAULT_ACCENT, DEFAULT_BG, DEFAULT_BG_MIX, effectiveTint, isHexColor, type Theme } from "./theme.js";
 import { VERSION, VERSION_FULL } from "../../src/version.js";
 import { cacheManager } from "./cache.js";
 import {
@@ -80,7 +81,8 @@ import {
 // ---- DOM -------------------------------------------------------------------
 const form = document.querySelector<HTMLFormElement>("#lookup")!;
 const input = document.querySelector<HTMLInputElement>("#query")!;
-const maxInput = document.querySelector<HTMLInputElement>("#max")!;
+/** The per-list row cap now lives in the settings pane (W14). */
+const maxInput = document.querySelector<HTMLInputElement>("#settings-max")!;
 const buttons = document.querySelectorAll<HTMLButtonElement>("button[data-cmd]");
 const status = document.querySelector<HTMLDivElement>("#status")!;
 /** The status line's message text (the % readout below is a sibling span). */
@@ -94,8 +96,18 @@ const panes = document.querySelector<HTMLDivElement>("#panes")!;
  * buttons (never nested inside one), overlaid on the busy button. */
 const cancelOp = document.querySelector<HTMLButtonElement>("#cancel-op")!;
 
-// Auto-scroll toggle element (will be added to header)
-let autoScrollToggle: HTMLButtonElement | null = null;
+// ---- settings pane (W14) ---------------------------------------------------
+const settingsDialog = document.querySelector<HTMLDialogElement>("#settings")!;
+const settingsGear = document.querySelector<HTMLButtonElement>("#settings-gear")!;
+const settingsClose = document.querySelector<HTMLButtonElement>("#settings-close")!;
+const settingsAutoScroll = document.querySelector<HTMLInputElement>("#settings-auto-scroll")!;
+const themeLightBtn = document.querySelector<HTMLButtonElement>("#theme-light")!;
+const themeDarkBtn = document.querySelector<HTMLButtonElement>("#theme-dark")!;
+const bgColorInput = document.querySelector<HTMLInputElement>("#bg-color")!;
+const bgMixInput = document.querySelector<HTMLInputElement>("#bg-mix")!;
+const accentColorInput = document.querySelector<HTMLInputElement>("#accent-color")!;
+const bgPreview = document.querySelector<HTMLSpanElement>("#bg-preview")!;
+const accentPreview = document.querySelector<HTMLSpanElement>("#accent-preview")!;
 
 // Version badge — the app stamp at boot; the full stamp + dictionary build
 // (from DB meta) once the worker reports ready.
@@ -139,6 +151,18 @@ let resultTree: ResultNode[] = [];
 /** Auto-scroll preference */
 let autoScrollEnabled = true;
 
+// ---- settings state --------------------------------------------------------
+/** Theme: light or dark. Starts from the system preference; once the user
+ * picks, the choice persists (omakase.state). */
+const systemDark = typeof matchMedia === "function"
+  && matchMedia("(prefers-color-scheme: dark)").matches;
+let theme: Theme = systemDark ? "dark" : "light";
+/** Configurable background color + intensity, and accent color — the
+ * settings-pane pickers; applyTheme turns them into CSS custom properties. */
+let bgColor = DEFAULT_BG;
+let bgMix = DEFAULT_BG_MIX;
+let accentColor = DEFAULT_ACCENT;
+
 // ---- per-operation streaming + progress -------------------------------------
 /** Skeleton panes keyed by the in-flight request id (created at drain). */
 const paneByOpId = new Map<number, HTMLElement>();
@@ -175,6 +199,10 @@ interface StoredState {
   max?: unknown;
   panes?: unknown;
   autoScrollEnabled?: unknown;
+  theme?: unknown;
+  bgColor?: unknown;
+  bgMix?: unknown;
+  accentColor?: unknown;
   collapsedStates?: unknown;
   resultTree?: unknown;
 }
@@ -206,6 +234,10 @@ function saveState(): void {
         command: lastCommand,
         max: parseMax(maxInput.value),
         autoScrollEnabled,
+        theme,
+        bgColor,
+        bgMix,
+        accentColor,
         resultTree: resultTree,
         collapsedStates
       }),
@@ -442,6 +474,9 @@ function addSkeletonPane(item: Pending): void {
   } else {
     panes.prepend(pane);
   }
+  // The tone follows the pane's real nesting depth (a token click can nest
+  // under a pane at any depth) — the class must be set after insertion.
+  pane.classList.add(paneToneClass(pane));
   
   // Conditional auto-scroll
   if (autoScrollEnabled) {
@@ -639,6 +674,8 @@ function addCancelledPane(command: string, query: string, parentId: string | nul
   } else {
     panes.prepend(pane);
   }
+  // Tone by real nesting depth (cancelled panes can nest under any pane).
+  pane.classList.add(paneToneClass(pane));
   
   if (autoScrollEnabled) {
     pane.scrollIntoView({ block: "start", behavior: "smooth" });
@@ -1108,6 +1145,14 @@ const TRASH_ICON_SVG =
   'fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round">' +
   '<path d="M3 6h18"/><path d="M8 6V4h8v2"/><path d="m6 6 1 14h10l1-14"/></svg>';
 
+/** Gear glyph for the settings button (inline SVG, monochrome). */
+const GEAR_ICON_SVG =
+  '<svg viewBox="0 0 24 24" width="14" height="14" aria-hidden="true" ' +
+  'fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">' +
+  '<circle cx="12" cy="12" r="3"/>' +
+  '<path d="M19.4 15a1.65 1.65 0 0 0 .33 1.82l.06.06a2 2 0 1 1-2.83 2.83l-.06-.06a1.65 1.65 0 0 0-1.82-.33 1.65 1.65 0 0 0-1 1.51V21a2 2 0 1 1-4 0v-.09A1.65 1.65 0 0 0 9 19.4a1.65 1.65 0 0 0-1.82.33l-.06.06a2 2 0 1 1-2.83-2.83l.06-.06a1.65 1.65 0 0 0 .33-1.82 1.65 1.65 0 0 0-1.51-1H3a2 2 0 1 1 0-4h.09A1.65 1.65 0 0 0 4.6 9a1.65 1.65 0 0 0-.33-1.82l-.06-.06a2 2 0 1 1 2.83-2.83l.06.06a1.65 1.65 0 0 0 1.82.33H9a1.65 1.65 0 0 0 1-1.51V3a2 2 0 1 1 4 0v.09a1.65 1.65 0 0 0 1 1.51 1.65 1.65 0 0 0 1.82-.33l.06-.06a2 2 0 1 1 2.83 2.83l-.06.06a1.65 1.65 0 0 0-.33 1.82V9a1.65 1.65 0 0 0 1.51 1H21a2 2 0 1 1 0 4h-.09a1.65 1.65 0 0 0-1.51 1z"/>' +
+  '</svg>';
+
 /** Chevron icons for collapse/expand toggles */
 const CHEVRON_DOWN_SVG = '<svg viewBox="0 0 24 24" width="12" height="12" aria-hidden="true" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round"><path d="M6 9l6 6 6-6"/></svg>';
 const CHEVRON_RIGHT_SVG = '<svg viewBox="0 0 24 24" width="12" height="12" aria-hidden="true" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round"><path d="M9 18l6-6-6-6"/></svg>';
@@ -1235,9 +1280,53 @@ function deleteResult(nodeId: string): void {
 /**
  * Render a single result node as DOM
  */
+/**
+ * The two alternating surface tones of the result tree: even nesting depth
+ * (0 = top level) takes the tint (tone-1), odd depth the softer shade
+ * (tone-2) — see .pane.tone-soft in style.css. The class is also used by
+ * the e2e to pin the alternation.
+ */
+function toneClass(depth: number): "tone-tint" | "tone-soft" {
+  return depth % 2 === 0 ? "tone-tint" : "tone-soft";
+}
+
+/**
+ * Nesting depth of a node in the result tree (0 = top level), walked up via
+ * parentId links. Must be computed from the tree, not the DOM: during a full
+ * rebuild the ancestor panes are not in the document yet when a child is
+ * rendered, so a DOM walk cannot measure depth for recursive children. Every
+ * renderResultNode caller adds the node to resultTree first.
+ */
+function nodeDepth(node: ResultNode): number {
+  let depth = 0;
+  let parentId = node.parentId;
+  while (parentId) {
+    depth++;
+    parentId = findResultById(resultTree, parentId)?.parentId ?? null;
+  }
+  return depth;
+}
+
+/**
+ * Nesting depth of a pane already in the DOM (0 = top level), counted as its
+ * ancestor .pane elements. Used for panes built outside the recursive
+ * render — streaming skeletons and cancelled panes — which insert under an
+ * existing pane at any depth.
+ */
+function paneToneClass(pane: HTMLElement): "tone-tint" | "tone-soft" {
+  let depth = 0;
+  let el = pane.parentElement;
+  while (el) {
+    if (el.classList.contains("pane")) depth++;
+    el = el.parentElement;
+  }
+  return toneClass(depth);
+}
+
 function renderResultNode(node: ResultNode): HTMLElement {
   const pane = document.createElement("section");
   pane.className = `pane${node.parentId ? ' nested' : ''}${node.collapsed ? ' collapsed' : ''}${node.error ? ' error' : ''}`;
+  pane.classList.add(toneClass(nodeDepth(node)));
   pane.dataset.nodeId = node.id;
 
   // Header
@@ -1284,7 +1373,7 @@ function renderResultNode(node: ResultNode): HTMLElement {
   const childrenContainer = document.createElement("div");
   childrenContainer.className = `pane-children${node.collapsed ? ' hidden' : ''}`;
   
-  // Render children recursively
+  // Render children recursively (each child derives its own depth → tone)
   for (const child of node.children) {
     const childPane = renderResultNode(child);
     childrenContainer.appendChild(childPane);
@@ -1408,6 +1497,16 @@ function restoreState(): void {
   // Load auto-scroll preference (default to true)
   autoScrollEnabled = stored.autoScrollEnabled !== false;
   
+  // Settings, validated per the W8 discipline: a corrupt/foreign value falls
+  // back to its default and is never re-persisted (saveState only writes
+  // what the UI holds). A stored max below 1 / non-integer falls back via the
+  // existing gate below.
+  if (stored.theme === "light" || stored.theme === "dark") theme = stored.theme;
+  if (isHexColor(stored.bgColor)) bgColor = stored.bgColor;
+  const mix = Number(stored.bgMix);
+  if (Number.isFinite(mix)) bgMix = Math.min(100, Math.max(0, Math.round(mix)));
+  if (isHexColor(stored.accentColor)) accentColor = stored.accentColor;
+  
   // Handle legacy format (v1) - flat panes
   if (stored.v === 1 && Array.isArray(stored.panes)) {
     const legacyPanes = stored.panes as LegacyPaneRecord[];
@@ -1450,41 +1549,55 @@ function restoreState(): void {
   updateClearButton();
 }
 
-// ---- Auto-scroll toggle -----------------------------------------------------
+// ---- settings ---------------------------------------------------------------
 /**
- * Initialize the auto-scroll toggle in the header
+ * Apply the resolved theme + colors to the document: data-theme drives the
+ * dark CSS variables; --tint (tone-1: the configurable color, capped in dark
+ * mode via effectiveTint) and --accent are set inline from the settings
+ * pickers. --bg stays the stylesheet's neutral tint-less tone — the app
+ * background — so it is NOT overridden here; the meta theme-color follows it
+ * so the browser chrome matches the page rather than the tinted surfaces.
  */
-function initializeAutoScrollToggle(): void {
-  autoScrollToggle = document.createElement("button");
-  autoScrollToggle.id = "auto-scroll-toggle";
-  autoScrollToggle.className = "header-toggle";
-  updateAutoScrollToggleText();
-  autoScrollToggle.title = 'Toggle auto-scroll for new results';
-  autoScrollToggle.setAttribute('aria-label', autoScrollEnabled ? 'Disable auto-scroll' : 'Enable auto-scroll');
-  autoScrollToggle.addEventListener('click', () => {
-    autoScrollEnabled = !autoScrollEnabled;
-    updateAutoScrollToggleText();
-    if (autoScrollToggle) {
-      autoScrollToggle.setAttribute('aria-label', autoScrollEnabled ? 'Disable auto-scroll' : 'Enable auto-scroll');
-    }
-    localStorage.setItem('omakase.autoScroll', String(autoScrollEnabled));
-    saveState();
-  });
-  
-  // Insert in header - before the clear button
-  const header = document.querySelector('header');
-  if (header && clearBtn.parentNode === header) {
-    header.insertBefore(autoScrollToggle, clearBtn);
+function applyTheme(): void {
+  document.documentElement.dataset.theme = theme;
+  const tint = effectiveTint(theme, bgColor, bgMix);
+  document.documentElement.style.setProperty("--tint", tint);
+  document.documentElement.style.setProperty("--accent", accentColor);
+  const meta = document.querySelector<HTMLMetaElement>('meta[name="theme-color"]');
+  if (meta) {
+    meta.content = getComputedStyle(document.documentElement).getPropertyValue("--bg").trim();
   }
 }
 
-/**
- * Update the auto-scroll toggle button text
- */
-function updateAutoScrollToggleText(): void {
-  if (autoScrollToggle) {
-    autoScrollToggle.textContent = autoScrollEnabled ? 'Auto-scroll: ON' : 'Auto-scroll: OFF';
-  }
+/** Sync the settings pane's controls from the current state (called when the
+ * dialog opens, and from the theme buttons). */
+function syncSettingsControls(): void {
+  settingsAutoScroll.checked = autoScrollEnabled;
+  themeLightBtn.classList.toggle("active", theme === "light");
+  themeLightBtn.setAttribute("aria-pressed", String(theme === "light"));
+  themeDarkBtn.classList.toggle("active", theme === "dark");
+  themeDarkBtn.setAttribute("aria-pressed", String(theme === "dark"));
+  bgColorInput.value = bgColor;
+  bgMixInput.value = String(bgMix);
+  accentColorInput.value = accentColor;
+  bgPreview.style.background = bgColor;
+  accentPreview.style.background = accentColor;
+}
+
+/** Persist + apply a theme choice (the active segmented button is synced). */
+function setTheme(t: Theme): void {
+  theme = t;
+  syncSettingsControls();
+  applyTheme();
+  saveState();
+}
+
+/** Background intensity slider: clamp to 0–100. */
+function setBgMix(value: string): void {
+  const v = Number(value);
+  bgMix = Number.isFinite(v) ? Math.min(100, Math.max(0, Math.round(v))) : DEFAULT_BG_MIX;
+  applyTheme();
+  saveState();
 }
 
 // ---- controls --------------------------------------------------------------
@@ -1495,18 +1608,45 @@ function setControlsDisabled(v: boolean): void {
 }
 
 // ---- events ----------------------------------------------------------------
-// Initialize auto-scroll toggle on startup
-initializeAutoScrollToggle();
-
-// Load auto-scroll preference from localStorage if available
-try {
-  const savedAutoScroll = localStorage.getItem('omakase.autoScroll');
-  if (savedAutoScroll !== null) {
-    autoScrollEnabled = savedAutoScroll !== 'false';
+// Settings pane: the gear opens the dialog (controls synced from state), the
+// ✕ closes it. Every control persists immediately through saveState — these
+// are pane-level preferences, not keystroke traffic, so no debounce (W9).
+settingsGear.addEventListener("click", () => {
+  syncSettingsControls();
+  if (!settingsDialog.open) settingsDialog.showModal();
+});
+settingsClose.addEventListener("click", () => settingsDialog.close());
+settingsAutoScroll.addEventListener("change", () => {
+  autoScrollEnabled = settingsAutoScroll.checked;
+  saveState();
+});
+maxInput.addEventListener("input", saveState);
+themeLightBtn.addEventListener("click", () => setTheme("light"));
+themeDarkBtn.addEventListener("click", () => setTheme("dark"));
+bgColorInput.addEventListener("input", () => {
+  if (isHexColor(bgColorInput.value)) {
+    bgColorInput.classList.remove("invalid");
+    bgColor = bgColorInput.value;
+    bgPreview.style.background = bgColor;
+    applyTheme();
+    saveState();
+  } else {
+    // malformed: mark the input, keep the last valid color applied
+    bgColorInput.classList.add("invalid");
   }
-} catch {
-  // localStorage not available
-}
+});
+accentColorInput.addEventListener("input", () => {
+  if (isHexColor(accentColorInput.value)) {
+    accentColorInput.classList.remove("invalid");
+    accentColor = accentColorInput.value;
+    accentPreview.style.background = accentColor;
+    applyTheme();
+    saveState();
+  } else {
+    accentColorInput.classList.add("invalid");
+  }
+});
+bgMixInput.addEventListener("input", () => setBgMix(bgMixInput.value));
 
 for (const b of buttons) {
   b.addEventListener("click", () => {
@@ -1520,7 +1660,6 @@ form.addEventListener("submit", (ev) => {
   submit(lastCommand);
 });
 input.addEventListener("input", saveStateSoon);
-maxInput.addEventListener("input", saveStateSoon);
 clearBtn.addEventListener("click", clearAll);
 cancelOp.addEventListener("click", cancelCurrentOperation);
 
@@ -1533,7 +1672,9 @@ if ("serviceWorker" in navigator && location.protocol !== "file:") {
   });
 }
 clearBtn.innerHTML = TRASH_ICON_SVG;
-restoreState(); // input, max, last command and pane history from localStorage
+settingsGear.innerHTML = GEAR_ICON_SVG;
+restoreState(); // input, max, last command, pane history and settings from localStorage
+applyTheme(); // apply the restored (or default) theme + colors: data-theme, --tint, --accent
 setControlsDisabled(true);
 setStatus("starting engine…", "busy");
 // The divider starts as a dot: from here the worker's boot milestones drive

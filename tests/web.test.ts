@@ -35,6 +35,18 @@ import {
   unregisterResult,
 } from "../web/app/tree.js";
 import { kanjiQueries, kanjiQuery, parseMax, wordTokens } from "../web/app/query.js";
+import {
+  DARK_TINT_SCALE,
+  DEFAULT_ACCENT,
+  DEFAULT_BG,
+  DEFAULT_BG_MIX,
+  DARK_BASE,
+  LIGHT_BASE,
+  effectiveBg,
+  effectiveTint,
+  isHexColor,
+  mixHex,
+} from "../web/app/theme.js";
 
 // node:sqlite only exists unflagged on Node ≥22.13 (absent on Node 20, behind
 // --experimental-sqlite on 22.5–22.12). The dbLooksHealthy tests below need a
@@ -95,14 +107,75 @@ test("query: kanjiQueries stays a single query when the box has no kanji", () =>
   assert.deepEqual(kanjiQueries("たべ"), ["たべ"]);
 });
 
-test("query: parseMax keeps a positive integer, falls back to 30 otherwise", () => {
+test("query: parseMax keeps a positive integer, falls back to 5 otherwise", () => {
   assert.equal(parseMax("5"), 5);
   assert.equal(parseMax("30"), 30);
-  assert.equal(parseMax(""), 30); // Number("") = 0
-  assert.equal(parseMax("3.5"), 30);
-  assert.equal(parseMax("0"), 30);
-  assert.equal(parseMax("-1"), 30);
-  assert.equal(parseMax("abc"), 30);
+  assert.equal(parseMax(""), 5); // Number("") = 0
+  assert.equal(parseMax("3.5"), 5);
+  assert.equal(parseMax("0"), 5);
+  assert.equal(parseMax("-1"), 5);
+  assert.equal(parseMax("abc"), 5);
+});
+
+// ---- theme.ts (W14 settings colors) --------------------------------------
+test("theme: isHexColor accepts 6-digit hex and rejects everything else", () => {
+  assert.equal(isHexColor("#7FFFD4"), true);
+  assert.equal(isHexColor("#1a2B3c"), true);
+  assert.equal(isHexColor("#fff"), false); // 3-digit shorthand rejected
+  assert.equal(isHexColor("7FFFD4"), false); // no #
+  assert.equal(isHexColor("#7FFFD"), false); // too short
+  assert.equal(isHexColor("#7FFFD40"), false); // too long
+  assert.equal(isHexColor("#GGGGGG"), false); // non-hex digits
+  assert.equal(isHexColor(42), false);
+  assert.equal(isHexColor(null), false);
+});
+
+test("theme: mixHex lerps linearly between base and picked", () => {
+  assert.equal(mixHex(LIGHT_BASE, "#000000", 0), "#ffffff");
+  assert.equal(mixHex(LIGHT_BASE, "#000000", 1), "#000000");
+  assert.equal(mixHex(LIGHT_BASE, "#000000", 0.5), "#808080");
+  assert.equal(mixHex("#000000", "#ffffff", 0.25), "#404040");
+  // t clamps outside 0..1
+  assert.equal(mixHex(LIGHT_BASE, "#000000", 2), "#000000");
+  assert.equal(mixHex(LIGHT_BASE, "#000000", -1), "#ffffff");
+});
+
+test("theme: effectiveBg blends the theme base toward the picked color", () => {
+  // default: muted aquamarine at 100% intensity IS the tint surface color
+  assert.equal(effectiveBg("light", DEFAULT_BG, DEFAULT_BG_MIX), "#a6ddcf");
+  // 0% = the plain theme base: white in light, black in dark (mixHex emits
+  // lowercase hex)
+  assert.equal(effectiveBg("light", DEFAULT_BG, 0), "#ffffff");
+  assert.equal(effectiveBg("dark", DEFAULT_BG, 0), "#000000");
+  // midpoint mixes white/muted aquamarine
+  assert.equal(effectiveBg("light", DEFAULT_BG, 50), mixHex(LIGHT_BASE, DEFAULT_BG, 0.5));
+  // a non-hex picked color falls back to the theme base
+  assert.equal(effectiveBg("dark", "not-a-color", 100), DARK_BASE);
+  // mix clamps to 0..100
+  assert.equal(effectiveBg("light", "#000000", 250), "#000000");
+});
+
+test("theme: effectiveTint equals effectiveBg in light, capped toward black in dark", () => {
+  // light: the tint IS the effective bg (input/buttons/even-depth panes take it)
+  assert.equal(effectiveTint("light", DEFAULT_BG, 100), effectiveBg("light", DEFAULT_BG, 100));
+  assert.equal(effectiveTint("light", DEFAULT_BG, 100), "#a6ddcf");
+  assert.equal(effectiveTint("light", DEFAULT_BG, 0), "#ffffff");
+  // dark: scaled toward black so the light ink stays readable on tinted
+  // surfaces — at 100% only DARK_TINT_SCALE of the picked color survives
+  assert.equal(effectiveTint("dark", DEFAULT_BG, 0), "#000000");
+  assert.equal(
+    effectiveTint("dark", DEFAULT_BG, 100),
+    mixHex(DEFAULT_BG, DARK_BASE, 1 - DARK_TINT_SCALE),
+  );
+  // a non-hex picked color still falls back to the theme base
+  assert.equal(effectiveTint("dark", "not-a-color", 100), DARK_BASE);
+  assert.equal(effectiveTint("light", "not-a-color", 100), LIGHT_BASE);
+});
+
+test("theme: defaults are the muted aquamarine bg, orange accent, 100 mix", () => {
+  assert.equal(DEFAULT_BG, "#A6DDCF");
+  assert.equal(DEFAULT_ACCENT, "#EF6A5E");
+  assert.equal(DEFAULT_BG_MIX, 100);
 });
 
 // =============================================================================
@@ -250,7 +323,7 @@ test("tree: migrateToHierarchical lifts legacy flat panes to top-level nodes", (
   assert.equal(tree[0]!.command, "word");
   assert.equal(tree[0]!.query, "水");
   assert.equal(tree[0]!.parentId, null);
-  assert.equal(tree[0]!.max, 30);
+  assert.equal(tree[0]!.max, 5); // legacy panes get the default max (30 → 5 since W14)
   assert.equal(tree[1]!.error, true);
   assert.deepEqual(tree[1]!.strokes, [{ literal: "食", svgFile: "098df.svg" }]);
 });

@@ -31,6 +31,7 @@ const PRECACHE = [
   "./web/app/tree.js",
   "./web/app/cache.js",
   "./web/app/stroke-widget.js",
+  "./web/app/theme.js",
   // compiled shared query/render layer
   "./src/lookup.js",
   "./src/format.js",

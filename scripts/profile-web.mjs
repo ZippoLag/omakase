@@ -89,7 +89,8 @@ async function timedLookup(page, cmd, query, max) {
   await page.evaluate(([c, q, m]) => {
     const input = document.querySelector("#query");
     input.value = q;
-    if (m && m !== 30) document.querySelector("#max").value = String(m);
+    // the per-list cap lives in the settings pane since W14; default is 5
+    if (m && m !== 5) document.querySelector("#settings-max").value = String(m);
     document.querySelector(`button[data-cmd="${c}"]`).click();
   }, [cmd, query, max]);
   try {

@@ -45,10 +45,10 @@ export function kanjiQueries(raw: string): string[] {
 
 /**
  * Per-list row cap from the "max" input's value: a positive integer, else
- * the default (30). Non-integer / empty / out-of-range values fall back.
+ * the default (5). Non-integer / empty / out-of-range values fall back.
  * Pure — the caller passes the input's value (`parseMax(maxInput.value)`).
  */
 export function parseMax(value: string): number {
   const v = Number(value);
-  return Number.isInteger(v) && v >= 1 ? v : 30;
+  return Number.isInteger(v) && v >= 1 ? v : 5;
 }

@@ -80,7 +80,7 @@ export function createResultNode(
   error: boolean,
   strokes: StrokePage[] | undefined,
   parentId: string | null = null,
-  max: number = 30
+  max: number = 5
 ): ResultNode {
   return {
     id: generateNodeId(),
@@ -105,7 +105,7 @@ export function createErrorResultNode(
   query: string,
   errorMessage: string,
   parentId: string | null = null,
-  max: number = 30
+  max: number = 5
 ): ResultNode {
   return createResultNode(command, query, errorMessage, true, undefined, parentId, max);
 }
@@ -329,7 +329,7 @@ export function migrateToHierarchical(panes: LegacyPaneRecord[]): ResultNode[] {
     pane.error,
     pane.strokes,
     null, // top-level
-    30 // default max
+    5 // default max
   ));
 }
 
