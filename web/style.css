@@ -69,6 +69,16 @@ body {
   background: var(--bg);
   color: var(--ink);
   font: 16px/1.45 var(--sans);
+  /* W15: flex column so #panes can grow and the footer pins to the screen
+     bottom on short pages (including zero panes); when content is taller the
+     page scrolls and the footer stays in flow after the last pane. min-height
+     is 100vh with the dvh override below (iOS Safari < 15.4 lacks dvh). */
+  display: flex;
+  flex-direction: column;
+  min-height: 100vh;
+}
+@supports (height: 1dvh) {
+  body { min-height: 100dvh; }
 }
 
 /* ---- header + status ------------------------------------------------------ */
@@ -336,10 +346,13 @@ button.busy {
 #panes {
   max-width: 860px;
   margin: 0 auto;
-  padding: 10px 14px calc(40px + env(safe-area-inset-bottom));
+  /* W15: the bottom spacing moved to the footer (it owns the screen-bottom
+     padding and its safe-area inset) — #panes only keeps the 10px gutter. */
+  padding: 10px 14px 10px;
   display: flex;
   flex-direction: column;
   gap: 10px;
+  flex: 1 0 auto; /* grow to pin the footer to the viewport bottom (W15) */
 }
 
 .pane {
@@ -718,12 +731,24 @@ footer {
 }
 
 .credits-panel {
-  position: absolute;
-  right: 0;
-  bottom: calc(100% + 8px);
-  width: min(560px, calc(100vw - 28px));
-  max-height: 70vh;
+  /* W15: fixed and centered in the viewport — the panel must fit on any
+     screen no matter where the footer sits or how far the page is scrolled.
+     Centered with vw/vh (not %): under Chrome's mobile emulation the fixed
+     containing block resolves % against the emulated "inner" viewport while
+     vw/vh track the layout viewport, which would push the panel off the
+     visible screen; on real devices the two viewports are identical, so vw/vh
+     center the same way everywhere. The dvh-dependent top/max-height fall
+     back to vh first (iOS Safari < 15.4 lacks dvh; the @supports block below
+     overrides). transform centering with overflow-y: auto is safe — the
+     panel is its own scroll container. */
+  position: fixed;
+  left: 50vw;
+  top: 50vh;
+  transform: translate(-50%, -50%);
+  width: min(560px, calc(100vw - 32px));
+  max-height: min(70vh, calc(100vh - 64px));
   overflow-y: auto;
+  z-index: 30; /* above the sticky control row */
   padding: 14px 16px;
   background: var(--bg-pane);
   border: 1px solid var(--line);
@@ -735,12 +760,18 @@ footer {
   font-size: 12px;
   line-height: 1.55;
 }
+@supports (height: 1dvh) {
+  .credits-panel { top: 50dvh; max-height: min(70vh, calc(100dvh - 64px)); }
+}
 
 .credits-panel p { margin: 0 0 10px; }
 .credits-panel p:last-child { margin-bottom: 0; }
 .credits-panel ul { margin: 0 0 10px; padding-left: 18px; }
 .credits-panel li { margin-bottom: 6px; }
-.credits-panel a { color: var(--accent); }
+.credits-panel a {
+  color: var(--accent);
+  overflow-wrap: anywhere; /* long URLs wrap instead of overflowing (W15) */
+}
 
 /* ---- interactive hover / keyboard focus ----------------------------------- */
 /* Every clickable element responds the same way when hovered (fine pointers)

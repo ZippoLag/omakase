@@ -2272,6 +2272,143 @@ async function main() {
     p = await runLookup(page, "word", "食べる");
     check("corrupt state: a fresh lookup recovers the app", p.text.includes("1. to eat"), `err=${p.isError}`);
 
+    // ---- W15: footer anchoring + credits dialog fits the screen -----------
+    // body is a flex column (min-height 100dvh) and #panes flex-grows: with
+    // no panes the footer pins to the viewport bottom; with a full page of
+    // panes it sits in flow right after the last one. The credits panel is
+    // fixed and centered, viewport-constrained wherever the page is scrolled,
+    // and its body scrolls (long URLs wrap).
+    // Viewport comparisons use documentElement.clientHeight/clientWidth (the
+    // layout viewport the CSS resolves 100dvh/100vw against): under this
+    // suite's mobile emulation window.innerHeight reports the emulated
+    // visual-viewport height (1119) while the CSS viewport is 900.
+    // 1. Fresh state: clear all panes → the footer bottom hugs the viewport.
+    await page.evaluate(() => {
+      window.scrollTo(0, 0);
+      document.querySelector("#clear").click();
+    });
+    const w15Anchor = await waitFor(
+      page,
+      () => page.evaluate(() => {
+        const f = document.querySelector("footer").getBoundingClientRect();
+        const vh = document.documentElement.clientHeight;
+        return Math.abs(f.bottom - vh) <= 2 ? {
+          bottom: Math.round(f.bottom),
+          viewportH: vh,
+          panes: document.querySelectorAll("#panes .pane").length,
+        } : null;
+      }),
+      10000,
+      "footer anchored with no panes",
+    );
+    check(
+      "W15: with no panes the footer is pinned to the viewport bottom",
+      !!w15Anchor && w15Anchor.panes === 0,
+      JSON.stringify(w15Anchor),
+    );
+    // 2. A full page: one word box with many words lands one pane each — 18
+    // panes overflow the 900px viewport, and the footer sits in flow below
+    // the last pane (document coordinates, so scroll position is irrelevant).
+    const W15_WORDS = "水 食事 食べる 食べ物 制作者 学校 学生 先生 家族 時間 今日 明日 何 行く 見る 言う 聞く 話す";
+    await page.evaluate((w) => {
+      const input = document.querySelector("#query");
+      input.value = w;
+      document.querySelector('button[data-cmd="word"]').click();
+    }, W15_WORDS);
+    const w15Full = await waitFor(
+      page,
+      () => page.evaluate(() => {
+        if (document.querySelector("#lookup").hasAttribute("aria-busy")) return null;
+        const panes = [...document.querySelectorAll("#panes .pane")];
+        if (panes.length < 15) return null;
+        const last = panes[panes.length - 1].getBoundingClientRect();
+        const footer = document.querySelector("footer").getBoundingClientRect();
+        return {
+          count: panes.length,
+          scrollHeight: document.scrollingElement.scrollHeight,
+          viewportH: document.documentElement.clientHeight,
+          footerTop: footer.top + window.scrollY,
+          lastPaneBottom: last.bottom + window.scrollY,
+        };
+      }),
+      120000,
+      "15+ panes",
+    );
+    check(
+      "W15: a full page scrolls and the footer is pushed below the last pane",
+      !!w15Full && w15Full.count >= 15 && w15Full.scrollHeight > w15Full.viewportH
+        && w15Full.footerTop >= w15Full.lastPaneBottom,
+      JSON.stringify(w15Full && {
+        count: w15Full.count,
+        scrollHeight: w15Full.scrollHeight,
+        footerTop: Math.round(w15Full.footerTop),
+        lastPaneBottom: Math.round(w15Full.lastPaneBottom),
+      }),
+    );
+    // 3. Credits: the i disclosure opens a fixed panel fully inside the
+    // viewport at scroll-top AND at the page bottom; the panel's body scrolls
+    // to its end with the last link reachable.
+    const w15Credits = await page.evaluate(() => {
+      window.scrollTo(0, 0);
+      document.querySelector(".credits summary").click();
+      const panel = document.querySelector(".credits-panel");
+      const r = panel.getBoundingClientRect();
+      const vw = document.documentElement.clientWidth;
+      const vh = document.documentElement.clientHeight;
+      return {
+        open: document.querySelector(".credits").open,
+        inside: r.left >= 0 && r.right <= vw && r.top >= 0 && r.bottom <= vh,
+        rect: { l: Math.round(r.left), r: Math.round(r.right), t: Math.round(r.top), b: Math.round(r.bottom) },
+        viewportW: vw,
+        viewportH: vh,
+      };
+    });
+    check(
+      "W15: credits panel fits the viewport at scroll-top",
+      !!w15Credits && w15Credits.open && w15Credits.inside,
+      JSON.stringify(w15Credits),
+    );
+    const w15CreditsScrolled = await page.evaluate(() => {
+      window.scrollTo(0, document.scrollingElement.scrollHeight);
+      const panel = document.querySelector(".credits-panel");
+      const r = panel.getBoundingClientRect();
+      const vw = document.documentElement.clientWidth;
+      const vh = document.documentElement.clientHeight;
+      return {
+        inside: r.left >= 0 && r.right <= vw && r.top >= 0 && r.bottom <= vh,
+        rect: { l: Math.round(r.left), r: Math.round(r.right), t: Math.round(r.top), b: Math.round(r.bottom) },
+        viewportH: vh,
+      };
+    });
+    check(
+      "W15: credits panel stays inside the viewport when the page is scrolled",
+      !!w15CreditsScrolled && w15CreditsScrolled.inside,
+      JSON.stringify(w15CreditsScrolled),
+    );
+    const w15CreditsEnd = await page.evaluate(() => {
+      const panel = document.querySelector(".credits-panel");
+      panel.scrollTop = panel.scrollHeight;
+      const links = [...panel.querySelectorAll("a")];
+      const last = links[links.length - 1].getBoundingClientRect();
+      const pr = panel.getBoundingClientRect();
+      return {
+        scrollable: panel.scrollHeight > panel.clientHeight,
+        reachable: panel.scrollTop + panel.clientHeight >= panel.scrollHeight - 1,
+        lastInside: last.top >= pr.top - 1 && last.bottom <= pr.bottom + 1,
+      };
+    });
+    check(
+      "W15: credits panel scrolls to its end with the last link reachable",
+      !!w15CreditsEnd && w15CreditsEnd.reachable && w15CreditsEnd.lastInside,
+      JSON.stringify(w15CreditsEnd),
+    );
+    // close the disclosure and restore the scroll (clean state for the
+    // console-error check below)
+    await page.evaluate(() => {
+      document.querySelector(".credits summary").click();
+      window.scrollTo(0, 0);
+    });
+
     // OPFS VFS logs NotFound probes for sidecar files (journals) as errors; benign.
     const realErrors = consoleLog.filter(
       (l) => !l.includes("Failed to load resource")
