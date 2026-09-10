@@ -213,26 +213,64 @@ async function main() {
       180000,
       "worker ready (dictionary import)",
     );
-    check("engine ready, dictionary in OPFS", statusText.startsWith("ready —"), statusText);
-    // The ready status is deliberately terse — word count + the offline note.
-    // The build provenance (v<ver>-build.<n>, commits, SQLite version) lives
-    // in the header badge's hover tooltip instead (checked below). The count
-    // may use any locale grouping (218.577 vs 218,577), so only the shape is
-    // pinned.
-    const terseReady = /^ready — [\d.,\s]+ words \(100% offline\)$/.test(statusText);
+    check("engine ready, dictionary in OPFS", statusText === "ready", statusText);
+    // W17c: the ready status is terse "ready" exactly — the word count +
+    // offline note and the full build provenance (v<ver>-build.<n>, commits,
+    // commit date, SQLite version, dictionary build) all moved into the
+    // About modal, which is probed right below.
     check(
-      "ready status: word count + offline note only (no build stamp)",
-      terseReady && !statusText.includes("-build.") && !statusText.includes("SQLite") && !statusText.includes("·"),
+      "ready status: terse ready — no word count, build stamp or SQLite version",
+      statusText === "ready"
+        && !statusText.includes("-build.") && !statusText.includes("SQLite") && !statusText.includes("·")
+        && !/\d/.test(statusText),
       statusText,
     );
-    const badge = await page.evaluate(() => {
-      const el = document.querySelector("#version");
-      return { text: el?.textContent ?? "", title: el?.getAttribute("title") ?? "" };
+    // W17c: the header badge is gone — the About modal (footer `i`) is the
+    // only home of the app stamp + dictionary facts. Boot fills the stamp,
+    // the ready handler the SQLite version / dictionary build / word count.
+    const aboutProbe = await page.evaluate(() => {
+      document.querySelector("#about-open").click();
+      const d = document.querySelector("#about");
+      const t = (s) => document.querySelector(s)?.textContent ?? "";
+      return {
+        open: !!d?.open,
+        modal: !!d?.matches(":modal"),
+        badgeGone: !document.querySelector("#version"),
+        infoBtn: !!document.querySelector("#about-open"),
+        version: t("#about-version"),
+        build: t("#about-build"),
+        commitDate: t("#about-commit-date"),
+        sqlite: t("#about-sqlite"),
+        dict: t("#about-dict"),
+        words: t("#about-words"),
+      };
     });
     check(
-      "header badge shows the app version and (on ready) the dictionary stamp",
-      /^v\d+\.\d+\.\d+-build\.\d+/.test(badge.text) && badge.title.includes("dictionary build:"),
-      JSON.stringify(badge),
+      "W17c: About modal holds the full stamp + dictionary facts (header badge gone)",
+      aboutProbe.open && aboutProbe.modal && aboutProbe.badgeGone && aboutProbe.infoBtn
+        && /^omakase v\d+\.\d+\.\d+-build\.\d+$/.test(aboutProbe.version)
+        && aboutProbe.build.includes("-build.") && aboutProbe.build.includes("commits")
+        && /^commit date \d{4}-\d{2}-\d{2}/.test(aboutProbe.commitDate)
+        && /^SQLite 3\./.test(aboutProbe.sqlite)
+        && aboutProbe.dict.startsWith("dictionary build") && aboutProbe.dict.includes("-build.")
+        && /\d[\d.,\s]* words$/.test(aboutProbe.words),
+      JSON.stringify(aboutProbe),
+    );
+    // close the About dialog with a REAL pointer click on the ✕ (the same
+    // hit-testing the settings ✕ probe uses)
+    const aboutCloseBtn = await page.$("#about-close");
+    const aboutCloseBox = await aboutCloseBtn.boundingBox();
+    await page.mouse.click(aboutCloseBox.x + aboutCloseBox.width / 2, aboutCloseBox.y + aboutCloseBox.height / 2);
+    const aboutClosed = await page.evaluate(() => {
+      const d = document.querySelector("#about");
+      const s = getComputedStyle(d);
+      const r = d.getBoundingClientRect();
+      return { open: d.open, hidden: s.display === "none" || r.width === 0 || r.height === 0 };
+    });
+    check(
+      "W17c: real click on the About ✕ dismisses the dialog completely",
+      !aboutClosed.open && aboutClosed.hidden,
+      JSON.stringify(aboutClosed),
     );
     // Loading is done: the % readout is gone and the top-edge progress bar
     // sits at the full line (100%) — its resting look as the accent stripe
@@ -699,6 +737,7 @@ async function main() {
       const sr = svg?.getBoundingClientRect();
       return {
         char: char?.textContent ?? "",
+        first: !!fig?.querySelector(".stroke-first"),
         prev: !!fig?.querySelector(".stroke-prev"),
         replay: !!fig?.querySelector(".stroke-replay"),
         next: !!fig?.querySelector(".stroke-next"),
@@ -708,7 +747,7 @@ async function main() {
     });
     check(
       "W13: font-rendered kanji box beside the animation, same size + step buttons",
-      charProbe.char === "食" && charProbe.prev && charProbe.replay && charProbe.next && charProbe.sameSize,
+      charProbe.char === "食" && charProbe.first && charProbe.prev && charProbe.replay && charProbe.next && charProbe.sameSize,
       JSON.stringify(charProbe),
     );
     // stepping: ‹ / › move one stroke at a time; the boundary buttons disable.
@@ -728,31 +767,51 @@ async function main() {
     );
     const stepBack = await page.evaluate(() => {
       const fig = document.querySelector("#panes .pane:first-child .stroke-widget");
+      const first = fig.querySelector(".stroke-first");
       const prev = fig.querySelector(".stroke-prev");
       const next = fig.querySelector(".stroke-next");
       const paths = [...fig.querySelectorAll("svg.stroke-svg path")];
       const visible = () => paths.filter((p) => Math.abs(parseFloat(p.style.strokeDashoffset) || 0) < 0.5).length;
       for (let i = 0; i < 9; i++) prev.click();
-      return { visible: visible(), prevDisabled: prev.disabled, nextDisabled: next.disabled };
+      return { visible: visible(), firstDisabled: first.disabled, prevDisabled: prev.disabled, nextDisabled: next.disabled };
     });
     check(
-      "W13: ‹ steps backward one stroke at a time (0 left, prev disabled)",
-      stepBack.visible === 0 && stepBack.prevDisabled && !stepBack.nextDisabled,
+      "W13: ‹ steps backward one stroke at a time (0 left, prev + ⏮ disabled)",
+      stepBack.visible === 0 && stepBack.prevDisabled && stepBack.firstDisabled && !stepBack.nextDisabled,
       JSON.stringify(stepBack),
     );
     const stepFwd = await page.evaluate(() => {
       const fig = document.querySelector("#panes .pane:first-child .stroke-widget");
+      const first = fig.querySelector(".stroke-first");
       const prev = fig.querySelector(".stroke-prev");
       const next = fig.querySelector(".stroke-next");
       const paths = [...fig.querySelectorAll("svg.stroke-svg path")];
       const visible = () => paths.filter((p) => Math.abs(parseFloat(p.style.strokeDashoffset) || 0) < 0.5).length;
       for (let i = 0; i < 9; i++) next.click();
-      return { visible: visible(), prevDisabled: prev.disabled, nextDisabled: next.disabled };
+      return { visible: visible(), firstEnabled: !first.disabled, prevDisabled: prev.disabled, nextDisabled: next.disabled };
     });
     check(
       "W13: › steps forward one stroke at a time (all 9, next disabled)",
-      stepFwd.visible === 9 && stepFwd.nextDisabled && !stepFwd.prevDisabled,
+      stepFwd.visible === 9 && stepFwd.nextDisabled && !stepFwd.prevDisabled && stepFwd.firstEnabled,
       JSON.stringify(stepFwd),
+    );
+    // W17e: ⏮ jumps straight to the empty box — instant (no transition),
+    // from any step, leaving every stroke hidden and first+prev disabled.
+    const stepFirst = await page.evaluate(() => {
+      const fig = document.querySelector("#panes .pane:first-child .stroke-widget");
+      const first = fig.querySelector(".stroke-first");
+      const prev = fig.querySelector(".stroke-prev");
+      const next = fig.querySelector(".stroke-next");
+      const paths = [...fig.querySelectorAll("svg.stroke-svg path")];
+      const visible = () => paths.filter((p) => Math.abs(parseFloat(p.style.strokeDashoffset) || 0) < 0.5).length;
+      first.click(); // from step 9 (all strokes drawn)
+      const rightAfter = visible();
+      return { rightAfter, firstDisabled: first.disabled, prevDisabled: prev.disabled, nextEnabled: !next.disabled };
+    });
+    check(
+      "W17e: ⏮ jumps instantly to the first frame (0 strokes, first + prev disabled)",
+      stepFirst.rightAfter === 0 && stepFirst.firstDisabled && stepFirst.prevDisabled && stepFirst.nextEnabled,
+      JSON.stringify(stepFirst),
     );
     // › pressed mid-play cancels the auto-play and draws exactly one more.
     const midPlay = await page.evaluate(async () => {
@@ -791,7 +850,8 @@ async function main() {
         if (!fig?.querySelector(".stroke-skeleton")) return null;
         return {
           char: fig.querySelector(".stroke-char")?.textContent ?? "",
-          controlsDisabled: !!(fig.querySelector(".stroke-prev")?.disabled
+          controlsDisabled: !!(fig.querySelector(".stroke-first")?.disabled
+            && fig.querySelector(".stroke-prev")?.disabled
             && fig.querySelector(".stroke-replay")?.disabled
             && fig.querySelector(".stroke-next")?.disabled),
         };
@@ -1054,11 +1114,14 @@ async function main() {
         kanji: [...pre.querySelectorAll(".tok-kanji")].map((b) => b.textContent),
       };
     });
+    // W17d: the 食 pane's OWN literal renders as plain text (nesting a pane
+    // into itself is impossible), so 食 is absent from the kanji buttons
+    // while every OTHER compound kanji stays clickable.
     check(
-      "tokens: compound rows have word icon + clickable kanji",
+      "tokens: compound rows have word icon + clickable kanji (own literal plain)",
       compoundTok.icons.length >= 5
         && compoundTok.icons.every((t) => t.startsWith("word "))
-        && compoundTok.kanji.includes("食") && compoundTok.kanji.length >= 5,
+        && !compoundTok.kanji.includes("食") && compoundTok.kanji.length >= 4,
       `${compoundTok.icons.length} icons, ${compoundTok.kanji.length} kanji buttons`,
     );
     // click a word icon from the page (a real compound row) → same as typing
@@ -1092,33 +1155,37 @@ async function main() {
       !!tokWordPane && tokWordPane.includes("Writings"),
       tokWordPane ? `${expectedWord}: ${tokWordPane.slice(0, 40)}` : "(none)",
     );
-    // click the 食 kanji token → a kanji page nests under the pane that
-    // hosts the token (the kanji-食 page) as its newest child, above the word
-    // page opened above (its 食 page was cached by the standalone lookup, so
-    // it renders immediately rather than streaming)
-    await page.evaluate(() => {
+    // click a kanji token → a kanji page nests under the pane that hosts
+    // the token (the kanji-食 page) as its newest child, above the word page
+    // opened above. W17d: the pane's own 食 is plain text, so pick a
+    // DIFFERENT compound kanji — and NOT 初 either: the queued-action probe
+    // below reuses the first kanji outside 制/作/者/食 as its own fresh
+    // token, and a registered action would suppress that click (W2 dedupe).
+    const nestedKanjiTok = await page.evaluate(() => {
       const b = [...document.querySelectorAll("#panes .pane:first-child pre .tok-kanji")]
-        .find((x) => x.textContent === "食");
+        .find((x) => x.textContent !== "食" && x.textContent !== "初");
+      const q = b.textContent;
       b.click();
+      return q;
     });
     const tokKanjiPane = await waitFor(
       page,
-      () => page.evaluate(() => {
+      () => page.evaluate((q) => {
         const host = document.querySelector("#panes .pane:first-child");
         if (!host || document.querySelector("#lookup").hasAttribute("aria-busy")) return null;
         const child = host.querySelector(".pane-children > .pane");
         if (!child) return null;
         return child.querySelector(".badge")?.textContent === "kanji"
-          && child.querySelector(".pane-query")?.textContent === "食"
+          && child.querySelector(".pane-query")?.textContent === q
           ? child.querySelector("pre")?.textContent : null;
-      }),
+      }, nestedKanjiTok),
       30000,
       "kanji token click",
     );
     check(
-      "tokens: kanji click → kanji 食 pane nested under the hosting pane",
-      !!tokKanjiPane && tokKanjiPane.includes("strokes"),
-      tokKanjiPane ? tokKanjiPane.slice(0, 40) : "(none)",
+      "tokens: kanji click → kanji pane nested under the hosting pane",
+      !!tokKanjiPane && !!nestedKanjiTok && tokKanjiPane.includes("strokes"),
+      tokKanjiPane ? `${nestedKanjiTok}: ${tokKanjiPane.slice(0, 40)}` : "(none)",
     );
     // W16 tone alternation: nested results take the opposite tone from their
     // host — every pane's tone class must match its real DOM nesting depth
@@ -1171,6 +1238,26 @@ async function main() {
       !!nestedTone && nestedTone.childBg === "rgb(219, 241, 236)"
         && nestedTone.childHead === "rgb(219, 241, 236)",
       JSON.stringify(nestedTone),
+    );
+    // W17d (word side): a word pane's own writing has no magnifier — the
+    // writing still renders as text, and OTHER words keep their magnifiers
+    // (checked on the same pane). 空 is fresh: the queued-action probe below
+    // needs word 水 (and kanji 初) to be its own first-of-kind lookups, so
+    // this probe must not register them.
+    p = await runLookup(page, "word", "空");
+    const selfWord = await page.evaluate(() => {
+      const pane = document.querySelector("#panes .pane:first-child");
+      const titles = [...pane.querySelectorAll("pre .tok-word")].map((b) => b.title);
+      return {
+        hasSelf: titles.includes("word 空"),
+        otherWords: titles.filter((t) => t !== "word 空").length,
+        rendered: pane.querySelector("pre")?.textContent?.includes("空") ?? false,
+      };
+    });
+    check(
+      "W17d: a word pane's own writing has no magnifier (still rendered, others keep theirs)",
+      !selfWord.hasSelf && selfWord.rendered && selfWord.otherWords >= 1,
+      JSON.stringify(selfWord),
     );
     // A search result list is one two-space word row per hit: the exact
     // reading せいさくしゃ matches 制作者 alone, and that row carries the
@@ -2308,6 +2395,18 @@ async function main() {
       !!w15Anchor && w15Anchor.panes === 0,
       JSON.stringify(w15Anchor),
     );
+    // W17f (short page): with zero panes the page cannot scroll, so the
+    // control row must never hide — even a scroll attempt leaves it in place.
+    await page.evaluate(() => { window.scrollTo(0, 50); });
+    const w17fShort = await page.evaluate(() => ({
+      scrolled: document.querySelector("#lookup").classList.contains("scrolled-down"),
+      scrollY: window.scrollY,
+    }));
+    check(
+      "W17f: on a non-scrollable page the control row never hides",
+      !w17fShort.scrolled && w17fShort.scrollY === 0,
+      JSON.stringify(w17fShort),
+    );
     // 2. A full page: one word box with many words lands one pane each — 18
     // panes overflow the 900px viewport, and the footer sits in flow below
     // the last pane (document coordinates, so scroll position is irrelevant).
@@ -2347,18 +2446,20 @@ async function main() {
         lastPaneBottom: Math.round(w15Full.lastPaneBottom),
       }),
     );
-    // 3. Credits: the i disclosure opens a fixed panel fully inside the
-    // viewport at scroll-top AND at the page bottom; the panel's body scrolls
-    // to its end with the last link reachable.
-    const w15Credits = await page.evaluate(() => {
+    // 3. About: the footer `i` opens the About dialog (a native <dialog>
+    // like Settings — the old credits <details> panel became the modal's
+    // body, W17c). It must fit the viewport at scroll-top AND at the page
+    // bottom, and its body scrolls to its end with the last link reachable.
+    const w15About = await page.evaluate(() => {
       window.scrollTo(0, 0);
-      document.querySelector(".credits summary").click();
-      const panel = document.querySelector(".credits-panel");
-      const r = panel.getBoundingClientRect();
+      document.querySelector("#about-open").click();
+      const d = document.querySelector("#about");
+      const r = d.getBoundingClientRect();
       const vw = document.documentElement.clientWidth;
       const vh = document.documentElement.clientHeight;
       return {
-        open: document.querySelector(".credits").open,
+        open: d.open,
+        modal: d.matches(":modal"),
         inside: r.left >= 0 && r.right <= vw && r.top >= 0 && r.bottom <= vh,
         rect: { l: Math.round(r.left), r: Math.round(r.right), t: Math.round(r.top), b: Math.round(r.bottom) },
         viewportW: vw,
@@ -2366,14 +2467,14 @@ async function main() {
       };
     });
     check(
-      "W15: credits panel fits the viewport at scroll-top",
-      !!w15Credits && w15Credits.open && w15Credits.inside,
-      JSON.stringify(w15Credits),
+      "W15: About dialog opens :modal and fits the viewport at scroll-top",
+      !!w15About && w15About.open && w15About.modal && w15About.inside,
+      JSON.stringify(w15About),
     );
-    const w15CreditsScrolled = await page.evaluate(() => {
+    const w15AboutScrolled = await page.evaluate(() => {
       window.scrollTo(0, document.scrollingElement.scrollHeight);
-      const panel = document.querySelector(".credits-panel");
-      const r = panel.getBoundingClientRect();
+      const d = document.querySelector("#about");
+      const r = d.getBoundingClientRect();
       const vw = document.documentElement.clientWidth;
       const vh = document.documentElement.clientHeight;
       return {
@@ -2383,31 +2484,36 @@ async function main() {
       };
     });
     check(
-      "W15: credits panel stays inside the viewport when the page is scrolled",
-      !!w15CreditsScrolled && w15CreditsScrolled.inside,
-      JSON.stringify(w15CreditsScrolled),
+      "W15: About dialog stays inside the viewport when the page is scrolled",
+      !!w15AboutScrolled && w15AboutScrolled.inside,
+      JSON.stringify(w15AboutScrolled),
     );
-    const w15CreditsEnd = await page.evaluate(() => {
-      const panel = document.querySelector(".credits-panel");
-      panel.scrollTop = panel.scrollHeight;
-      const links = [...panel.querySelectorAll("a")];
+    const w15AboutEnd = await page.evaluate(() => {
+      const body = document.querySelector("#about .about-body");
+      body.scrollTop = body.scrollHeight;
+      const links = [...body.querySelectorAll("a")];
       const last = links[links.length - 1].getBoundingClientRect();
-      const pr = panel.getBoundingClientRect();
+      const pr = body.getBoundingClientRect();
       return {
-        scrollable: panel.scrollHeight > panel.clientHeight,
-        reachable: panel.scrollTop + panel.clientHeight >= panel.scrollHeight - 1,
+        scrollable: body.scrollHeight > body.clientHeight,
+        reachable: body.scrollTop + body.clientHeight >= body.scrollHeight - 1,
         lastInside: last.top >= pr.top - 1 && last.bottom <= pr.bottom + 1,
       };
     });
     check(
-      "W15: credits panel scrolls to its end with the last link reachable",
-      !!w15CreditsEnd && w15CreditsEnd.reachable && w15CreditsEnd.lastInside,
-      JSON.stringify(w15CreditsEnd),
+      "W15: About dialog body scrolls to its end with the last link reachable",
+      !!w15AboutEnd && w15AboutEnd.reachable && w15AboutEnd.lastInside,
+      JSON.stringify(w15AboutEnd),
     );
-    // close the disclosure and restore the scroll (clean state for the
-    // console-error check below)
+    // close with a real pointer click on the ✕ and restore the scroll
+    // (clean state for the console-error check below)
+    const w15AboutClose = await page.$("#about-close");
+    const w15AboutCloseBox = await w15AboutClose.boundingBox();
+    await page.mouse.click(
+      w15AboutCloseBox.x + w15AboutCloseBox.width / 2,
+      w15AboutCloseBox.y + w15AboutCloseBox.height / 2,
+    );
     await page.evaluate(() => {
-      document.querySelector(".credits summary").click();
       window.scrollTo(0, 0);
     });
 
@@ -2497,6 +2603,37 @@ async function main() {
       JSON.stringify(w17Width),
     );
 
+    // ---- W17f: hide-on-scroll control row ----------------------------------
+    // The sticky control row slides away on scroll-down and returns on
+    // scroll-up; at scrollY=0 it is always visible. The 18+ pane page is
+    // still up, so this probes the real long-page behavior (the no-overflow
+    // case was checked right after the W15 anchor probe).
+    const w17f = await page.evaluate(async () => {
+      const row = document.querySelector("#lookup");
+      const wait = (ms) => new Promise((r) => setTimeout(r, ms));
+      window.scrollTo(0, 600);
+      await wait(450); // rAF + the 0.25s transform transition
+      const hidden = row.classList.contains("scrolled-down");
+      const hr = row.getBoundingClientRect();
+      window.scrollTo(0, 0);
+      await wait(450);
+      const shown = !row.classList.contains("scrolled-down");
+      return {
+        hidden,
+        hiddenBottom: Math.round(hr.bottom),
+        shown,
+        scrollY: window.scrollY,
+      };
+    });
+    // At scrollY=0 the row sits in flow below the header — "always visible at
+    // the top" means the class is gone and the row's bottom is below the
+    // viewport top edge, not that it starts at y=0.
+    check(
+      "W17f: control row hides on scroll-down, returns on scroll-up, always visible at the top",
+      w17f.hidden && w17f.hiddenBottom <= 0 && w17f.shown,
+      JSON.stringify(w17f),
+    );
+
     // OPFS VFS logs NotFound probes for sidecar files (journals) as errors; benign.
     const realErrors = consoleLog.filter(
       (l) => !l.includes("Failed to load resource")
@@ -2507,6 +2644,57 @@ async function main() {
         && !l.includes("deprecated"),
     );
     check("no console/page errors", realErrors.length === 0, realErrors.slice(0, 3).join(" | "));
+
+    // ---- W17j: erase all data (settings) -----------------------------------
+    // Runs LAST on purpose: it wipes the whole app — localStorage,
+    // sessionStorage, every cache, all service workers, the OPFS dictionary
+    // — and reloads into a fresh shell that re-imports on boot. The
+    // console-error probe above must never see this state, and nothing after
+    // this block can run on the wiped page.
+    // The native confirm() must be accepted: attach the handler BEFORE the
+    // click that triggers it (puppeteer auto-dismisses unhandled dialogs).
+    page.once("dialog", (d) => void d.accept());
+    await page.evaluate(() => {
+      document.querySelector("#settings-gear").click();
+      document.querySelector("#settings-wipe").click();
+    });
+    const wipeReady = await waitFor(
+      page,
+      () => page.evaluate(() => {
+        // The OLD page is also idle "ready" with its history still up — a
+        // ready-status poll alone matches it before the async wipe + reload
+        // land. The fresh shell is distinguished by having ZERO panes (the
+        // pre-wipe page shows 19+): only the new document matches.
+        const s = document.querySelector("#status")?.textContent ?? "";
+        return s === "ready" && document.querySelectorAll("#panes .pane").length === 0
+          ? s : null;
+      }),
+      180000,
+      "wipe reload ready (fresh shell, dictionary re-imported)",
+    );
+    check(
+      "W17j: erase-all-data reloads into a fresh shell with a re-imported dictionary",
+      wipeReady === "ready",
+      wipeReady,
+    );
+    const wipeState = await page.evaluate(() => ({
+      storageEmpty: localStorage.length === 0 && sessionStorage.length === 0,
+      // A fresh shell has no panes and an empty query; the pre-wipe page
+      // would still show its history — this distinguishes a real reload
+      // from a vacuous "ready" pass on the old page.
+      panes: document.querySelectorAll("#panes .pane").length,
+      query: document.querySelector("#query").value,
+      keys: Object.keys(localStorage),
+      words: document.querySelector("#about-words")?.textContent ?? "",
+      dict: document.querySelector("#about-dict")?.textContent ?? "",
+    }));
+    check(
+      "W17j: storage wiped, fresh shell, About facts re-filled after the re-import",
+      wipeState.storageEmpty && wipeState.panes === 0 && wipeState.query === ""
+        && /\d[\d.,\s]* words$/.test(wipeState.words)
+        && wipeState.dict.startsWith("dictionary build"),
+      JSON.stringify(wipeState),
+    );
   } finally {
     await browser.close();
     server.kill();

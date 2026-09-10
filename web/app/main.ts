@@ -53,7 +53,7 @@ import type { Command, StrokePage, WorkerMessage, WorkerRequest } from "./worker
 import { KANJI_RE, kanjiQueries, kanjiQuery, parseMax, wordTokens } from "./query.js";
 import { strokeWidgetFigure } from "./stroke-widget.js";
 import { DEFAULT_ACCENT, DEFAULT_BG, DEFAULT_BG_MIX, effectiveTint, isHexColor, type Theme } from "./theme.js";
-import { VERSION, VERSION_FULL } from "../../src/version.js";
+import { COMMIT_DATE, VERSION, VERSION_FULL } from "../../src/version.js";
 import { cacheManager } from "./cache.js";
 import {
   type ResultNode,
@@ -89,7 +89,6 @@ const status = document.querySelector<HTMLDivElement>("#status")!;
 const statusMsg = document.querySelector<HTMLSpanElement>("#status .status-msg")!;
 /** Live "x%" readout shown next to the status while the engine boots. */
 const pctEl = document.querySelector<HTMLSpanElement>("#status .pct")!;
-const versionBadge = document.querySelector<HTMLSpanElement>("#version")!;
 const clearBtn = document.querySelector<HTMLButtonElement>("#clear")!;
 const panes = document.querySelector<HTMLDivElement>("#panes")!;
 /** Cancel control for the in-flight lookup — a sibling of the command
@@ -109,9 +108,36 @@ const accentColorInput = document.querySelector<HTMLInputElement>("#accent-color
 const bgPreview = document.querySelector<HTMLSpanElement>("#bg-preview")!;
 const accentPreview = document.querySelector<HTMLSpanElement>("#accent-preview")!;
 
-// Version badge — the app stamp at boot; the full stamp + dictionary build
-// (from DB meta) once the worker reports ready.
-versionBadge.textContent = `v${VERSION}`;
+// ---- about dialog (W17c) ---------------------------------------------------
+// The header badge is gone: the app stamp + full build provenance (version,
+// commits, commit date, SQLite engine, dictionary build, word count) live in
+// the About modal only. Boot fills the stamp; the ready handler fills the
+// dictionary facts.
+const aboutDialog = document.querySelector<HTMLDialogElement>("#about")!;
+const aboutOpen = document.querySelector<HTMLButtonElement>("#about-open")!;
+const aboutClose = document.querySelector<HTMLButtonElement>("#about-close")!;
+const aboutVersion = document.querySelector<HTMLElement>("#about-version")!;
+const aboutBuild = document.querySelector<HTMLElement>("#about-build")!;
+const aboutCommitDate = document.querySelector<HTMLElement>("#about-commit-date")!;
+const aboutSqlite = document.querySelector<HTMLElement>("#about-sqlite")!;
+const aboutDict = document.querySelector<HTMLElement>("#about-dict")!;
+const aboutWords = document.querySelector<HTMLElement>("#about-words")!;
+
+/** Boot: fill the app-stamp facts (everything the version module knows). */
+function fillAboutStamp(): void {
+  aboutVersion.textContent = `omakase v${VERSION}`;
+  aboutBuild.textContent = `build ${VERSION_FULL}`;
+  aboutCommitDate.textContent = `commit date ${COMMIT_DATE}`;
+}
+
+/** Ready: fill the dictionary facts (SQLite engine, DB build, word count). */
+function fillAboutFacts(sqliteVersion: string, dict: string | null, words: number): void {
+  aboutSqlite.textContent = `SQLite ${sqliteVersion}`;
+  aboutDict.textContent = `dictionary build ${dict ?? "unknown"}`;
+  aboutWords.textContent = `${words.toLocaleString()} words`;
+}
+
+fillAboutStamp(); // the stamp facts are known before the engine boots
 
 // ---- state -----------------------------------------------------------------
 /** One queued lookup. The queue is FIFO and only its head is ever sent to
@@ -401,7 +427,9 @@ function endOpProgress(): void {
     pctEl.textContent = "";
     pctEl.hidden = true;
     document.documentElement.style.setProperty("--progress", "100%");
-    setStatus(`ready — ${readyWords.toLocaleString()} words (100% offline)`);
+    // Terse idle line (W17c): the word count + offline note moved into the
+    // About dialog — the status bar just says it's ready.
+    setStatus("ready");
   }
 }
 
@@ -409,7 +437,16 @@ function endOpProgress(): void {
 /**
  * Map from operation ID to the DOM element for streaming panes
  */
-const streamingPaneById = new Map<number, { pane: HTMLElement, pre: HTMLElement, parentId: string | null }>();
+const streamingPaneById = new Map<number, {
+  pane: HTMLElement;
+  pre: HTMLElement;
+  parentId: string | null;
+  /** The pane's own command+query (W17d): streaming sections linkify with
+   * the same self-nesting rules as the final pane, so a streaming kanji
+   * page's own literal is plain text from the first section. */
+  command: Command;
+  query: string;
+}>();
 
 /**
  * The pane for a dequeued lookup, created immediately: header + a few
@@ -484,7 +521,7 @@ function addSkeletonPane(item: Pending): void {
   }
   
   paneByOpId.set(item.id, pane);
-  streamingPaneById.set(item.id, { pane, pre, parentId });
+  streamingPaneById.set(item.id, { pane, pre, parentId, command: item.command, query: item.query });
   opTexts.set(item.id, []);
 }
 
@@ -497,12 +534,12 @@ function addSkeletonPane(item: Pending): void {
  * identical to the finished pane. The skeleton shimmer rows are cleared the
  * moment the first section lands — they are a placeholder, never left
  * stacked above the streamed text (later appends find none left). */
-function appendSectionText(pre: HTMLElement, text: string, parentId: string | null): void {
+function appendSectionText(pre: HTMLElement, text: string, parentId: string | null, self: SelfPane | null = null): void {
   pre.querySelectorAll(".skel-line").forEach((el) => el.remove());
   const nodes: (Node | string)[] = [];
   text.split("\n").forEach((line, i) => {
     if (i > 0) nodes.push("\n");
-    nodes.push(...linkifyLine(line, parentId));
+    nodes.push(...linkifyLine(line, parentId, self));
   });
   pre.append(...nodes);
 }
@@ -764,8 +801,8 @@ function onWorkerMessage(ev: MessageEvent<WorkerMessage>): void {
       if (opActiveId !== msg.id || cancelledOps.has(msg.id)) break;
       const streamingData = streamingPaneById.get(msg.id);
       if (streamingData) {
-        const { pre, parentId } = streamingData;
-        appendSectionText(pre, msg.text, parentId);
+        const { pre, parentId, command, query } = streamingData;
+        appendSectionText(pre, msg.text, parentId, { command, query });
       }
       const texts = opTexts.get(msg.id);
       if (texts) texts.push(msg.text);
@@ -798,10 +835,10 @@ function onWorkerMessage(ev: MessageEvent<WorkerMessage>): void {
       engineDead = false;
       bootFailures = 0;
       readyWords = msg.words;
-      versionBadge.title = `omakase ${VERSION_FULL}${msg.dict ? ` · dictionary build: ${msg.dict}` : ""}`;
-      // The full stamp (build, commits, SQLite version) lives in the header
-      // badge's hover tooltip — the status bar just says it's ready.
-      setStatus(`ready — ${msg.words.toLocaleString()} words (100% offline)`);
+      // The About modal is the ONLY home of the dictionary facts now: SQLite
+      // engine version, dictionary build stamp and word count.
+      fillAboutFacts(msg.version, msg.dict, msg.words);
+      setStatus("ready");
       endBootProgress(); // hide the % readout…
       // …and leave the divider as the full line (its resting look).
       document.documentElement.style.setProperty("--progress", "100%");
@@ -1188,28 +1225,47 @@ function wordIconButton(writing: string, parentId: string | null = null): HTMLBu
   return b;
 }
 
+/** The pane this text belongs to, for the self-nesting rule (W17d): the
+ * exact result a pane already shows must not nest into itself — the pane's
+ * own literal (kanji) or writing (word) renders as PLAIN TEXT. Everything
+ * else stays clickable. Search panes pass null (their rows are all nested
+ * lookups, never the search itself). */
+interface SelfPane {
+  command: Command;
+  query: string;
+}
+
 /**
  * Render one output line as DOM nodes: every kanji becomes an individual
  * kanji-lookup button; on word rows the writing also gets a word-lookup icon
  * at its left when it is an actual dictionary word (contains kanji or kana —
  * even a single character). Bracket contents (readings/ruby) are left plain
- * apart from their own kanji being clickable.
+ * apart from their own kanji being clickable. `self` (when given) is the
+ * pane's own command+query: its exact literal/writing is left as plain text
+ * instead of becoming a button, so a pane can never nest its own result
+ * into itself (W17d).
  */
-function linkifyLine(line: string, parentId: string | null = null): (Node | string)[] {
+function linkifyLine(line: string, parentId: string | null = null, self: SelfPane | null = null): (Node | string)[] {
   const out: (Node | string)[] = [];
   const m = WORD_ROW_RE.exec(line);
   let cursor = 0;
   if (m) {
     const writingStart = m[1]!.length;
     const writing = m[2]!;
-    if (KANJI_RE.test(writing) || KANA_RE.test(writing)) {
+    // A word pane's own writing has no magnifier: clicking it would only
+    // open the page that is already on screen (W17d). The writing itself is
+    // still rendered — just not as a button.
+    const isSelfWord = self?.command === "word" && writing === self.query;
+    if ((KANJI_RE.test(writing) || KANA_RE.test(writing)) && !isSelfWord) {
       out.push(line.slice(cursor, writingStart));
       out.push(wordIconButton(writing, parentId));
       cursor = writingStart;
     }
   }
   for (const ch of line.slice(cursor)) {
-    out.push(KANJI_RE.test(ch) ? kanjiButton(ch, parentId) : ch);
+    // A kanji pane's own literal is plain text for the same reason (W17d).
+    const isSelfKanji = self?.command === "kanji" && ch === self.query;
+    out.push(KANJI_RE.test(ch) && !isSelfKanji ? kanjiButton(ch, parentId) : ch);
   }
   return out;
 }
@@ -1363,7 +1419,7 @@ function renderResultNode(node: ResultNode): HTMLElement {
   const nodes: (Node | string)[] = [];
   content.split("\n").forEach((line, i) => {
     if (i > 0) nodes.push("\n");
-    nodes.push(...linkifyLine(line, node.id));
+    nodes.push(...linkifyLine(line, node.id, { command: node.command, query: node.query }));
   });
   pre.append(...nodes);
 
@@ -1616,6 +1672,12 @@ settingsGear.addEventListener("click", () => {
   if (!settingsDialog.open) settingsDialog.showModal();
 });
 settingsClose.addEventListener("click", () => settingsDialog.close());
+// About dialog (W17c): the footer `i` opens it like Settings — the ✕ or
+// ESC closes it (no backdrop-click close, same as Settings).
+aboutOpen.addEventListener("click", () => {
+  if (!aboutDialog.open) aboutDialog.showModal();
+});
+aboutClose.addEventListener("click", () => aboutDialog.close());
 settingsAutoScroll.addEventListener("change", () => {
   autoScrollEnabled = settingsAutoScroll.checked;
   saveState();
@@ -1662,6 +1724,78 @@ form.addEventListener("submit", (ev) => {
 input.addEventListener("input", saveStateSoon);
 clearBtn.addEventListener("click", clearAll);
 cancelOp.addEventListener("click", cancelCurrentOperation);
+
+// ---- hide-on-scroll control row (W17f) ------------------------------------
+// The sticky control row slides away on scroll-down and returns on
+// scroll-up, so a long page gives the results the full viewport. Hidden
+// only while scrolling DOWN past 40px on a page that can actually scroll,
+// and never at the very bottom; always visible at the top and on scroll-up.
+let lastScrollY = window.scrollY;
+let scrollRafPending = false;
+
+function updateLookupVisibility(): void {
+  scrollRafPending = false;
+  const y = window.scrollY;
+  const canScroll = document.documentElement.scrollHeight > document.documentElement.clientHeight;
+  const atBottom = window.innerHeight + y >= document.documentElement.scrollHeight - 4;
+  const goingDown = y > lastScrollY;
+  const hide = goingDown && y > 40 && canScroll && !atBottom;
+  form.classList.toggle("scrolled-down", hide);
+  lastScrollY = y;
+}
+
+window.addEventListener("scroll", () => {
+  if (scrollRafPending) return;
+  scrollRafPending = true;
+  requestAnimationFrame(updateLookupVisibility);
+}, { passive: true });
+
+// ---- erase all data (W17j) ------------------------------------------------
+// The settings danger zone wipes every local trace and reloads: the fresh
+// shell re-imports the dictionary on boot. Each step is isolated — a
+// partially-unsupported API must not stop the wipe; the reload is what
+// triggers the fresh boot.
+const settingsWipe = document.querySelector<HTMLButtonElement>("#settings-wipe")!;
+settingsWipe.addEventListener("click", () => {
+  const ok = confirm(
+    "Erase all local data? The dictionary, history, settings and offline shell will be deleted — the app re-downloads on your next visit. This cannot be undone.",
+  );
+  if (!ok) return;
+  settingsDialog.close();
+  void wipeAllData();
+});
+
+async function wipeAllData(): Promise<void> {
+  try {
+    const regs = await navigator.serviceWorker?.getRegistrations();
+    if (regs) await Promise.all(regs.map((r) => r.unregister()));
+  } catch { /* unsupported/blocked — the reload still boots fresh */ }
+  try {
+    if (window.caches) {
+      const keys = await caches.keys();
+      await Promise.all(keys.map((k) => caches.delete(k)));
+    }
+  } catch { /* unsupported/blocked */ }
+  try { localStorage.clear(); } catch { /* unavailable */ }
+  try { sessionStorage.clear(); } catch { /* unavailable */ }
+  try {
+    // The OPFS dictionary (and its journals): remove every entry so the
+    // next boot re-imports. The worker holds the DB open, so a locked entry
+    // may refuse — drop it and let the reload's health check re-import.
+    const root = await navigator.storage?.getDirectory();
+    if (root) {
+      // The TS DOM lib in use predates FileSystemDirectoryHandle.entries —
+      // the runtime API is stable across Chromium, so assert the shape.
+      const handle = root as unknown as {
+        entries(): AsyncIterableIterator<[string, FileSystemHandle]>;
+      };
+      const entries: [string, FileSystemHandle][] = [];
+      for await (const e of handle.entries()) entries.push(e);
+      await Promise.all(entries.map(([name]) => root.removeEntry(name, { recursive: true }).catch(() => {})));
+    }
+  } catch { /* unsupported/blocked */ }
+  location.reload();
+}
 
 // ---- service worker (offline shell; the dictionary lives in OPFS) ----------
 if ("serviceWorker" in navigator && location.protocol !== "file:") {

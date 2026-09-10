@@ -3,8 +3,8 @@
  * stroke_order table points at (`./strokes/<svgFile>`, cached by the service
  * worker on first fetch) and animates its strokes in order — each stroke is
  * hidden, then "drawn" by animating its stroke-dashoffset to zero, one after
- * the other. Controls: ‹ steps one stroke backward, › one stroke forward,
- * ↻ replays the whole sequence.
+ * the other. Controls: ⏮ jumps straight to the empty box, ‹ steps one stroke
+ * backward, › one stroke forward, ↻ replays the whole sequence.
  *
  * Each widget pairs the animation with a font-rendered twin of the kanji
  * (`.stroke-char`) in a box the same size as the animation, so the character
@@ -57,6 +57,7 @@ interface StrokeFigureParts {
   bar: HTMLElement;
   svg: SVGElement;
   page: StrokePage;
+  first: HTMLButtonElement;
   prev: HTMLButtonElement;
   replay: HTMLButtonElement;
   next: HTMLButtonElement;
@@ -103,6 +104,14 @@ export function strokeWidgetFigure(page: StrokePage): HTMLElement {
   label.className = "stroke-label";
   label.textContent = page.literal; // enriched to "食 · 9 strokes" once parsed
 
+  const first = document.createElement("button");
+  first.type = "button";
+  first.className = "stroke-first";
+  first.textContent = "⏮";
+  first.title = `First frame of ${page.literal}`;
+  first.setAttribute("aria-label", first.title);
+  first.disabled = true;
+
   const prev = document.createElement("button");
   prev.type = "button";
   prev.className = "stroke-prev";
@@ -127,15 +136,15 @@ export function strokeWidgetFigure(page: StrokePage): HTMLElement {
   next.setAttribute("aria-label", next.title);
   next.disabled = true;
 
-  bar.append(label, prev, replay, next);
+  bar.append(label, first, prev, replay, next);
 
   fig.append(row, bar);
-  void loadStrokeFigure({ fig, cell, skeleton, bar, svg, page, prev, replay, next, label });
+  void loadStrokeFigure({ fig, cell, skeleton, bar, svg, page, first, prev, replay, next, label });
   return fig;
 }
 
 async function loadStrokeFigure(parts: StrokeFigureParts): Promise<void> {
-  const { fig, cell, skeleton, bar, svg, page, prev, replay, next, label } = parts;
+  const { fig, cell, skeleton, bar, svg, page, first, prev, replay, next, label } = parts;
   let ds: string[] | null = null;
   try {
     ds = strokePathsFrom(await fetchStrokeSvg(page.svgFile));
@@ -193,6 +202,7 @@ async function loadStrokeFigure(parts: StrokeFigureParts): Promise<void> {
   }
 
   function syncControls(): void {
+    first.disabled = step === 0;
     prev.disabled = step === 0;
     next.disabled = step === paths.length;
   }
@@ -235,6 +245,17 @@ async function loadStrokeFigure(parts: StrokeFigureParts): Promise<void> {
     syncControls();
   };
 
+  /** Jump straight to the empty box (⏮) — instant, cancels any running
+   * auto-play: every stroke snaps hidden with no transition. */
+  const toFirst = (): void => {
+    if (step === 0) return;
+    run++;
+    for (let i = 0; i < paths.length; i++) setStroke(i, false, false);
+    step = 0;
+    syncControls();
+  };
+
+  first.addEventListener("click", toFirst);
   prev.addEventListener("click", stepBackward);
   next.addEventListener("click", stepForward);
   replay.addEventListener("click", () => void reveal());

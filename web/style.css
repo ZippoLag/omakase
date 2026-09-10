@@ -107,15 +107,8 @@ h1 {
   font-family: var(--mono); /* chrome: mono (W16) */
 }
 
-/* Build version badge (e.g. v0.1.0-build.12) — set by main.ts from the
-   version stamp shared with the CLI; hover for the full stamp + dictionary. */
-#version {
-  font-size: 11px;
-  font-family: var(--mono);
-  color: var(--muted);
-  white-space: nowrap;
-  align-self: center;
-}
+/* The app stamp + full build provenance live in the About dialog (W17c) —
+   there is no version badge in the header anymore. */
 
 /* Status line: the message ellipsizes before the boot % readout, which is a
    flex-none sibling pinned at the line's end so a long message can never
@@ -204,6 +197,17 @@ h1 {
   margin: 0 auto;
   border-bottom: 1px solid var(--line);
   box-shadow: 0 1px 0 rgba(0, 0, 0, 0.03);
+  /* W17f: the whole row slides away on scroll-down (see .scrolled-down). */
+  transition: transform 0.25s ease;
+}
+
+/* W17f: scrolled down past the page top — the control row slides fully
+   above the viewport (sticky keeps it at top:0, the transform lifts it
+   entirely off-screen); scrolling up (or returning to the top) restores it.
+   translateY(-100%) is relative to the row's own height, so it never
+   matters how tall the row is. */
+#lookup.scrolled-down {
+  transform: translateY(calc(-100% - 1px));
 }
 
 #lookup::after { /* boot progress: the bar at the TOP edge of the controls
@@ -650,6 +654,7 @@ button.busy {
   color: var(--ink);
 }
 
+.stroke-first,
 .stroke-prev,
 .stroke-replay,
 .stroke-next {
@@ -667,6 +672,8 @@ button.busy {
   background: var(--bg-pane);
 }
 
+.stroke-first:hover:not(:disabled),
+.stroke-first:focus-visible,
 .stroke-prev:hover:not(:disabled),
 .stroke-prev:focus-visible,
 .stroke-replay:hover:not(:disabled),
@@ -709,15 +716,10 @@ footer {
   color: var(--accent);
 }
 
-/* The "i" button: a circular disclosure that reveals the full credits panel
-   (the panel opens upward so it never pushes the footer's neighbors). */
-.credits {
+/* The "i" button: opens the About dialog (W17c — the old credits <details>
+   became a native modal like Settings). */
+.info-btn {
   flex: none;
-  position: relative;
-}
-
-.credits summary {
-  list-style: none;
   cursor: pointer;
   display: inline-flex;
   align-items: center;
@@ -735,54 +737,117 @@ footer {
   touch-action: manipulation;
 }
 
-.credits summary::-webkit-details-marker { display: none; }
-
-.credits summary:hover,
-.credits summary:focus-visible,
-.credits[open] summary {
+.info-btn:hover,
+.info-btn:focus-visible {
   border-color: var(--accent);
   color: var(--accent);
 }
 
-.credits-panel {
-  /* W15: fixed and centered in the viewport — the panel must fit on any
-     screen no matter where the footer sits or how far the page is scrolled.
-     Centered with vw/vh (not %): under Chrome's mobile emulation the fixed
-     containing block resolves % against the emulated "inner" viewport while
-     vw/vh track the layout viewport, which would push the panel off the
-     visible screen; on real devices the two viewports are identical, so vw/vh
-     center the same way everywhere. The dvh-dependent top/max-height fall
-     back to vh first (iOS Safari < 15.4 lacks dvh; the @supports block below
-     overrides). transform centering with overflow-y: auto is safe — the
-     panel is its own scroll container. */
-  position: fixed;
-  left: 50vw;
-  top: 50vh;
-  transform: translate(-50%, -50%);
-  width: min(560px, calc(100vw - 32px));
-  max-height: min(70vh, calc(100vh - 64px));
-  overflow-y: auto;
-  z-index: 30; /* above the sticky control row */
-  padding: 14px 16px;
-  background: var(--bg-pane);
+/* The About dialog (W17c): same anatomy as Settings — tone-2 head over a
+   tone-1 body — holding the version facts block then the credits prose.
+   Same closed-state discipline as #settings: an author display rule on a
+   <dialog> overrides the UA's closed hiding, so the flex layout is scoped
+   to the open state and the closed state is hidden explicitly. */
+#about {
   border: 1px solid var(--line);
   border-radius: 8px;
-  box-shadow: 0 8px 24px rgba(0, 0, 0, 0.18);
+  background: var(--tint);
   color: var(--ink);
+  padding: 0;
+  width: min(560px, calc(100vw - 32px));
+  /* dvh → vh fallback first (iOS Safari < 15.4 lacks dvh; the @supports
+     block below overrides), mirroring the W15 body rule and #settings. */
+  max-height: min(80vh, 640px);
+  box-shadow: 0 8px 24px rgba(0, 0, 0, 0.18);
+}
+@supports (height: 1dvh) {
+  #about { max-height: min(80dvh, 640px); }
+}
+#about:not([open]) { display: none; }
+#about[open] {
+  display: flex;
+  flex-direction: column;
+}
+
+#about::backdrop {
+  background: rgba(0, 0, 0, 0.4);
+}
+
+.about-head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+  padding: 10px 14px;
+  border-bottom: 1px solid var(--line);
+  background: var(--tint-soft); /* tone-2, matching the pane heads */
+  flex: none;
+}
+
+.about-head h2 {
+  margin: 0;
+  font-size: 16px;
+  font-family: var(--mono); /* chrome: mono (W16) */
+}
+
+#about-close {
+  flex: none;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 30px;
+  height: 30px;
+  padding: 0;
+  font-size: 18px;
+  border-radius: 6px;
+  background: none;
+  color: var(--muted);
+}
+
+#about-close:hover,
+#about-close:focus-visible {
+  color: var(--accent);
+  background: color-mix(in srgb, var(--accent) 12%, transparent);
+}
+
+.about-body {
+  padding: 12px 14px 16px;
+  overflow-y: auto;
   /* prose keeps the sans stack — mono body text is unreadable (W16) */
   font-family: var(--sans);
   font-size: 12px;
   line-height: 1.55;
 }
-@supports (height: 1dvh) {
-  .credits-panel { top: 50dvh; max-height: min(70vh, calc(100dvh - 64px)); }
+
+.about-facts {
+  padding: 10px 14px;
+  border: 1px solid var(--line);
+  border-radius: 8px;
+  background: var(--bg-pane);
+  margin-bottom: 14px;
+  font-family: var(--mono); /* the facts block is chrome, not prose */
 }
 
-.credits-panel p { margin: 0 0 10px; }
-.credits-panel p:last-child { margin-bottom: 0; }
-.credits-panel ul { margin: 0 0 10px; padding-left: 18px; }
-.credits-panel li { margin-bottom: 6px; }
-.credits-panel a {
+.about-facts p { margin: 0 0 6px; }
+.about-facts p:last-child { margin-bottom: 0; }
+
+.about-version {
+  font-size: 15px;
+  font-weight: 700;
+  color: var(--ink);
+}
+
+.about-muted {
+  font-size: 12px;
+  color: var(--muted);
+  overflow-wrap: anywhere;
+}
+
+.about-body p { margin: 0 0 10px; }
+.about-body p:last-child { margin-bottom: 0; }
+.about-body ul { margin: 0 0 10px; padding-left: 18px; }
+.about-body li { margin-bottom: 6px; }
+.about-body a {
   color: var(--accent);
   overflow-wrap: anywhere; /* long URLs wrap instead of overflowing (W15) */
 }
@@ -1148,4 +1213,31 @@ summary:focus-visible,
 .setting-hint {
   font-size: 12px;
   color: var(--muted);
+}
+
+/* ---- Danger zone: erase all data (W17j) ----------------------------------- */
+.setting-danger {
+  padding-top: 12px;
+  border-top: 1px solid var(--line);
+}
+
+#settings-wipe {
+  align-self: flex-start;
+  font: inherit;
+  font-family: var(--mono);
+  font-size: 14px;
+  font-weight: 700;
+  padding: 8px 14px;
+  border: 1px solid color-mix(in srgb, var(--accent) 60%, var(--line));
+  border-radius: 6px;
+  background: none;
+  color: var(--accent);
+  cursor: pointer;
+  -webkit-tap-highlight-color: transparent;
+  touch-action: manipulation;
+}
+
+#settings-wipe:hover,
+#settings-wipe:focus-visible {
+  background: color-mix(in srgb, var(--accent) 12%, transparent);
 }

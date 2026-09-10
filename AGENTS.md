@@ -314,10 +314,22 @@ in W10 — before adding any cache API, grep for callers first.
   `documentElement.clientHeight/clientWidth` (900×420) — compare rects against
   the latter, never `window.inner*` — and `%` on a fixed element resolves
   against the emulated ICB, so the panel centers with vw/vh (identical on real
-  devices). All W1–W16 are now implemented, and W17 Phase 1 (cosmetic:
-  W17h font bump, W17g nested centering, W17b bar-to-top, W17-width
-  overflow hardening, W17-settings-dvh fallback) is landed; the e2e is 117
-  checks.
+  devices). All W1–W16 are now implemented, and W17 Phases 1 + 2 are
+  landed. Phase 1 (cosmetic): W17h font bump, W17g nested centering, W17b
+  bar-to-top, W17-width overflow hardening, W17-settings-dvh fallback.
+  Phase 2 (structural UI): W17c About modal (the header #version badge and
+  the footer credits <details> became the About dialog — the only home of
+  the build provenance now; idle status is a terse "ready"), W17e stroke ⏮
+  rewind, W17f hide-on-scroll control row (rAF-throttled passive listener,
+  .scrolled-down), W17d self-nesting (a pane's own literal/writing is plain
+  text — never a button that would nest a pane into itself; the streaming
+  sections linkify with the same rule via command/query on the skeleton
+  entries), and W17j erase-all-data (settings danger zone: confirm →
+  unregister SWs, delete caches, clear storage, wipe OPFS, reload). The
+  e2e is 124 checks; the W17j block runs last (after the console-error
+  probe) and its waitFor keys on a zero-pane fresh shell — the pre-wipe
+  page is also idle "ready", so a status-only poll matches it before the
+  async wipe + reload land.
 
 ## 9. Golden rules (the short version)
 

@@ -18,7 +18,6 @@
 <body>
   <header>
     <h1>omakase</h1>
-    <span id="version" class="version" title=""></span>
     <button id="clear" type="button" aria-label="Delete all results"
             title="Delete all results" disabled></button>
     <button id="settings-gear" type="button" aria-label="Settings"
@@ -53,51 +52,8 @@
       <a href="https://freebuff.com/get-started?ref=ref-48e765cb-2146-4cf9-8fba-2a2af1676e77&referrer=Sebasti%C3%A1n+Vansteenkiste">FREEBUFF (affiliate link)</a> — dictionary data © EDRDG (JMdict,
       CC BY-SA 4.0)
     </p>
-    <details class="credits">
-      <summary title="Credits, licenses & disclaimers" aria-label="Credits, licenses and disclaimers">i</summary>
-      <div class="credits-panel">
-        <p><strong>Credits.</strong> Built by
-          <a href="https://github.com/zippolag">Sebastián R. Vansteenkiste</a> via
-          <a href="https://www.deepseek.com/">DeepSeek V4 Flash</a> @
-          <a href="https://freebuff.com/get-started?ref=ref-48e765cb-2146-4cf9-8fba-2a2af1676e77&referrer=Sebasti%C3%A1n+Vansteenkiste">FREEBUFF</a> (affiliate link) — an independent, from-scratch
-          reimplementation inspired by <a href="https://tangorin.com/">tangorin.com</a>
-          (developed by Gregory Bober, now owned by Archie Preston). omakase is not
-          affiliated with Tangorin, EDRDG, or any other source or contributor.</p>
-        <p><strong>Dictionary data.</strong> Built from open datasets, each with its own
-          license and attribution:</p>
-        <ul>
-          <li><strong>JMdict, KANJIDIC2, kradfile-u, radkfile</strong> — © James William
-            Breen &amp; The Electronic Dictionary Research and Development Group (EDRDG),
-            <a href="https://creativecommons.org/licenses/by-sa/4.0/">CC BY-SA 4.0</a>
-            (<a href="https://www.edrdg.org/edrdg/licence.html">licence statement</a>);
-            kradfile-u further © Jim Rose (KanjiCafe.com).</li>
-          <li><strong>KanjiVG</strong> stroke-order diagrams — © Ulrich Apel,
-            <a href="https://creativecommons.org/licenses/by-sa/3.0/">CC BY-SA 3.0</a>
-            (<a href="https://kanjivg.tagaini.net/">kanjivg.tagaini.net</a>).</li>
-          <li><strong>JmdictFurigana</strong> ruby segmentation — © Doublevil,
-            <a href="https://opensource.org/license/mit">MIT</a>; data derived from
-            JMdict (CC BY-SA 4.0).</li>
-          <li><strong>jmdict-simplified</strong> JSON conversion of the EDRDG files —
-            <a href="https://github.com/scriptin/jmdict-simplified">© scriptin</a>,
-            MIT packages; data CC BY-SA 4.0.</li>
-          <li><strong>Tatoeba</strong> example sentences — © Tatoeba contributors,
-            <a href="https://creativecommons.org/licenses/by/2.0/fr/">CC BY 2.0 FR</a>
-            (some CC0).</li>
-        </ul>
-        <p><strong>Software.</strong>
-          <a href="https://www.npmjs.com/package/better-sqlite3">better-sqlite3</a> (MIT) ·
-          <a href="https://sqlite.org/wasm">@sqlite.org/sqlite-wasm</a> (Apache-2.0;
-          SQLite itself is public domain) · dev tooling: TypeScript (Apache-2.0),
-          tsx (MIT), puppeteer-core (Apache-2.0). Full license texts ship with
-          the app in <a href="./LICENSE.md">LICENSE.md</a>; per-component
-          notices live in <a href="./NOTICE.md">NOTICE.md</a>.</p>
-        <p><strong>Disclaimers.</strong> Dictionary data is provided without any warranty as
-          to its accuracy or suitability (EDRDG licence); it may contain errors, and users
-          assume all liability for its use. Stroke diagrams come from the bundled KanjiVG
-          set and are cached locally. The app works 100% offline — nothing you look up
-          ever leaves this device.</p>
-      </div>
-    </details>
+    <button id="about-open" class="info-btn" type="button"
+            aria-label="About omakase" title="About">i</button>
   </footer>
 
   <dialog id="settings" aria-labelledby="settings-title">
@@ -146,6 +102,69 @@
                  autocomplete="off">
         </div>
       </div>
+      <div class="setting setting-danger">
+        <button type="button" id="settings-wipe">Erase all data</button>
+        <span class="setting-hint">Removes every local trace — dictionary, history,
+          settings, offline shell — and re-downloads on your next visit</span>
+      </div>
+    </div>
+  </dialog>
+
+  <dialog id="about" aria-labelledby="about-title">
+    <div class="about-head">
+      <h2 id="about-title">About omakase</h2>
+      <button id="about-close" type="button" aria-label="Close about"
+              title="Close">×</button>
+    </div>
+    <div class="about-body">
+      <div id="about-facts" class="about-facts">
+        <p class="about-version" id="about-version"></p>
+        <p id="about-build" class="about-muted"></p>
+        <p id="about-commit-date" class="about-muted"></p>
+        <p id="about-sqlite" class="about-muted"></p>
+        <p id="about-dict" class="about-muted"></p>
+        <p id="about-words" class="about-muted"></p>
+      </div>
+      <p><strong>Credits.</strong> Built by
+        <a href="https://github.com/zippolag">Sebastián R. Vansteenkiste</a> via
+        <a href="https://www.deepseek.com/">DeepSeek V4 Flash</a> @
+        <a href="https://freebuff.com/get-started?ref=ref-48e765cb-2146-4cf9-8fba-2a2af1676e77&referrer=Sebasti%C3%A1n+Vansteenkiste">FREEBUFF</a> (affiliate link) — an independent, from-scratch
+        reimplementation inspired by <a href="https://tangorin.com/">tangorin.com</a>
+        (developed by Gregory Bober, now owned by Archie Preston). omakase is not
+        affiliated with Tangorin, EDRDG, or any other source or contributor.</p>
+      <p><strong>Dictionary data.</strong> Built from open datasets, each with its own
+        license and attribution:</p>
+      <ul>
+        <li><strong>JMdict, KANJIDIC2, kradfile-u, radkfile</strong> — © James William
+          Breen &amp; The Electronic Dictionary Research and Development Group (EDRDG),
+          <a href="https://creativecommons.org/licenses/by-sa/4.0/">CC BY-SA 4.0</a>
+          (<a href="https://www.edrdg.org/edrdg/licence.html">licence statement</a>);
+          kradfile-u further © Jim Rose (KanjiCafe.com).</li>
+        <li><strong>KanjiVG</strong> stroke-order diagrams — © Ulrich Apel,
+          <a href="https://creativecommons.org/licenses/by-sa/3.0/">CC BY-SA 3.0</a>
+          (<a href="https://kanjivg.tagaini.net/">kanjivg.tagaini.net</a>).</li>
+        <li><strong>JmdictFurigana</strong> ruby segmentation — © Doublevil,
+          <a href="https://opensource.org/license/mit">MIT</a>; data derived from
+          JMdict (CC BY-SA 4.0).</li>
+        <li><strong>jmdict-simplified</strong> JSON conversion of the EDRDG files —
+          <a href="https://github.com/scriptin/jmdict-simplified">© scriptin</a>,
+          MIT packages; data CC BY-SA 4.0.</li>
+        <li><strong>Tatoeba</strong> example sentences — © Tatoeba contributors,
+          <a href="https://creativecommons.org/licenses/by/2.0/fr/">CC BY 2.0 FR</a>
+          (some CC0).</li>
+      </ul>
+      <p><strong>Software.</strong>
+        <a href="https://www.npmjs.com/package/better-sqlite3">better-sqlite3</a> (MIT) ·
+        <a href="https://sqlite.org/wasm">@sqlite.org/sqlite-wasm</a> (Apache-2.0;
+        SQLite itself is public domain) · dev tooling: TypeScript (Apache-2.0),
+        tsx (MIT), puppeteer-core (Apache-2.0). Full license texts ship with
+        the app in <a href="./LICENSE.md">LICENSE.md</a>; per-component
+        notices live in <a href="./NOTICE.md">NOTICE.md</a>.</p>
+      <p><strong>Disclaimers.</strong> Dictionary data is provided without any warranty as
+        to its accuracy or suitability (EDRDG licence); it may contain errors, and users
+        assume all liability for its use. Stroke diagrams come from the bundled KanjiVG
+        set and are cached locally. The app works 100% offline — nothing you look up
+        ever leaves this device.</p>
     </div>
   </dialog>
 
