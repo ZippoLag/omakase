@@ -187,9 +187,10 @@ async function main() {
     console.log("→ first visit (imports dictionary into OPFS)…");
     await page.goto(URL, { waitUntil: "load", timeout: 60000 });
     // While the engine starts / dictionary imports, boot must report itself:
-    // a live % readout next to the status message and the divider gauge under
-    // the controls, starting from its 0% dot. Sampled right after load — the
-    // 289 MB import below guarantees a long boot window still ahead.
+    // a live % readout next to the status message and the progress bar at the
+    // TOP edge of the control row (W17b), starting from its 0% dot. Sampled
+    // right after load — the 289 MB import below guarantees a long boot
+    // window still ahead.
     const bootProbe = await page.evaluate(() => {
       const pct = document.querySelector("#status .pct");
       const pctText = pct?.textContent ?? "";
@@ -233,8 +234,9 @@ async function main() {
       /^v\d+\.\d+\.\d+-build\.\d+/.test(badge.text) && badge.title.includes("dictionary build:"),
       JSON.stringify(badge),
     );
-    // Loading is done: the % readout is gone and the divider gauge sits at the
-    // full line (100%) — its resting look as the divider under the controls.
+    // Loading is done: the % readout is gone and the top-edge progress bar
+    // sits at the full line (100%) — its resting look as the accent stripe
+    // along the top of the control row.
     const readyProgress = await page.evaluate(() => {
       const pct = document.querySelector("#status .pct");
       return {
@@ -2408,6 +2410,92 @@ async function main() {
       document.querySelector(".credits summary").click();
       window.scrollTo(0, 0);
     });
+
+    // ---- W17 Phase 1: cosmetic pins (h, g, b, width) -----------------------
+    // Pure presentation changes, pinned through computed styles like the W16
+    // block. The 18-pane page from the W15 block is still up — a long result
+    // for the scroll-width check — and the top pane is a word pane, so a
+    // kanji token click nests a kanji pane for the W17g probe.
+    // W17b: the progress bar moved to the TOP edge of the control row (top
+    // 0, 2px tall) and the row's bottom corners rounded to 8px.
+    const w17Lookup = await page.evaluate(() => {
+      const row = document.querySelector("#lookup");
+      const rs = getComputedStyle(row);
+      const bar = getComputedStyle(row, "::after");
+      return {
+        barTop: bar.top,
+        barHeight: bar.height,
+        bottomLeft: rs.borderBottomLeftRadius,
+        bottomRight: rs.borderBottomRightRadius,
+      };
+    });
+    check(
+      "W17b: progress bar hugs the row's top edge, bottom corners rounded",
+      w17Lookup.barTop === "0px" && w17Lookup.barHeight === "2px"
+        && w17Lookup.bottomLeft === "8px" && w17Lookup.bottomRight === "8px",
+      JSON.stringify(w17Lookup),
+    );
+    // W17h: pane <pre> text is 14px (up from 13).
+    const w17Font = await page.evaluate(() => {
+      const pre = document.querySelector("#panes .pane pre");
+      return pre ? getComputedStyle(pre).fontSize : null;
+    });
+    check("W17h: pane text is 14px", w17Font === "14px", w17Font ?? "(no pane)");
+    // W17g: click a kanji token in the top word pane to nest a kanji pane,
+    // then pin its centering: equal left/right gaps from the parent and no
+    // left border (the tone alternation is the depth cue).
+    const w17NestedTok = await page.evaluate(() => {
+      const host = document.querySelector("#panes .pane");
+      const tok = host?.querySelector("pre .tok-kanji");
+      if (!tok) return null;
+      const q = tok.textContent;
+      tok.click();
+      return q;
+    });
+    const w17Nested = await waitFor(
+      page,
+      () => page.evaluate(() => {
+        const host = document.querySelector("#panes .pane");
+        if (!host || document.querySelector("#lookup").hasAttribute("aria-busy")) return null;
+        const child = host.querySelector(".pane-children > .pane");
+        if (!child) return null;
+        const kids = host.querySelector(".pane-children");
+        const cr = kids.getBoundingClientRect();
+        const nr = child.getBoundingClientRect();
+        return {
+          q: child.querySelector(".pane-query")?.textContent ?? "",
+          badge: child.querySelector(".badge")?.textContent ?? "",
+          leftGap: nr.left - cr.left,
+          rightGap: cr.right - nr.right,
+          borderLeftStyle: getComputedStyle(child).borderLeftStyle,
+        };
+      }),
+      30000,
+      "nested pane for W17g",
+    );
+    check(
+      "W17g: nested pane centered with equal gaps and no left border",
+      !!w17Nested && !!w17NestedTok && w17Nested.badge === "kanji" && w17Nested.q === w17NestedTok
+        && w17Nested.borderLeftStyle === "none"
+        && w17Nested.leftGap > 0 && w17Nested.rightGap > 0
+        && Math.abs(w17Nested.leftGap - w17Nested.rightGap) <= 1,
+      JSON.stringify(w17Nested),
+    );
+    // W17-width: html/body clip horizontal overflow so a horizontal scrollbar
+    // can never appear — even with 18 panes on screen the page must not
+    // scroll sideways.
+    const w17Width = await page.evaluate(() => ({
+      htmlOverflow: getComputedStyle(document.documentElement).overflowX,
+      bodyOverflow: getComputedStyle(document.body).overflowX,
+      scrollWidth: document.documentElement.scrollWidth,
+      clientWidth: document.documentElement.clientWidth,
+    }));
+    check(
+      "W17-width: html/body clip horizontal overflow, no scrollbar on a long result",
+      w17Width.htmlOverflow === "clip" && w17Width.bodyOverflow === "clip"
+        && w17Width.scrollWidth <= w17Width.clientWidth,
+      JSON.stringify(w17Width),
+    );
 
     // OPFS VFS logs NotFound probes for sidecar files (journals) as errors; benign.
     const realErrors = consoleLog.filter(

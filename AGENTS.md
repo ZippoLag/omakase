@@ -314,7 +314,10 @@ in W10 — before adding any cache API, grep for callers first.
   `documentElement.clientHeight/clientWidth` (900×420) — compare rects against
   the latter, never `window.inner*` — and `%` on a fixed element resolves
   against the emulated ICB, so the panel centers with vw/vh (identical on real
-  devices). All W1–W16 are now implemented; the e2e is 113 checks.
+  devices). All W1–W16 are now implemented, and W17 Phase 1 (cosmetic:
+  W17h font bump, W17g nested centering, W17b bar-to-top, W17-width
+  overflow hardening, W17-settings-dvh fallback) is landed; the e2e is 117
+  checks.
 
 ## 9. Golden rules (the short version)
 

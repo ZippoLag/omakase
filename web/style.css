@@ -62,13 +62,20 @@
 
 * { box-sizing: border-box; }
 
-html { -webkit-text-size-adjust: 100%; }
+html {
+  -webkit-text-size-adjust: 100%;
+  /* W17-width: clip (NOT hidden) horizontal overflow so a horizontal
+     scrollbar can never appear. hidden would turn html/body into a scroll
+     container and break the sticky control row; clip never creates one. */
+  overflow-x: clip;
+}
 
 body {
   margin: 0;
   background: var(--bg);
   color: var(--ink);
   font: 16px/1.45 var(--sans);
+  overflow-x: clip; /* same hardening as html (W17-width) */
   /* W15: flex column so #panes can grow and the footer pins to the screen
      bottom on short pages (including zero panes); when content is taller the
      page scrolls and the footer stays in flow after the last pane. min-height
@@ -133,7 +140,8 @@ h1 {
 
 /* Live boot progress readout — “x%” next to the status message while the
    engine starts / dictionary imports; hidden once ready. The gauge it
-   mirrors is the divider line under the controls (#lookup::after). */
+   mirrors is the progress bar at the TOP edge of the controls
+   (#lookup::after). */
 #status .pct {
   flex: none;
   color: var(--accent);
@@ -186,21 +194,27 @@ h1 {
   top: 0;
   z-index: 10;
   background: var(--bg);
-  padding: 2px 14px 10px;
+  /* W17b: the progress bar moved to the row's TOP edge, so the bottom
+     corners can round — the row reads as a card with the bar as its top
+     edge; the top stays square so the bar spans it cleanly. Top padding is
+     6px so the input (with its 2px+2px focus outline) clears the 2px bar. */
+  border-radius: 0 0 8px 8px;
+  padding: 6px 14px 10px;
   max-width: 860px;
   margin: 0 auto;
   border-bottom: 1px solid var(--line);
   box-shadow: 0 1px 0 rgba(0, 0, 0, 0.03);
 }
 
-#lookup::after { /* boot progress: the divider under the controls doubles as
-                     the startup gauge — a tiny dot at 0% that fills to the
-                     full line (100%) once the engine reports ready */
+#lookup::after { /* boot progress: the bar at the TOP edge of the controls
+                     doubles as the startup gauge — a tiny dot at 0% that
+                     fills to the full line (100%) once the engine reports
+                     ready (W17b) */
   content: "";
   display: block;
   position: absolute;
   left: 0;
-  bottom: 0;
+  top: 0;
   height: 2px;
   min-width: 2px; /* even at 0% the gauge's start reads as a dot */
   border-radius: 1px;
@@ -427,7 +441,7 @@ button.busy {
 .pane pre {
   margin: 0;
   padding: 12px 14px;
-  font: 13px/1.5 var(--mono);
+  font: 14px/1.5 var(--mono); /* W17h: a slightly larger result font */
   white-space: pre-wrap;
   overflow-wrap: anywhere;
   overflow-x: auto;
@@ -834,10 +848,13 @@ summary:focus-visible,
    ========================================================================== */
 
 /* ---- Nested result panes -------------------------------------------------- */
+/* W17g: nested panes are centered with an equal ~10px gap on BOTH sides
+   instead of being thrown right with a big left margin + left border — the
+   depth cue is the tone alternation (even = tint, odd = soft), not an edge. */
 .pane.nested {
-  margin-left: 15px;
-  border-left: 2px solid var(--line);
-  padding-left: 10px;
+  margin: 0 10px;
+  border-left: none;
+  padding-left: 0;
 }
 
 .pane-children {
@@ -937,8 +954,15 @@ summary:focus-visible,
   color: var(--ink);
   padding: 0;
   width: min(440px, calc(100vw - 32px));
-  max-height: min(80dvh, 560px);
+  /* W17-settings-dvh: max-height falls back to vh first (iOS Safari < 15.4
+     lacks dvh — there the whole min(80dvh, 560px) is invalid and the dialog
+     becomes unbounded); the @supports block below overrides with dvh where
+     supported, exactly like the W15 body rule. */
+  max-height: min(80vh, 560px);
   box-shadow: 0 8px 24px rgba(0, 0, 0, 0.18);
+}
+@supports (height: 1dvh) {
+  #settings { max-height: min(80dvh, 560px); }
 }
 /* A closed dialog must stay hidden. The UA hides it via
    dialog:not([open]) { display: none }, but an author `display` rule would
