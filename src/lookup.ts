@@ -190,9 +190,11 @@ export function strokeFileFor(db: DB, literal: string): string | null {
  * compounds) by literal. `radicals` are the kradfile component radicals in
  * kradfile order (a radical kanji lists itself first, e.g. 見 → 見 目 儿).
  * `maxCompounds` caps the compounds list (the page still reports how many
- * compounds exist via LoadedKanji.compoundTotal).
+ * compounds exist via LoadedKanji.compoundTotal); `offset` starts the
+ * window `offset` rows in, so a paged kanji page shows rows
+ * [offset, offset+maxCompounds) while still reporting the full total.
  */
-export function loadKanji(db: DB, literal: string, maxCompounds?: number): LoadedKanji | null {
+export function loadKanji(db: DB, literal: string, maxCompounds?: number, offset = 0): LoadedKanji | null {
   const k = db.prepare(
     "SELECT literal, stroke_count, grade, frequency, jlpt_level, classical_radical FROM kanji WHERE literal = ?",
   ).get(literal) as LoadedKanjiRow | undefined;
@@ -215,8 +217,8 @@ export function loadKanji(db: DB, literal: string, maxCompounds?: number): Loade
   // Rows are in word-id order; cap the list before loading words (each load
   // is a handful of queries) and report the uncapped total for the note.
   const compoundTotal = rows.length;
-  const shown = maxCompounds === undefined ? rows : rows.slice(0, maxCompounds);
-  const compounds = shown.map((r) => {
+  const window = maxCompounds === undefined ? rows.slice(offset) : rows.slice(offset, offset + maxCompounds);
+  const compounds = window.map((r) => {
     const word = loadWord(db, r.word_id);
     return {
       wordId: r.word_id,
@@ -273,7 +275,7 @@ export interface KanjiWordHit {
  * flags, chunked under the variable limit) into JS just to rank and drop
  * all but the top rows. `total` reports the pre-cap word count.
  */
-export function wordsContainingKanji(db: DB, literals: string[], max: number): { hits: KanjiWordHit[]; total: number } {
+export function wordsContainingKanji(db: DB, literals: string[], max: number, offset = 0): { hits: KanjiWordHit[]; total: number } {
   const ph = literals.map(() => "?").join(",");
   // COUNT(*) OVER () runs over the ranked set (before the LIMIT), so one
   // statement returns both the capped words and the pre-cap total.
@@ -298,8 +300,8 @@ export function wordsContainingKanji(db: DB, literals: string[], max: number): {
     JOIN words w ON w.id = b.word_id
     WHERE b.rn = 1
     ORDER BY b.matched DESC, w.common DESC, CAST(b.word_id AS INTEGER)
-    LIMIT ?
-  `).all(...literals, max) as {
+    LIMIT ? OFFSET ?
+  `).all(...literals, max, offset) as {
     word_id: string;
     writing: string;
     matched: number;
@@ -626,13 +628,16 @@ export interface ReadingPrefixResult {
  *
  * Ranking and the `max` cap are pushed into SQL — one windowed statement
  * picks each word's first matching kana writing (lowest writings.id), ranks
- * the distinct words, and LIMITs before any word is loaded — so at most
- * `max` words are loaded instead of every prefix match (short kana/romaji
- * prefixes can otherwise match thousands). `max` is the LIMIT bound; a
- * negative value means no cap, like SQLite. `total` reports the pre-cap
- * count so callers can still render the ``… and N more`` remainder.
+ * the distinct words, and LIMIT/OFFSETs before any word is loaded — so at
+ * most `max` words are loaded instead of every prefix match (short
+ * kana/romaji prefixes can otherwise match thousands). `max` is the LIMIT
+ * bound; a negative value means no cap, like SQLite. `offset` starts the
+ * window `offset` rows in (paging; the CLI instead requests a LIMIT of
+ * offset+max and lets the renderer slice). `total` reports the pre-cap
+ * count (COUNT(*) OVER () runs before the LIMIT) so callers can still
+ * render the ``… and N more`` remainder.
  */
-export function searchReadingPrefix(db: DB, prefix: string, max: number): ReadingPrefixResult {
+export function searchReadingPrefix(db: DB, prefix: string, max: number, offset = 0): ReadingPrefixResult {
   const q = prefix.trim();
   const kana = isKanaInput(q);
   const needle = (kana ? q : q.toLowerCase()).replace(/\s+/g, "");
@@ -652,8 +657,8 @@ export function searchReadingPrefix(db: DB, prefix: string, max: number): Readin
     JOIN words w ON w.id = f.word_id
     WHERE f.rn = 1
     ORDER BY (f.${col} = ?) DESC, w.common DESC, LENGTH(f.text), CAST(f.word_id AS INTEGER)
-    LIMIT ?
-  `).all(`${escapeLike(needle)}%`, needle, max) as {
+    LIMIT ? OFFSET ?
+  `).all(`${escapeLike(needle)}%`, needle, max, offset) as {
     word_id: string;
     text: string;
     romaji: string | null;
@@ -822,15 +827,17 @@ const THESAURUS_LIMIT = 5;
  * reverse links, and 2-hop closure rows (see data/build/transform.ts). Rows
  * are read in build order, so the first link to a target wins (preferring the
  * sense-specific gloss of a forward link); targets are de-duplicated and
- * "top" = common words first, then by word id; each list is capped at `limit`
- * (default 5).
+ * "top" = common words first, then by word id; each list is windowed at
+ * [offset, offset+limit) (default limit 5) with the full pre-window counts
+ * reported alongside, so a paged CLI/web can show the remainder note.
  */
 export function wordThesaurus(
   db: DB,
   word: LoadedWord,
   limit: number = THESAURUS_LIMIT,
-): { synonyms: ThesaurusHit[]; antonyms: ThesaurusHit[] } {
-  const collect = (kind: "related" | "antonym"): ThesaurusHit[] => {
+  offset = 0,
+): { synonyms: ThesaurusHit[]; antonyms: ThesaurusHit[]; synonymTotal: number; antonymTotal: number } {
+  const collect = (kind: "related" | "antonym"): { hits: ThesaurusHit[]; total: number } => {
     const rows = db.prepare(
       `SELECT to_word, to_sense FROM thesaurus_links
        WHERE kind = ? AND from_word = ? AND to_word != from_word
@@ -849,9 +856,16 @@ export function wordThesaurus(
       Number(b.word.common) - Number(a.word.common) ||
       a.word.id.localeCompare(b.word.id, undefined, { numeric: true }),
     );
-    return hits.slice(0, limit);
+    return { hits, total: hits.length };
   };
-  return { synonyms: collect("related"), antonyms: collect("antonym") };
+  const syn = collect("related");
+  const ant = collect("antonym");
+  return {
+    synonyms: syn.hits.slice(offset, offset + limit),
+    antonyms: ant.hits.slice(offset, offset + limit),
+    synonymTotal: syn.total,
+    antonymTotal: ant.total,
+  };
 }
 
 // ---- gloss-token thesaurus fallback -----------------------------------------
@@ -923,14 +937,15 @@ export function glossThesaurus(
   db: DB,
   word: LoadedWord,
   limit: number = THESAURUS_LIMIT,
-): { synonyms: ThesaurusHit[]; antonyms: ThesaurusHit[] } {
+  offset = 0,
+): { synonyms: ThesaurusHit[]; antonyms: ThesaurusHit[]; synonymTotal: number; antonymTotal: number } {
   const tokens = new Set<string>();
   for (const s of word.senses) {
     for (const g of s.glosses) {
       for (const t of glossTokens(g)) tokens.add(t);
     }
   }
-  if (tokens.size === 0) return { synonyms: [], antonyms: [] };
+  if (tokens.size === 0) return { synonyms: [], antonyms: [], synonymTotal: 0, antonymTotal: 0 };
 
   const sourceClasses = coarsePosClasses(word.senses);
   const skip = new Set<string>([word.id]);
@@ -966,7 +981,7 @@ export function glossThesaurus(
   }
 
   const candIds = [...shared.keys()];
-  if (candIds.length === 0) return { synonyms: [], antonyms: [] };
+  if (candIds.length === 0) return { synonyms: [], antonyms: [], synonymTotal: 0, antonymTotal: 0 };
 
   // Coarse POS per candidate (all senses) for the class-overlap filter.
   const candClasses = new Map<string, Set<string>>();
@@ -1020,12 +1035,12 @@ export function glossThesaurus(
   );
 
   const synonyms: ThesaurusHit[] = [];
-  for (const c of cands.slice(0, limit)) {
+  for (const c of cands.slice(offset, offset + limit)) {
     const target = loadWord(db, c.id);
     if (!target) continue;
     synonyms.push({ word: target, gloss: firstGloss(target) });
   }
-  return { synonyms, antonyms: [] };
+  return { synonyms, antonyms: [], synonymTotal: cands.length, antonymTotal: 0 };
 }
 
 // ---- example sentences ----------------------------------------------------

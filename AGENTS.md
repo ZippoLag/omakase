@@ -282,6 +282,25 @@ in W10 — before adding any cache API, grep for callers first.
   renders in the page flow (author `display` on a `<dialog>` overrides the UA's
   closed-state hiding — scope layout rules to `#settings[open]`), and the e2e
   drives the ✕ with a real pointer click + visibility assertions.
+- **W17a (shared renderer) and W17i (resumable paging) are DONE** — see their
+  statuses in REVIEW-FIXES.md (Phase 3). W17a reworked the shared renderer:
+  two-line gloss rows everywhere a writing/reading precedes a gloss (word
+  thesaurus, kanji compounds, search rows, kanji Meanings split), thesaurus
+  `… and N more` remainder notes, `--offset` on word/kanji/search with the new
+  row-only helpers `thesaurusRowList`/`kanjiCompoundRows`/`searchRowList`, and
+  new offset goldens. W17i built resumable paging on top: `ResultNode.pages`
+  (persisted + W8-validated), the DOM-free `web/app/paging.ts` (`foldAnchors`
+  folds per-section anchors into global line numbers, `splicePage` rewrites
+  node.text/pages), load-more buttons inline in the pane pre, the ★W18a
+  cached-path clone (a pane built from a cache entry must clone `pages` AND
+  each `PageState` — `handlePageResult` mutates in place), the ★W18d page-
+  request watchdog (`pageContext` + timeout re-arms the button, late replies
+  inert), and `meaningRankCache` in commands.ts. Two landmines the e2e
+  surfaced: `findNoteNode` must count `\n` boundaries, never child nodes
+  (linkifyLine splits lines into per-character text nodes), and `splicePage`
+  must advance `offset` by ROWS (`total - remaining`), never by inserted line
+  count (compound/thesaurus rows are two lines each). Keep both when touching
+  paging.
 - **W16 (cosmetic overhaul: softened wood-block/monospace look + configurable
   bg/accent) is DONE** — see its status in REVIEW-FIXES.md. Post-review
   softening: the `--line-inner` inset double-frame was dropped (single
@@ -326,7 +345,7 @@ in W10 — before adding any cache API, grep for callers first.
   sections linkify with the same rule via command/query on the skeleton
   entries), and W17j erase-all-data (settings danger zone: confirm →
   unregister SWs, delete caches, clear storage, wipe OPFS, reload). The
-  e2e is 124 checks; the W17j block runs last (after the console-error
+  e2e is 151 checks; the W17j block runs last (after the console-error
   probe) and its waitFor keys on a zero-pane fresh shell — the pre-wipe
   page is also idle "ready", so a status-only poll matches it before the
   async wipe + reload land.

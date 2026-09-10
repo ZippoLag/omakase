@@ -11,4 +11,5 @@ Adjective (keiyoushi)
   3. on everybody's mind; on the radar; du jour; interested (gaze, etc.)
 
 Antonyms:
-  寒い  [さむい]  cold (e.g. weather)
+  寒い  [さむい]
+     cold (e.g. weather)

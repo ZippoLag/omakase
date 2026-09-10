@@ -19,7 +19,24 @@ export interface RunRequest {
   max: number;
 }
 
-export type WorkerRequest = RunRequest;
+/** Which paged list a load-more button continues (W17i). */
+export type PageSection = "synonyms" | "antonyms" | "compounds" | "readings" | "meanings" | "kanji";
+
+/** One load-more request: fetch the next `max` rows of a pane's paged list
+ * starting at `offset` (the number of rows already shown), tagged with the
+ * caller's id so replies pair up. The worker renders the rows itself (same
+ * text the CLI would print) and returns them raw. */
+export interface PageRequest {
+  kind: "page";
+  id: number;
+  command: Command;
+  query: string;
+  max: number;
+  offset: number;
+  section: PageSection;
+}
+
+export type WorkerRequest = RunRequest | PageRequest;
 
 /**
  * Per-operation progress ladders — the divider bar's meaning while a lookup
@@ -75,8 +92,11 @@ export type WorkerMessage =
    * sections (a blank line for word/search, nothing for kanji pages), so
    * concatenating every section of a request reproduces the CLI text
    * byte-for-byte (see the searchSections join test). `label` names the
-   * ladder floor the section claims on arrival (OP_LADDERS). */
-  | { kind: "op-section"; id: number; label: string; text: string }
+   * ladder floor the section claims on arrival (OP_LADDERS). `pages` (when
+   * the section carries capped lists) lists the ``… and N more`` note
+   * lines inside this section text, one per paged list — the UI turns each
+   * into a load-more button (W17i). */
+  | { kind: "op-section"; id: number; label: string; text: string; pages?: PageAnchor[] }
   /** Counted progress inside a counted ladder section (search meanings):
    * `pct` is the absolute operation progress 0–100 the section has reached,
    * monotonic — the UI follows it verbatim instead of easing. `text` is the
@@ -89,5 +109,22 @@ export type WorkerMessage =
    * svg files behind each page, so the UI can mount the per-character
    * animation widgets. */
   | { kind: "result"; id: number; text: string | null; error: string | null; strokes?: StrokePage[] }
+  /** A load-more continuation answered: `rowsText` is the raw rendered rows
+   * (already windowed, same text the CLI prints for that window) and
+   * `remaining` the count still to come after them. `error` (mutually
+   * exclusive with rows) carries the failure message. */
+  | { kind: "page-result"; id: number; rowsText: string; remaining: number; error: string | null }
   /** Fatal: engine could not start (unsupported browser / missing headers). */
   | { kind: "fatal"; message: string };
+
+/** One ``… and N more`` note inside a streamed section, located by its
+ * 0-based line index into the SECTION text's `split("\n")` array (the
+ * separator newline at the section start counts as line 0 when present).
+ * `total` is the paged list's full pre-cap count, `shown` the rows already
+ * rendered in the pane before this note. */
+export interface PageAnchor {
+  section: PageSection;
+  total: number;
+  shown: number;
+  line: number;
+}

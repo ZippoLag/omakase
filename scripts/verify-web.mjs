@@ -183,6 +183,39 @@ async function main() {
         return origFetch(input, init);
       };
     });
+    // W17i (★W18d): the page-request watchdog must re-arm a load-more button
+    // when the worker never answers. The main thread cannot delay the worker's
+    // reply through puppeteer, so the Worker's `onmessage` SETTER is wrapped
+    // (same evaluateOnNewDocument pattern as the fetch patch above): the app
+    // assigns its handler through the wrapped setter, which stores a proxy
+    // that holds page-result messages for window.__pageResultDelayMs while
+    // that hook is > 0, letting the (test-shrunk) page timeout fire first.
+    // The native setter still runs (the proxy goes into whatever internal
+    // slot the browser uses), so event dispatch is untouched — only the
+    // stored handler is deferred. The timeout budget itself is overridable
+    // at runtime via window.__pageTimeoutMs.
+    await page.evaluateOnNewDocument(() => {
+      const RealWorker = window.Worker;
+      if (!RealWorker) return;
+      const desc = Object.getOwnPropertyDescriptor(RealWorker.prototype, "onmessage");
+      if (!desc || !desc.set) return;
+      Object.defineProperty(RealWorker.prototype, "onmessage", {
+        configurable: true,
+        get: desc.get,
+        set(fn) {
+          const wrapped = (ev) => {
+            const msg = ev.data;
+            const delay = window.__pageResultDelayMs ?? 0;
+            if (delay > 0 && msg && msg.kind === "page-result") {
+              setTimeout(() => fn(ev), delay);
+              return;
+            }
+            fn(ev);
+          };
+          desc.set.call(this, wrapped);
+        },
+      });
+    });
 
     console.log("→ first visit (imports dictionary into OPFS)…");
     await page.goto(URL, { waitUntil: "load", timeout: 60000 });
@@ -2633,6 +2666,448 @@ async function main() {
       w17f.hidden && w17f.hiddenBottom <= 0 && w17f.shown,
       JSON.stringify(w17f),
     );
+
+    // ---- W17i: resumable paging (load-more buttons) ------------------------
+    // Self-contained per ★W18b: the block pins #settings-max to 5 at the
+    // start (dispatching `change` — a bare .value assignment does not fire
+    // the listener, and `submit` reads the live value, so the event matters
+    // only for persistence) and restores the prior value at the end. All
+    // assertions are RELATIVE deltas — each click drops the "… and N more"
+    // note by exactly node.max, the button disappears at exhaustion — never
+    // hard-coded dictionary totals. Panes are probed by identity: the count
+    // of #panes is checked before/after each lookup and the pane is found by
+    // its .pane-query, so a dedupe-suppressed lookup (the W17g block's kanji
+    // 食 action is still alive; `search eat` ran earlier too) fails loudly
+    // instead of silently paging an older pane — stale panes are deleted
+    // first so the fresh lookups actually render.
+    const priorMax = await page.evaluate(() => {
+      const el = document.querySelector("#settings-max");
+      const prior = el.value;
+      el.value = "5";
+      el.dispatchEvent(new Event("change", { bubbles: true }));
+      return prior;
+    });
+    await page.evaluate(() => {
+      // Delete stale 食 / eat panes (and any nested lookups under them) so
+      // dedupe cannot suppress the fresh lookups below (★W18b pane identity).
+      const targets = new Set(["食", "eat"]);
+      for (const pane of [...document.querySelectorAll("#panes .pane")]) {
+        const q = pane.querySelector(".pane-query")?.textContent ?? "";
+        if (targets.has(q)) pane.querySelector(".pane-del")?.click();
+      }
+    });
+    // __pagingProbe(q, topOnly): state of the pane whose .pane-query is q —
+    // the paged note ("  … and N more") with its button sibling, every
+    // load-more button in the pane, and the number of 5-space gloss lines
+    // (compound / synonym / meaning rows are two-line rows ending in a
+    // 5-space gloss). `topOnly` restricts to #panes > .pane (the cached
+    // nested panes live inside their parent's .pane-children). A line is
+    // NOT a single text node — linkifyLine pushes characters one node at a
+    // time — so each line's adjacent text nodes are concatenated before the
+    // note pattern is tested (mirroring findNoteNode in main.ts).
+    //
+    // __noteScan(pre) returns the paged-note line (with its button sibling)
+    // for any pane's pre, scanning child nodes — never textContent, whose
+    // line breaks glue the inline load-more button's text onto the note
+    // line. Re-installed after the reload below (evaluate does not survive
+    // navigation).
+    const installPagingProbe = () => page.evaluate(() => {
+      window.__noteScan = (pre) => {
+        let note = null;
+        for (const child of pre.childNodes) {
+          if (child.nodeType === Node.TEXT_NODE && child.nodeValue === "\n") continue;
+          let node = child;
+          let lineText = "";
+          let lastText = null;
+          while (node && !(node.nodeType === Node.TEXT_NODE && node.nodeValue === "\n")) {
+            if (node.nodeType === Node.TEXT_NODE) {
+              lineText += node.nodeValue;
+              lastText = node;
+            }
+            node = node.nextSibling;
+          }
+          const m = /^  … and (\d+) more$/.exec(lineText);
+          if (m) {
+            const next = lastText?.nextSibling;
+            note = {
+              text: lineText,
+              remaining: +m[1],
+              button: next instanceof HTMLButtonElement && next.classList.contains("load-more")
+                ? { label: next.textContent, title: next.title, disabled: next.disabled }
+                : null,
+            };
+          }
+        }
+        return note;
+      };
+      window.__pagingProbe = (q, topOnly = false) => {
+        const panes = [...document.querySelectorAll(topOnly ? "#panes > .pane" : "#panes .pane")];
+        const pane = panes.find((p) => p.querySelector(".pane-query")?.textContent === q) ?? null;
+        if (!pane) return { found: false, paneCount: panes.length };
+        const pre = pane.querySelector("pre");
+        const text = pre.textContent;
+        return {
+          found: true,
+          paneCount: panes.length,
+          nodeId: pane.dataset.nodeId,
+          glossRows: text.split("\n").filter((l) => /^     /.test(l)).length,
+          buttons: [...pre.querySelectorAll("button.load-more")]
+            .map((b) => ({ label: b.textContent, title: b.title, disabled: b.disabled })),
+          note: window.__noteScan(pre),
+        };
+      };
+    });
+    await installPagingProbe();
+    // Click the load-more button of the pane with .pane-query q (top-level
+    // when topOnly); returns false when there is nothing to click.
+    const clickLoadMore = (q, topOnly = false) => page.evaluate(([qq, top]) => {
+      const panes = [...document.querySelectorAll(top ? "#panes > .pane" : "#panes .pane")];
+      const pane = panes.find((p) => p.querySelector(".pane-query")?.textContent === qq);
+      const b = pane?.querySelector("button.load-more");
+      if (!b || b.disabled) return false;
+      b.click();
+      return true;
+    }, [q, topOnly]);
+    // Wait for the pane's button to settle after a page request: re-armed
+    // ({ label }) when rows remain, or GONE ({ label: null }) on exhaustion.
+    const waitLoadMoreSettled = (q, topOnly = false, timeoutMs = 30000) => waitFor(
+      page,
+      () => page.evaluate(([qq, top]) => {
+        const panes = [...document.querySelectorAll(top ? "#panes > .pane" : "#panes .pane")];
+        const pane = panes.find((p) => p.querySelector(".pane-query")?.textContent === qq);
+        const b = pane?.querySelector("button.load-more");
+        if (!b) return { label: null };
+        return b.disabled ? null : { label: b.textContent };
+      }, [q, topOnly]),
+      timeoutMs,
+      `page request settled for ${q}`,
+    );
+
+    // kanji 食 (1207 compounds): the Compounds list shows 5 rows + note;
+    // each click appends 5 rows and drops the note by exactly 5.
+    const countBeforeA = await page.evaluate(() => window.__pagingProbe("食"));
+    await runLookup(page, "kanji", "食");
+    const probeA = await page.evaluate(() => window.__pagingProbe("食"));
+    check(
+      "W17i: kanji 食 renders a fresh pane (pane count +1) with a Compounds note + load-more button",
+      probeA.found && probeA.paneCount === countBeforeA.paneCount + 1
+        && !!probeA.note && !!probeA.note.button
+        && probeA.note.button.label === "load 5 more"
+        && /^\d+ more available$/.test(probeA.note.button.title),
+      JSON.stringify({ panes: `${countBeforeA.paneCount}→${probeA.paneCount}`, note: probeA.note, rows: probeA.glossRows }),
+    );
+    check("W17i: kanji 食 load-more clicked (1st)", await clickLoadMore("食"), "");
+    await waitLoadMoreSettled("食");
+    const probeA2 = await page.evaluate(() => window.__pagingProbe("食"));
+    check(
+      "W17i: kanji 食 first click appends 5 compound rows, note drops by exactly 5",
+      !!probeA2.note && !!probeA2.note.button
+        && probeA2.note.remaining === probeA.note.remaining - 5
+        && probeA2.glossRows === probeA.glossRows + 5,
+      JSON.stringify({ note: `${probeA.note.remaining}→${probeA2.note.remaining}`, rows: `${probeA.glossRows}→${probeA2.glossRows}` }),
+    );
+    check("W17i: kanji 食 load-more clicked (2nd)", await clickLoadMore("食"), "");
+    await waitLoadMoreSettled("食");
+    const probeA3 = await page.evaluate(() => window.__pagingProbe("食"));
+    check(
+      "W17i: kanji 食 second click drops the note by another 5 (offset accumulates)",
+      !!probeA3.note && probeA3.note.remaining === probeA2.note.remaining - 5
+        && probeA3.glossRows === probeA2.glossRows + 5,
+      JSON.stringify({ note: `${probeA2.note.remaining}→${probeA3.note.remaining}`, rows: `${probeA2.glossRows}→${probeA3.glossRows}` }),
+    );
+    // The persisted state carries the paged window: one compounds page at
+    // offset 15 (3 × max 5), whose total matches the note's remaining + 15.
+    const stateA = await page.evaluate(() => {
+      const s = JSON.parse(localStorage.getItem("omakase.state") ?? "null");
+      const walk = (nodes) => {
+        for (const n of nodes ?? []) {
+          if (n.command === "kanji" && n.query === "食" && n.pages) return n.pages;
+          const hit = walk(n.children);
+          if (hit) return hit;
+        }
+        return null;
+      };
+      return walk(s?.resultTree);
+    });
+    check(
+      "W17i: persisted state tracks the paged window (offset 15, total = remaining + offset)",
+      !!stateA && stateA.length === 1 && stateA[0].section === "compounds"
+        && stateA[0].offset === 15
+        && stateA[0].total === stateA[0].offset + (probeA3.note?.remaining ?? 0)
+        && Number.isInteger(stateA[0].line),
+      JSON.stringify(stateA),
+    );
+
+    // search eat: the Meanings list pages the same way.
+    const countBeforeB = await page.evaluate(() => window.__pagingProbe("eat"));
+    await runLookup(page, "search", "eat");
+    const probeB = await page.evaluate(() => window.__pagingProbe("eat"));
+    check(
+      "W17i: search eat renders a fresh pane with a Meanings note + load-more button",
+      probeB.found && probeB.paneCount === countBeforeB.paneCount + 1
+        && !!probeB.note && !!probeB.note.button,
+      JSON.stringify({ panes: `${countBeforeB.paneCount}→${probeB.paneCount}`, note: probeB.note, rows: probeB.glossRows }),
+    );
+    check("W17i: search eat load-more clicked", await clickLoadMore("eat"), "");
+    await waitLoadMoreSettled("eat");
+    const probeB2 = await page.evaluate(() => window.__pagingProbe("eat"));
+    check(
+      "W17i: search eat click appends 5 meaning rows, note drops by exactly 5",
+      !!probeB2.note && probeB2.note.remaining === probeB.note.remaining - 5
+        && probeB2.glossRows === probeB.glossRows + 5,
+      JSON.stringify({ note: `${probeB.note.remaining}→${probeB2.note.remaining}`, rows: `${probeB.glossRows}→${probeB2.glossRows}` }),
+    );
+
+    // word 行く (6 synonyms): one click exhausts the list — note + button go.
+    const countBeforeC = await page.evaluate(() => window.__pagingProbe("行く"));
+    await runLookup(page, "word", "行く");
+    const probeC = await page.evaluate(() => window.__pagingProbe("行く"));
+    check(
+      "W17i: word 行く Synonyms note + load-more (6 synonyms, 5 shown)",
+      probeC.found && probeC.paneCount === countBeforeC.paneCount + 1
+        && probeC.note?.text === "  … and 1 more" && !!probeC.note.button,
+      JSON.stringify({ note: probeC.note, rows: probeC.glossRows }),
+    );
+    check("W17i: word 行く load-more clicked (exhausting)", await clickLoadMore("行く"), "");
+    await waitLoadMoreSettled("行く");
+    const probeC2 = await page.evaluate(() => window.__pagingProbe("行く"));
+    check(
+      "W17i: word 行く one click exhausts the list — note and button gone, the remaining row appears",
+      !probeC2.note && probeC2.buttons.length === 0 && probeC2.glossRows === probeC.glossRows + 1,
+      JSON.stringify({ note: probeC2.note, buttons: probeC2.buttons.length, rows: `${probeC.glossRows}→${probeC2.glossRows}` }),
+    );
+
+    // ★W18a regression: two panes from ONE cache entry must page
+    // independently. Top-level 来る (8 synonyms) sets the (word, 来る, 5)
+    // cache entry; the 来る row inside the 行く pane nests a second 来る pane
+    // through submit's cached path, which must CLONE the pages array and its
+    // PageState objects — paging the nested pane must leave the top-level
+    // pane's note/button untouched, and vice versa.
+    const countBeforeD = await page.evaluate(() => window.__pagingProbe("来る", true));
+    await runLookup(page, "word", "来る");
+    const probeD = await page.evaluate(() => window.__pagingProbe("来る", true));
+    check(
+      "W17i: word 来る top-level Synonyms note + load-more (8 synonyms, 5 shown)",
+      probeD.found && probeD.paneCount === countBeforeD.paneCount + 1
+        && probeD.note?.text === "  … and 3 more" && !!probeD.note.button,
+      JSON.stringify({ note: probeD.note }),
+    );
+    const nestedClick = await page.evaluate(() => {
+      const panes = [...document.querySelectorAll("#panes .pane")];
+      const iku = panes.find((p) => p.querySelector(".pane-query")?.textContent === "行く");
+      const b = [...(iku?.querySelectorAll("button.tok-word") ?? [])]
+        .find((x) => x.title === "word 来る");
+      if (!b) return false;
+      b.click();
+      return true;
+    });
+    check("W17i: the 来る synonym row inside the 行く pane nests a lookup (cache hit)", nestedClick, "");
+    const nestedReady = await waitFor(
+      page,
+      () => page.evaluate(() => {
+        const panes = [...document.querySelectorAll("#panes .pane")];
+        const iku = panes.find((p) => p.querySelector(".pane-query")?.textContent === "行く");
+        const nested = [...(iku?.querySelectorAll(".pane-children .pane") ?? [])]
+          .find((p) => p.querySelector(".pane-query")?.textContent === "来る");
+        if (!nested) return null;
+        const pre = nested.querySelector("pre");
+        const note = window.__noteScan(pre);
+        const btn = nested.querySelector("button.load-more");
+        // The pane exists as soon as the cached clone renders, but its wired
+        // button is attached in the same synchronous pass — wait for the
+        // whole clone (note + button) so a mid-render poll cannot vacuous-
+        // fail the check below.
+        if (!note || !btn) return null;
+        const lines = pre.textContent.split("\n");
+        return {
+          note: note.text,
+          button: { label: btn.textContent, disabled: btn.disabled },
+          rows: lines.filter((l) => /^     /.test(l)).length,
+        };
+      }),
+      30000,
+      "nested 来る pane (cache clone)",
+    );
+    check(
+      "W17i: the nested 来る pane gets its OWN note + button (clone, not shared array)",
+      nestedReady.note === probeD.note.text && !!nestedReady.button && nestedReady.rows === 5,
+      JSON.stringify(nestedReady),
+    );
+    check("W17i: nested 来る load-more clicked", await page.evaluate(() => {
+      const panes = [...document.querySelectorAll("#panes .pane")];
+      const iku = panes.find((p) => p.querySelector(".pane-query")?.textContent === "行く");
+      const nested = [...(iku?.querySelectorAll(".pane-children .pane") ?? [])]
+        .find((p) => p.querySelector(".pane-query")?.textContent === "来る");
+      const b = nested?.querySelector("button.load-more");
+      if (!b || b.disabled) return false;
+      b.click();
+      return true;
+    }), "");
+    await waitFor(page, () => page.evaluate(() => {
+      const panes = [...document.querySelectorAll("#panes .pane")];
+      const iku = panes.find((p) => p.querySelector(".pane-query")?.textContent === "行く");
+      const nested = [...(iku?.querySelectorAll(".pane-children .pane") ?? [])]
+        .find((p) => p.querySelector(".pane-query")?.textContent === "来る");
+      const b = nested?.querySelector("button.load-more");
+      return b ? (b.disabled ? null : { label: b.textContent }) : { label: null };
+    }), 30000, "nested 来る page reply");
+    const nestedAfter = await page.evaluate(() => {
+      const panes = [...document.querySelectorAll("#panes .pane")];
+      const iku = panes.find((p) => p.querySelector(".pane-query")?.textContent === "行く");
+      const nested = [...(iku?.querySelectorAll(".pane-children .pane") ?? [])]
+        .find((p) => p.querySelector(".pane-query")?.textContent === "来る");
+      const pre = nested?.querySelector("pre");
+      const lines = pre?.textContent.split("\n") ?? [];
+      return {
+        note: pre ? window.__noteScan(pre) : null,
+        buttons: nested?.querySelectorAll("button.load-more").length ?? 0,
+        rows: lines.filter((l) => /^     /.test(l)).length,
+      };
+    });
+    check(
+      "W17i: paging the nested 来る pane exhausts IT (note+button gone, all rows shown) — the sibling pane's array is untouched",
+      !nestedAfter.note && nestedAfter.buttons === 0 && nestedAfter.rows === nestedReady.rows + 3,
+      JSON.stringify(nestedAfter),
+    );
+    const topBefore = await page.evaluate(() => window.__pagingProbe("来る", true));
+    check(
+      "W17i: ★W18a — the top-level 来る pane is untouched by its cached sibling's paging",
+      topBefore.found && topBefore.note?.text === "  … and 3 more" && !!topBefore.note.button,
+      JSON.stringify({ note: topBefore.note, buttons: topBefore.buttons.length }),
+    );
+    check("W17i: top-level 来る load-more clicked (still armed)", await clickLoadMore("来る", true), "");
+    await waitLoadMoreSettled("来る", true);
+    const topAfter = await page.evaluate(() => window.__pagingProbe("来る", true));
+    check(
+      "W17i: the top-level 来る pane exhausts independently too",
+      topAfter.found && !topAfter.note && topAfter.buttons.length === 0
+        && topAfter.glossRows === topBefore.glossRows + 3,
+      JSON.stringify({ note: topAfter.note, rows: `${topBefore.glossRows}→${topAfter.glossRows}` }),
+    );
+
+    // ★W18d: the page-request watchdog re-arms a button when the worker
+    // never answers. The Worker onmessage wrapper holds page-result replies
+    // for __pageResultDelayMs while that hook is > 0; with the timeout
+    // shrunk to 700 ms the button must re-arm — and the LATE reply must be
+    // inert (no pageContext entry), leaving the note exactly as it was.
+    await page.evaluate(() => {
+      window.__pageResultDelayMs = 3000;
+      window.__pageTimeoutMs = 700;
+    });
+    const w18dClicked = await page.evaluate(() => {
+      const pane = [...document.querySelectorAll("#panes > .pane")]
+        .find((p) => p.querySelector(".pane-query")?.textContent === "食");
+      const b = pane?.querySelector("button.load-more");
+      if (!b || b.disabled) return false;
+      b.click();
+      return true;
+    });
+    check("W17i: ★W18d — load-more clicked with the reply held (timeout 700 ms)", w18dClicked, "");
+    const rearmed = await waitFor(
+      page,
+      () => page.evaluate(() => {
+        const pane = [...document.querySelectorAll("#panes > .pane")]
+          .find((p) => p.querySelector(".pane-query")?.textContent === "食");
+        const b = pane?.querySelector("button.load-more");
+        return b && !b.disabled && b.textContent === "load 5 more" ? { title: b.title } : null;
+      }),
+      10000,
+      "re-armed load-more (page watchdog)",
+    );
+    check(
+      "W17i: ★W18d — the page timeout re-arms the button instead of parking it on …",
+      !!rearmed && /timed out/.test(rearmed.title),
+      JSON.stringify(rearmed),
+    );
+    await page.evaluate(() => { window.__pageResultDelayMs = 0; window.__pageTimeoutMs = 0; });
+    const noteAtRearm = await page.evaluate(() => window.__pagingProbe("食").note?.text ?? null);
+    await sleep(3400); // let the 3000 ms delayed reply land
+    const noteLate = await page.evaluate(() => window.__pagingProbe("食").note?.text ?? null);
+    check(
+      "W17i: ★W18d — the late reply after a timeout is inert (note unchanged, button armed)",
+      noteAtRearm !== null && noteLate === noteAtRearm,
+      JSON.stringify({ atRearm: noteAtRearm, afterLateReply: noteLate }),
+    );
+
+    // Reload-restore: the paged panes' rows + buttons come back from the
+    // persisted state (★W18a regression probe — per-pane {q, note, button}
+    // compared before/after), and a restored button pages its restored pane.
+    const pagedSnapshot = await page.evaluate(() => {
+      const out = {};
+      for (const pane of document.querySelectorAll("#panes > .pane")) {
+        const q = pane.querySelector(".pane-query")?.textContent ?? "";
+        const b = pane.querySelector("button.load-more");
+        if (!b) continue;
+        const pre = pane.querySelector("pre");
+        const note = window.__noteScan(pre);
+        out[q] = {
+          note: note ? note.text : null,
+          button: { label: b.textContent, title: b.title },
+        };
+      }
+      return out;
+    });
+    check(
+      "W17i: pre-reload snapshot — 食 and eat panes carry their notes + buttons (relative to the paging above)",
+      pagedSnapshot["食"]?.note === `  … and ${probeA3.note.remaining} more`
+        && pagedSnapshot["eat"]?.note === `  … and ${probeB2.note.remaining} more`
+        && pagedSnapshot["食"]?.button.label === "load 5 more"
+        && pagedSnapshot["eat"]?.button.label === "load 5 more",
+      JSON.stringify(pagedSnapshot),
+    );
+    const preReloadTopCount = await page.evaluate(() => document.querySelectorAll("#panes > .pane").length);
+    await page.reload({ waitUntil: "load", timeout: 30000 });
+    // The reload dropped the page-side probe helpers (evaluate does not
+    // survive navigation) — re-install them BEFORE the restore waitFor polls,
+    // or its evaluate throws on __noteScan and the catch retries forever.
+    await installPagingProbe();
+    const pagedRestored = await waitFor(
+      page,
+      () => page.evaluate((count) => {
+        const s = document.querySelector("#status")?.textContent ?? "";
+        if (!s.startsWith("ready")) return null;
+        if (document.querySelectorAll("#panes > .pane").length !== count) return null;
+        const out = {};
+        for (const pane of document.querySelectorAll("#panes > .pane")) {
+          const q = pane.querySelector(".pane-query")?.textContent ?? "";
+          const b = pane.querySelector("button.load-more");
+          if (!b) continue;
+          const pre = pane.querySelector("pre");
+          const note = window.__noteScan(pre);
+          out[q] = {
+            note: note ? note.text : null,
+            button: { label: b.textContent, title: b.title },
+          };
+        }
+        return out;
+      }, preReloadTopCount),
+      60000,
+      "paged panes restored after reload",
+    );
+    check(
+      "W17i: reload restores the paged panes' notes + buttons (persisted pages; ★W18a probe)",
+      !!pagedRestored
+        && pagedRestored["食"]?.note === pagedSnapshot["食"].note
+        && pagedRestored["食"]?.button.label === "load 5 more"
+        && pagedRestored["eat"]?.note === pagedSnapshot["eat"].note
+        && pagedRestored["eat"]?.button.label === "load 5 more",
+      JSON.stringify({ before: pagedSnapshot, after: pagedRestored }),
+    );
+    check("W17i: restored 食 load-more clicked (live, not cosmetic)", await clickLoadMore("食", true), "");
+    await waitLoadMoreSettled("食", true);
+    await installPagingProbe(); // the reload above dropped the page-side probe
+    const restoredClicked = await page.evaluate(() => window.__pagingProbe("食"));
+    check(
+      "W17i: the restored button pages the restored pane (note drops by exactly 5)",
+      !!restoredClicked.note && restoredClicked.note.button
+        && restoredClicked.note.remaining === (probeA3.note.remaining - 5),
+      JSON.stringify({ note: `${probeA3.note.remaining}→${restoredClicked.note.remaining}` }),
+    );
+    await page.evaluate((prior) => {
+      const el = document.querySelector("#settings-max");
+      el.value = prior;
+      el.dispatchEvent(new Event("change", { bubbles: true }));
+    }, priorMax);
 
     // OPFS VFS logs NotFound probes for sidecar files (journals) as errors; benign.
     const realErrors = consoleLog.filter(

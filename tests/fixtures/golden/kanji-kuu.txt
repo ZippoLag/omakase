@@ -6,8 +6,11 @@ Radicals: 口 + 食
 Kun:  く.う  く.らう
 Nanori: じき
 
-Meanings: eat; drink; receive (a blow); (kokuji)
+Meanings:
+     eat; drink; receive (a blow); (kokuji)
 
 Compounds:
-  喰べる  [喰[た]べる]  to eat
-  喰う  [喰[く]う]  to eat
+  喰べる  [喰[た]べる]
+     to eat
+  喰う  [喰[く]う]
+     to eat

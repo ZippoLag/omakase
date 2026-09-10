@@ -310,7 +310,7 @@ test("kanji --strokes: braille stroke-order frames lead the page", async () => {
     assert.ok(frameRows.length >= 80, `braille rows present (${frameRows.length})`);
     // The page follows after the frames.
     assert.ok(stdout.includes("\n\n水  [4 strokes]\n"), "page follows the block");
-    assert.ok(stdout.includes("Meanings: water"), "page body intact");
+    assert.ok(stdout.includes("Meanings:\n     water"), "page body intact");
     // Deterministic: identical input renders identical output.
     const again = await runOnDb(["kanji", "水", "--strokes"], dbPath);
     assert.equal(again.stdout, stdout);
@@ -373,7 +373,7 @@ test("search: meaning + reading sections, Kanji section, and empty result", asyn
     const gloss = await runOnDb(["search", "eat"], dbPath);
     assert.equal(gloss.code, 0);
     assert.ok(gloss.stdout.includes("Meanings (2):"));
-    assert.ok(gloss.stdout.includes("食べる  [たべる]  to eat"));
+    assert.ok(gloss.stdout.includes("食べる  [たべる]\n     to eat"));
     assert.ok(!gloss.stdout.includes("Readings ("), "no reading hits for eat");
 
     const kana = await runOnDb(["search", "たべ"], dbPath);
@@ -386,6 +386,61 @@ test("search: meaning + reading sections, Kanji section, and empty result", asyn
     const empty = await runOnDb(["search", "zqxjk"], dbPath);
     assert.equal(empty.code, 0);
     assert.ok(empty.stdout.includes("(no results)"));
+  } finally {
+    rmSync(dir, { recursive: true, force: true });
+  }
+});
+
+test("search --offset: windows the result rows (space/equals forms, invalid values)", async () => {
+  const { dbPath, dir } = buildFixtureDbFile();
+  try {
+    // たべ has 2 reading hits; --offset 1 --max 1 shows the SECOND row
+    // (window [1, 2)) with no remainder note.
+    for (const argv of [
+      ["search", "たべ", "--offset", "1", "--max", "1"],
+      ["search", "たべ", "--offset=1", "--max=1"],
+    ]) {
+      const { code, stdout } = await runOnDb(argv, dbPath);
+      assert.equal(code, 0, `${argv.join(" ")} exit code`);
+      assert.ok(stdout.includes("Readings (2):"), `${argv.join(" ")} header counts the full section`);
+      assert.ok(stdout.includes("食べ物  [たべもの (tabemono)]"), `${argv.join(" ")} second row shown`);
+      assert.ok(!stdout.includes("食べる"), `${argv.join(" ")} first row skipped`);
+      assert.ok(!stdout.includes("  … and "), `${argv.join(" ")} no note at the window end`);
+    }
+    // A mid-list window keeps the remainder note: `search to` has 12 meaning
+    // hits, so [1, 6) shows 5 rows with 6 still to come.
+    const note = await runOnDb(["search", "to", "--offset", "1", "--max", "5"], dbPath);
+    assert.equal(note.code, 0);
+    assert.ok(note.stdout.includes("Meanings (12):"));
+    assert.ok(note.stdout.includes("  … and 6 more"));
+    // --offset 0 is allowed and identical to omitting it.
+    const zero = await runOnDb(["search", "eat", "--offset", "0"], dbPath);
+    const plain = await runOnDb(["search", "eat"], dbPath);
+    assert.equal(zero.code, 0);
+    assert.equal(zero.stdout, plain.stdout);
+    // Invalid values are errors on stderr, no output.
+    for (const bad of ["-1", "abc", "1.5"]) {
+      const { code, stdout, stderr } = await runOnDb(["search", "eat", "--offset", bad], dbPath);
+      assert.equal(code, 0);
+      assert.equal(stdout, "");
+      assert.ok(stderr.includes("error: --offset must be a non-negative integer"), stderr);
+    }
+  } finally {
+    rmSync(dir, { recursive: true, force: true });
+  }
+});
+
+test("kanji --offset: pages compounds with the remainder note", async () => {
+  const { dbPath, dir } = buildFixtureDbFile();
+  try {
+    // 食 has 5 compound words; --max 2 --offset 2 shows rows [2, 4) (食べもの,
+    // 食事) with 1 still to come.
+    const { code, stdout } = await runOnDb(["kanji", "食", "--max", "2", "--offset", "2"], dbPath);
+    assert.equal(code, 0);
+    assert.ok(stdout.includes("食べもの  [食[た]べもの]"), stdout);
+    assert.ok(stdout.includes("食事  [食[しょく]事[じ]]"), stdout);
+    assert.ok(!stdout.includes("食べる  [食[た]べる]"), "first compound skipped");
+    assert.ok(stdout.includes("  … and 1 more"), stdout);
   } finally {
     rmSync(dir, { recursive: true, force: true });
   }
@@ -422,7 +477,7 @@ test("search: a reading match and an English word both appear in ranked sections
     const romaji = await runOnDb(["search", "taberu"], dbPath);
     assert.equal(romaji.code, 0);
     assert.ok(romaji.stdout.includes("Readings (1):"));
-    assert.ok(romaji.stdout.includes("食べる  [たべる (taberu)]  to eat"));
+    assert.ok(romaji.stdout.includes("食べる  [たべる (taberu)]\n     to eat"));
     assert.ok(!romaji.stdout.includes("Meanings ("), "no meaning hits for taberu");
 
     // Spaced romaji (``ta be ru``) still matches the reading.

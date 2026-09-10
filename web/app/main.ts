@@ -49,7 +49,9 @@
  * an idle, usable control row.
  */
 import { OP_LADDERS } from "./worker-api.js";
-import type { Command, StrokePage, WorkerMessage, WorkerRequest } from "./worker-api.js";
+import type { Command, PageAnchor, StrokePage, WorkerMessage, WorkerRequest } from "./worker-api.js";
+import { foldAnchors, splicePage } from "./paging.js";
+import type { PageState } from "./tree.js";
 import { KANJI_RE, kanjiQueries, kanjiQuery, parseMax, wordTokens } from "./query.js";
 import { strokeWidgetFigure } from "./stroke-widget.js";
 import { DEFAULT_ACCENT, DEFAULT_BG, DEFAULT_BG_MIX, effectiveTint, isHexColor, type Theme } from "./theme.js";
@@ -194,6 +196,10 @@ let accentColor = DEFAULT_ACCENT;
 const paneByOpId = new Map<number, HTMLElement>();
 /** Raw section texts per request, concatenated into the final pane text. */
 const opTexts = new Map<number, string[]>();
+/** Per-section page anchors per request (one array per streamed section,
+ * in render order), folded into the final node's global `pages` in
+ * handleResult (W17i). */
+const opPages = new Map<number, PageAnchor[][]>();
 /** The request whose sections/progress currently drive the divider bar. */
 let opActiveId: number | null = null;
 let opCommand: Command | null = null;
@@ -446,6 +452,8 @@ const streamingPaneById = new Map<number, {
    * page's own literal is plain text from the first section. */
   command: Command;
   query: string;
+  /** Per-list row cap, for the streaming load-more button labels. */
+  max: number;
 }>();
 
 /**
@@ -521,8 +529,9 @@ function addSkeletonPane(item: Pending): void {
   }
   
   paneByOpId.set(item.id, pane);
-  streamingPaneById.set(item.id, { pane, pre, parentId, command: item.command, query: item.query });
+  streamingPaneById.set(item.id, { pane, pre, parentId, command: item.command, query: item.query, max: item.max });
   opTexts.set(item.id, []);
+  opPages.set(item.id, []);
 }
 
 /** Append one streamed section's text (linkified, like the final pane). The
@@ -534,14 +543,186 @@ function addSkeletonPane(item: Pending): void {
  * identical to the finished pane. The skeleton shimmer rows are cleared the
  * moment the first section lands — they are a placeholder, never left
  * stacked above the streamed text (later appends find none left). */
-function appendSectionText(pre: HTMLElement, text: string, parentId: string | null, self: SelfPane | null = null): void {
+function appendSectionText(
+  pre: HTMLElement,
+  text: string,
+  parentId: string | null,
+  self: SelfPane | null = null,
+  pages?: PageAnchor[],
+  max = 5,
+): void {
   pre.querySelectorAll(".skel-line").forEach((el) => el.remove());
+  // The note lines of THIS section start right after the lines already in
+  // the pre (each existing "\n" text node closes one line): a section's
+  // anchors are relative to its own text, so their global position is the
+  // existing line count plus the anchor's local line.
+  const lineBase = countNewlineNodes(pre);
   const nodes: (Node | string)[] = [];
   text.split("\n").forEach((line, i) => {
     if (i > 0) nodes.push("\n");
     nodes.push(...linkifyLine(line, parentId, self));
   });
   pre.append(...nodes);
+  // Streaming load-more buttons are INERT (the skeleton pane is temporary —
+  // the final pane re-creates wired buttons from the folded pages in
+  // renderResultNode), but they show the same chrome while sections land.
+  if (pages) {
+    for (const p of pages) {
+      insertLoadMoreButton(pre, lineBase + p.line, max, p.total - p.shown, null);
+    }
+  }
+}
+
+// ---- load-more paging (W17i) -----------------------------------------------
+/** In-flight page requests keyed by request id: the target pane/node, the
+ * page index into node.pages, the button being driven, and the bounded-
+ * lifetime timer (W18d) that re-arms the button if the worker never answers.
+ * A late reply for a timed-out/forgotten request finds no entry and is inert. */
+const pageContext = new Map<number, {
+  nodeId: string;
+  pageIndex: number;
+  button: HTMLButtonElement;
+  timer: ReturnType<typeof setTimeout>;
+}>();
+let nextPageId = 1;
+
+/** A page request that never answers gets this budget (W18d): shorter than
+ * the run watchdog — a meanings cache miss can legitimately re-run the
+ * ranked search for seconds on a phone, but a wedged worker must not park
+ * the button on “…” forever. The e2e overrides it via window.__pageTimeoutMs. */
+const PAGE_TIMEOUT_MS = 60000;
+
+function pageTimeoutMs(): number {
+  const hook = (window as unknown as { __pageTimeoutMs?: number }).__pageTimeoutMs;
+  return Number.isFinite(hook) && (hook ?? 0) > 0 ? hook! : PAGE_TIMEOUT_MS;
+}
+
+/** Create a load-more button: label `load N more`, title `M more available`. */
+function createLoadMoreButton(
+  max: number,
+  remaining: number,
+  ctx: { nodeId: string; pageIndex: number } | null,
+): HTMLButtonElement {
+  const b = document.createElement("button");
+  b.type = "button";
+  b.className = "load-more";
+  b.textContent = `load ${max} more`;
+  b.title = `${remaining} more available`;
+  if (ctx) {
+    b.addEventListener("click", () => {
+      if (!b.disabled) requestPage(ctx.nodeId, ctx.pageIndex, b);
+    });
+  }
+  return b;
+}
+
+/**
+ * Find the ``… and N more`` note on `line` (0-based, counting ``\n`` text
+ * nodes as line boundaries) plus the load-more button that follows it (when
+ * attached). A line is NOT a single text node: linkifyLine pushes plain
+ * characters one node at a time, so the note's characters are adjacent text
+ * nodes — the line's nodes are concatenated and tested as a whole, and the
+ * first/last node of the run are returned so callers can splice the whole
+ * line out (or insert after it).
+ */
+function findNoteNode(
+  pre: HTMLElement,
+  line: number,
+): { first: Node; last: Node; button: HTMLButtonElement | null } | null {
+  // Lines are delimited by the "\n" text nodes linkifyLine inserts between
+  // them, and a rendered line is many children (linkifyLine pushes one text
+  // node per character plus per-kanji buttons) — so count completed "\n"
+  // boundaries, never child nodes. Line N starts right after the N-th
+  // newline (an empty line has no children of its own and is skipped
+  // naturally: the next "\n" just advances the count).
+  let newlines = 0;
+  for (const child of pre.childNodes) {
+    if (child.nodeType === Node.TEXT_NODE && child.nodeValue === "\n") {
+      newlines++;
+      continue;
+    }
+    if (newlines === line) {
+      const parts: Node[] = [];
+      let text = "";
+      let node: Node | null = child;
+      while (node && !(node.nodeType === Node.TEXT_NODE && node.nodeValue === "\n")) {
+        if (node.nodeType === Node.TEXT_NODE) {
+          parts.push(node);
+          text += node.nodeValue;
+        }
+        node = node.nextSibling;
+      }
+      if (parts.length === 0 || !/^  … and \d+ more$/.test(text)) return null;
+      const first = parts[0]!;
+      const last = parts[parts.length - 1]!;
+      const next = last.nextSibling;
+      const button = next instanceof HTMLButtonElement && next.classList.contains("load-more") ? next : null;
+      return { first, last, button };
+    }
+  }
+  return null;
+}
+
+/** Number of ``\n`` text nodes in `pre` (completed line boundaries). */
+function countNewlineNodes(pre: HTMLElement): number {
+  let n = 0;
+  for (const child of pre.childNodes) {
+    if (child.nodeType === Node.TEXT_NODE && child.nodeValue === "\n") n++;
+  }
+  return n;
+}
+
+/** Insert a load-more button right after the note line at `line`. */
+function insertLoadMoreButton(
+  pre: HTMLElement,
+  line: number,
+  max: number,
+  remaining: number,
+  ctx: { nodeId: string; pageIndex: number } | null,
+): void {
+  const found = findNoteNode(pre, line);
+  if (!found) return;
+  found.last.parentNode?.insertBefore(createLoadMoreButton(max, remaining, ctx), found.last.nextSibling);
+}
+
+/** Send one load-more request for a pane's paged list and drive its button
+ * (disabled, “…” label) until the reply — or the bounded lifetime timer
+ * re-arms it (W18d). */
+function requestPage(nodeId: string, pageIndex: number, button: HTMLButtonElement): void {
+  const node = findResultById(resultTree, nodeId);
+  const page = node?.pages?.[pageIndex];
+  if (!node || !page) return;
+  const id = nextPageId++;
+  button.disabled = true;
+  button.dataset.label = button.textContent;
+  button.textContent = "…";
+  const timer = setTimeout(() => {
+    if (!pageContext.delete(id)) return; // already answered — inert
+    rearmPageButton(button, "page load timed out — try again");
+  }, pageTimeoutMs());
+  pageContext.set(id, { nodeId, pageIndex, button, timer });
+  worker.postMessage({
+    kind: "page",
+    id,
+    command: node.command,
+    query: node.query,
+    max: node.max,
+    offset: page.offset,
+    section: page.section,
+  } satisfies WorkerRequest);
+}
+
+/** Restore a load-more button to its resting state after a failure; the
+ * failure surfaces on the button's title and (when a lookup is running) on
+ * the status line — never console.error (W18g, console hygiene). */
+function rearmPageButton(button: HTMLButtonElement, message?: string): void {
+  button.disabled = false;
+  button.textContent = button.dataset.label ?? "load more";
+  if (message) {
+    button.title = message;
+    if (queue.length === 0) setStatus("ready");
+    else setStatus(message, "busy");
+  }
 }
 
 
@@ -615,7 +796,12 @@ function submit(command: Command, context?: { parentId: string | null }): void {
     // Check cache first
     const cached = cacheManager.getCached(command, p.query, p.max);
     if (cached) {
-      // Use cached result - create new node with proper parent context
+      // Use cached result - create new node with proper parent context. The
+      // cached node's `pages` array is shared by reference with the cache
+      // entry AND any other pane built from it — handlePageResult mutates
+      // node.pages in place (offset/line updates, splice-on-exhaustion), so
+      // a new pane must clone the array AND each PageState, or paging one
+      // pane would silently corrupt its cached siblings (W17i ★W18a).
       const newNode = createResultNode(
         cached.command,
         cached.query,
@@ -623,7 +809,8 @@ function submit(command: Command, context?: { parentId: string | null }): void {
         cached.error,
         cached.strokes,
         p.parentId,
-        p.max
+        p.max,
+        cached.pages ? cached.pages.map((pg) => ({ ...pg })) : undefined
       );
       
       // Add to tree and render
@@ -741,6 +928,7 @@ function cancelCurrentOperation(): void {
   }
   paneByOpId.delete(head.id);
   opTexts.delete(head.id);
+  opPages.delete(head.id);
   cacheManager.markFetchCompleted(head.command, head.query, head.max);
   
   if (opActiveId === head.id) {
@@ -801,11 +989,13 @@ function onWorkerMessage(ev: MessageEvent<WorkerMessage>): void {
       if (opActiveId !== msg.id || cancelledOps.has(msg.id)) break;
       const streamingData = streamingPaneById.get(msg.id);
       if (streamingData) {
-        const { pre, parentId, command, query } = streamingData;
-        appendSectionText(pre, msg.text, parentId, { command, query });
+        const { pre, parentId, command, query, max } = streamingData;
+        appendSectionText(pre, msg.text, parentId, { command, query }, msg.pages, max);
       }
       const texts = opTexts.get(msg.id);
       if (texts) texts.push(msg.text);
+      const anchors = opPages.get(msg.id);
+      if (anchors) anchors.push(msg.pages ?? []);
       opSectionClaim(msg.label);
       // The worker is demonstrably alive and mid-lookup: extend the watchdog
       // so a slow-but-streaming lookup (e.g. the long meaning search on a
@@ -849,10 +1039,88 @@ function onWorkerMessage(ev: MessageEvent<WorkerMessage>): void {
     case "result":
       handleResult(msg);
       break;
+    case "page-result":
+      handlePageResult(msg);
+      break;
     case "fatal":
       engineDown(msg.message);
       break;
   }
+}
+
+/**
+ * A load-more continuation answered. Only a request still in `pageContext`
+ * is acted on: a late reply for a timed-out or engine-dropped request is
+ * inert. On success the note line + button are replaced by the fetched rows
+ * (linkified like the pane) and, when rows remain, an updated note + a new
+ * wired button; node.text/pages are rewritten through the DOM-free
+ * splicePage so the persisted state matches the DOM byte-for-byte.
+ */
+function handlePageResult(msg: Extract<WorkerMessage, { kind: "page-result" }>): void {
+  const ctx = pageContext.get(msg.id);
+  if (!ctx) return; // timed out / engine-dropped / already answered — inert
+  pageContext.delete(msg.id);
+  clearTimeout(ctx.timer);
+
+  const node = findResultById(resultTree, ctx.nodeId);
+  const button = ctx.button;
+  if (!node) {
+    rearmPageButton(button);
+    return;
+  }
+  const page = node.pages?.[ctx.pageIndex];
+  if (!page || !node.pages) {
+    rearmPageButton(button);
+    return;
+  }
+  if (msg.error !== null) {
+    // W18g: the failure surfaces on the button + status line, never console.
+    rearmPageButton(button, msg.error);
+    return;
+  }
+
+  const oldLine = page.line;
+  const rowLines = msg.rowsText.split("\n");
+  if (rowLines[rowLines.length - 1] === "") rowLines.pop();
+  const spliced = splicePage(node.text, node.pages, ctx.pageIndex, rowLines, msg.remaining);
+  node.text = spliced.text;
+  node.pages = spliced.pages;
+
+  // DOM reflection: remove the old note + button, insert the linkified rows
+  // at the note's position, then the updated note + a new wired button when
+  // rows remain (the original line's trailing "\n" stays as the separator).
+  const pane = document.querySelector(`[data-node-id="${ctx.nodeId}"]`);
+  const pre = pane?.querySelector("pre");
+  if (pane && pre) {
+    const found = findNoteNode(pre, oldLine);
+    if (found) {
+      // The note line may be split into per-character text nodes by
+      // linkifyLine — remove the whole run (first..last), not one node.
+      const sep = (found.button ?? found.last).nextSibling;
+      found.button?.parentNode?.removeChild(found.button);
+      let tnode: Node | null = found.first;
+      while (tnode) {
+        const nxt: Node | null = tnode.nextSibling;
+        tnode.parentNode?.removeChild(tnode);
+        if (tnode === found.last) break;
+        tnode = nxt;
+      }
+      const frag = document.createDocumentFragment();
+      const self = { command: node.command, query: node.query };
+      rowLines.forEach((line, i) => {
+        if (i > 0) frag.append("\n");
+        frag.append(...linkifyLine(line, ctx.nodeId, self));
+      });
+      if (msg.remaining > 0) {
+        frag.append("\n");
+        frag.append(`  … and ${msg.remaining} more`);
+        frag.append(createLoadMoreButton(node.max, msg.remaining, { nodeId: ctx.nodeId, pageIndex: ctx.pageIndex }));
+      }
+      if (sep) pre.insertBefore(frag, sep);
+      else pre.append(frag);
+    }
+  }
+  saveState();
 }
 
 /**
@@ -886,8 +1154,14 @@ function handleResult(msg: Extract<WorkerMessage, { kind: "result" }>): void {
   streamingPaneById.delete(msg.id);
   const skeletonPane = paneByOpId.get(msg.id);
   paneByOpId.delete(msg.id);
-  const streamedText = opTexts.get(msg.id)?.join("") ?? "";
+  const sectionTexts = opTexts.get(msg.id) ?? [];
+  const streamedText = sectionTexts.join("");
   opTexts.delete(msg.id);
+  // Fold the per-section anchors into GLOBAL line numbers within the
+  // concatenated node text (the separators are carried by the section texts
+  // themselves), so restored panes can re-find their note lines (W17i).
+  const pages = foldAnchors(sectionTexts, opPages.get(msg.id) ?? []);
+  opPages.delete(msg.id);
   cacheManager.markFetchCompleted(item.command, item.query, item.max);
   
   if (streamingData) streamingData.pane.remove();
@@ -918,7 +1192,10 @@ function handleResult(msg: Extract<WorkerMessage, { kind: "result" }>): void {
       // text) built from the concatenated sections, byte-identical to what
       // the CLI would have printed.
       if (streamedText !== "") {
-        const resultNode = createResultNode(item.command, item.query, streamedText, false, msg.strokes, item.parentId, item.max);
+        const resultNode = createResultNode(
+          item.command, item.query, streamedText, false, msg.strokes, item.parentId, item.max,
+          pages.length > 0 ? pages : undefined,
+        );
         resultTree = addResultToParent(resultTree, resultNode, item.parentId);
         renderResultNode(resultNode);
         
@@ -1070,6 +1347,7 @@ function engineDown(message: string): void {
     const skeletonPane = paneByOpId.get(lost.id);
     paneByOpId.delete(lost.id);
     opTexts.delete(lost.id);
+    opPages.delete(lost.id);
     cacheManager.markFetchCompleted(lost.command, lost.query, lost.max);
     
     if (streamingData) streamingData.pane.remove();
@@ -1082,6 +1360,14 @@ function engineDown(message: string): void {
     } catch {
       /* never wedge on a pane */
     }
+  }
+  // In-flight page requests are dead with the engine: drop them and re-arm
+  // every load-more button (a wedged worker must never park a button on
+  // “…” — the fresh worker serves the next click).
+  for (const [id, ctx] of pageContext) {
+    clearTimeout(ctx.timer);
+    rearmPageButton(ctx.button, "engine error — try again");
+    pageContext.delete(id);
   }
   // The engine is restarting from scratch: park the progress gauge — the
   // fresh worker reports a new boot ladder from 0.
@@ -1422,6 +1708,15 @@ function renderResultNode(node: ResultNode): HTMLElement {
     nodes.push(...linkifyLine(line, node.id, { command: node.command, query: node.query }));
   });
   pre.append(...nodes);
+
+  // Attach the wired load-more buttons after each paged list's note line
+  // (restored panes re-find their notes by the persisted global line
+  // numbers; a stale line that no longer points at a note is skipped).
+  if (node.pages && node.pages.length > 0) {
+    node.pages.forEach((page, i) => {
+      insertLoadMoreButton(pre, page.line, node.max, page.total - page.offset, { nodeId: node.id, pageIndex: i });
+    });
+  }
 
   pane.append(head, pre);
 

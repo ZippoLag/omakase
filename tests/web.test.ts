@@ -13,6 +13,8 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { dbLooksHealthy } from "../web/app/commands.js";
 import { ResultCacheManager } from "../web/app/cache.js";
+import { foldAnchors, splicePage } from "../web/app/paging.js";
+import type { PageAnchor, PageSection } from "../web/app/worker-api.js";
 import {
   addResultToParent,
   clearDuplicateTracker,
@@ -34,6 +36,7 @@ import {
   toggleResultCollapse,
   unregisterResult,
 } from "../web/app/tree.js";
+import type { PageState } from "../web/app/tree.js";
 import { kanjiQueries, kanjiQuery, parseMax, wordTokens } from "../web/app/query.js";
 import {
   DARK_TINT_SCALE,
@@ -568,6 +571,41 @@ test("isValidResultNode: accepts a well-formed node (with children)", () => {
   assert.equal(isValidResultNode(node), true);
 });
 
+test("isValidResultNode: accepts valid persisted pages (W17i)", () => {
+  const node = validNode({
+    pages: [
+      { section: "compounds", total: 1207, offset: 5, line: 41 },
+      { section: "meanings", total: 406, offset: 30, line: 87 },
+    ],
+  });
+  assert.equal(isValidResultNode(node), true);
+});
+
+test("isValidResultNode: rejects malformed pages (W17i)", () => {
+  // non-array
+  assert.equal(isValidResultNode(validNode({ pages: "x" })), false);
+  // bad section name
+  assert.equal(isValidResultNode(validNode({ pages: [{ section: "words", total: 5, offset: 0, line: 3 }] })), false);
+  // missing/non-number fields
+  assert.equal(isValidResultNode(validNode({ pages: [{ section: "compounds", total: 5 }] })), false);
+  assert.equal(isValidResultNode(validNode({ pages: [{ section: "compounds", total: "5", offset: 0, line: 3 }] })), false);
+  // a malformed entry among valid ones rejects the node
+  assert.equal(isValidResultNode(validNode({ pages: [{ section: "kanji", total: 2, offset: 0, line: 1 }, null] })), false);
+});
+
+test("deserializeResultTree: round-trips persisted pages (W17i)", () => {
+  const pages = [
+    { section: "compounds", total: 1207, offset: 5, line: 41 },
+  ];
+  const restored = deserializeResultTree([validNode({ pages })]);
+  assert.deepEqual(restored[0]!.pages, pages);
+});
+
+test("deserializeResultTree: prunes a node with malformed pages", () => {
+  const out = deserializeResultTree([validNode({ pages: [{ section: "bogus", total: 1, offset: 0, line: 0 }] })]);
+  assert.equal(out.length, 0, "the whole node is dropped (pages are own fields)");
+});
+
 test("isValidResultNode: rejects a node missing children", () => {
   const { children: _omit, ...noChildren } = validNode();
   assert.equal(isValidResultNode(noChildren), false);
@@ -624,4 +662,174 @@ test("restoreCollapsedStates: non-boolean state values fall back to false", () =
   const restored = restoreCollapsedStates(nodes, { a: true, b: "yes", c: 1 } as unknown as Record<string, boolean>);
   assert.equal(restored[0]!.collapsed, true);
   assert.equal(restored[1]!.collapsed, false);
+});
+
+// =============================================================================
+// W17i paging — the DOM-free foldAnchors / splicePage (★W18f) + the ★W18a
+// shared-array clone discipline
+// =============================================================================
+
+test("foldAnchors: folds per-section lines into global node lines, accumulating separators", () => {
+  // Sections are the raw op-section chunks: each ends with a newline and
+  // carries its own separator, so concatenation IS the node text.
+  const sections = [
+    "食べる [たべる] (common)\n\n  1. to eat\n", // word body
+    "\nSynonyms:\n  食う  [くう]\n     to eat\n  … and 3 more\n", // thesaurus (offset line 0 = the separator)
+    "\nExamples:\n\n  1. …\n     …\n",
+  ];
+  const anchors: PageAnchor[][] = [
+    [],
+    [{ section: "synonyms", total: 8, shown: 5, line: 4 }],
+    [],
+  ];
+  const pages = foldAnchors(sections, anchors);
+  assert.equal(pages.length, 1);
+  // Global line of the note = newlines in section 0 (3: body, blank, sense)
+  // plus its local line 4.
+  assert.deepEqual(pages[0], { section: "synonyms", total: 8, offset: 5, line: 7 });
+  // The folded line really is the note in the concatenated text.
+  const text = sections.join("");
+  assert.equal(text.split("\n")[pages[0]!.line], "  … and 3 more");
+});
+
+test("foldAnchors: multiple anchors per section (synonyms + antonyms) keep block order", () => {
+  const sections = [
+    "word\n",
+    "\nSynonyms:\n  a  [x]\n     g1\n  … and 1 more\n\nAntonyms:\n  b  [y]\n     g2\n  … and 2 more\n",
+  ];
+  const pages = foldAnchors(sections, [
+    [],
+    [
+      { section: "synonyms", total: 6, shown: 5, line: 4 },
+      { section: "antonyms", total: 7, shown: 5, line: 9 },
+    ] as PageAnchor[],
+  ]);
+  assert.deepEqual(pages.map((p) => p.section), ["synonyms", "antonyms"]);
+  const text = sections.join("");
+  assert.equal(text.split("\n")[pages[0]!.line], "  … and 1 more");
+  assert.equal(text.split("\n")[pages[1]!.line], "  … and 2 more");
+});
+
+test("foldAnchors: empty sections and no anchors fold to no pages", () => {
+  assert.deepEqual(foldAnchors([], []), []);
+  assert.deepEqual(foldAnchors(["a\n", "b\n"], [[], []]), []);
+});
+
+/** A typical paged pane: body + thesaurus with a synonyms note at global
+ * line 6, plus a later anchor (e.g. an antonyms note) below it. */
+function pagedText(): { text: string; pages: PageState[] } {
+  const text = [
+    "食べる [たべる] (common)",
+    "",
+    "  1. to eat",
+    "Synonyms:",
+    "  食う  [くう]",
+    "     to eat",
+    "  … and 3 more",
+    "",
+    "Antonyms:",
+    "  有る  [ある]",
+    "     to be",
+    "  … and 1 more",
+    "",
+  ].join("\n") + "\n";
+  return {
+    text,
+    pages: [
+      { section: "synonyms", total: 8, offset: 5, line: 6 },
+      { section: "antonyms", total: 6, offset: 5, line: 11 },
+    ],
+  };
+}
+
+test("splicePage: replaces the note with rows, updates offset/line, shifts later anchors", () => {
+  const { text, pages } = pagedText();
+  const rows = ["  来る  [くる]", "     to come", "  行く  [いく]", "     to go", "  見る  [みる]", "     to see"];
+  // 6 lines = 3 rows (each row is a writing+gloss pair). remaining = total
+  // - (offset + rows added) by the worker's arithmetic, so total must be 10
+  // for remaining 2 at request offset 5: 10 - (5 + 3) = 2.
+  const spliced = splicePage(text, pages.map((p, i) => (i === 0 ? { ...p, total: 10 } : p)), 0, rows, 2);
+  // Rows (6 lines) + new note (1) replace the old note (1): delta 6.
+  assert.equal(spliced.delta, 6);
+  const lines = spliced.text.split("\n");
+  assert.equal(lines[6], "  来る  [くる]");
+  assert.equal(lines[11], "     to see");
+  assert.equal(lines[12], "  … and 2 more"); // remaining 2
+  // The later antonyms anchor shifted by the delta; its note line is intact.
+  assert.equal(spliced.pages.length, 2);
+  // offset advances by the ROWS added (3), not the inserted line count (6):
+  // offset counts rows and the worker's remaining already reflects them
+  // (total - remaining = 10 - 2 = 8 = 5 shown + 3 added).
+  assert.equal(spliced.pages[0]!.offset, 8);
+  assert.equal(spliced.pages[0]!.line, 12); // old line 6 + 6 rows
+  assert.equal(spliced.pages[1]!.line, 17); // 11 + delta 6
+  assert.equal(lines[spliced.pages[1]!.line], "  … and 1 more");
+  // Trailing newline shape preserved: text still ends with "\n".
+  assert.ok(spliced.text.endsWith("\n"));
+});
+
+test("splicePage: exhaustion (remaining 0) removes the note and drops the page", () => {
+  const { text, pages } = pagedText();
+  const rows = ["  来る  [くる]", "     to come", "  行く  [いく]", "     to go"];
+  const spliced = splicePage(text, pages, 0, rows, 0);
+  // 4 rows replace the 1-line note: delta 3.
+  assert.equal(spliced.delta, 3);
+  assert.equal(spliced.pages.length, 1); // synonyms exhausted → dropped
+  assert.equal(spliced.pages[0]!.section, "antonyms");
+  assert.equal(spliced.pages[0]!.line, 14); // 11 + 3
+  const lines = spliced.text.split("\n");
+  assert.equal(lines[9], "     to go");
+  assert.equal(lines[10], ""); // blank separator after the last row — no note
+  assert.ok(!spliced.text.includes("  … and 3 more"), "old note gone");
+  assert.ok(!spliced.text.includes("  … and 2 more"), "no new note at exhaustion");
+  assert.ok(spliced.text.endsWith("\n"));
+});
+
+test("splicePage: empty rows (a past-the-end window) still remove the note when done", () => {
+  const { text, pages } = pagedText();
+  const spliced = splicePage(text, pages, 1, [], 0);
+  assert.equal(spliced.delta, -1); // note removed, nothing inserted
+  assert.equal(spliced.pages.length, 1);
+  assert.equal(spliced.pages[0]!.section, "synonyms");
+  const lines = spliced.text.split("\n");
+  assert.ok(!lines.includes("  … and 1 more"), "antonyms note removed");
+});
+
+test("splicePage: a stale line index (corrupt restored state) is left untouched", () => {
+  const { text, pages } = pagedText();
+  // Point a page at a body line (index 2, not a note): the splice must bail
+  // out with the text and pages untouched instead of corrupting node.text.
+  const corrupt = splicePage(text, [{ ...pages[0]!, line: 2 }], 0, ["x"], 1);
+  assert.equal(corrupt.text, text);
+  assert.equal(corrupt.pages.length, 1);
+  assert.equal(corrupt.delta, 0);
+});
+
+test("pages clone (W18a): a pane built from a cache entry must not share the cached pages", () => {
+  // The W18a hazard: setCache stores the finished node by reference, so a
+  // pane built from the cache entry receives `cached.pages` by reference.
+  // Paging that pane rebinds its own pages (and any future in-place splice
+  // would hit the shared array), so submit clones BOTH the array and each
+  // PageState before handing it to a new node. This pins that discipline:
+  // after paging the cloned pane, the cache entry's pages are untouched.
+  const original = pagedText();
+  const cachedPages = [...original.pages]; // what the cache entry holds
+  const newPanePages = cachedPages.map((pg) => ({ ...pg })); // submit's clone
+
+  // Page the new pane to exhaustion (its synonyms page is dropped).
+  const spliced = splicePage(original.text, newPanePages, 0, ["  来る  [くる]", "     to come"], 0);
+  assert.equal(spliced.pages.length, 1, "the clone's pages array shrank");
+  // The cache entry's array AND its PageState objects are independent and
+  // unchanged — a reload of the cached sibling still finds both buttons.
+  assert.notEqual(spliced.pages, cachedPages);
+  assert.deepEqual(cachedPages, original.pages);
+  assert.equal(cachedPages.length, 2);
+  assert.equal(cachedPages[0]!.offset, 5);
+  assert.equal(cachedPages[0]!.line, 6);
+  assert.equal(cachedPages[1]!.line, 11);
+  // The clone itself is a different array of different objects (not a
+  // shallow alias of the cache entry).
+  assert.notEqual(newPanePages, cachedPages);
+  assert.notEqual(newPanePages[0], cachedPages[0]);
+  assert.deepEqual(newPanePages, cachedPages); // same values, independent objects
 });

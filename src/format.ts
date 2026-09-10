@@ -165,23 +165,64 @@ export function renderWordBody(word: LoadedWord, tags: Record<string, string>, l
 
 /**
  * Thesaurus sections (render-goldens render_thesaurus): up to 5 synonyms and
- * up to 5 antonyms as `text [reading] gloss` rows. Returns "" when empty.
+ * up to 5 antonyms as `text [reading]` / `     gloss` two-line rows.
+ * `synonymTotal`/`antonymTotal` report the full pre-cap counts (wordThesaurus
+ * returns totals alongside the windowed rows) so a capped list gets a
+ * trailing ``… and N more`` note per block; `offset` is the number of rows
+ * already shown before this window, so the note counts what remains past the
+ * whole window. Returns "" when empty.
  */
-export function renderThesaurus(synonyms: ThesaurusHit[], antonyms: ThesaurusHit[]): string {
+export function renderThesaurus(
+  synonyms: ThesaurusHit[],
+  antonyms: ThesaurusHit[],
+  opts: { synonymTotal?: number; antonymTotal?: number; offset?: number } = {},
+): string {
+  const offset = opts.offset ?? 0;
   const sections: string[] = [];
   if (synonyms.length > 0) {
     sections.push("Synonyms:", ...synonyms.map((s) => thesaurusRow(s)));
+    const total = opts.synonymTotal ?? synonyms.length;
+    const more = total - (offset + synonyms.length);
+    if (more > 0) sections.push(`  … and ${more} more`);
   }
   if (antonyms.length > 0) {
     if (sections.length > 0) sections.push("");
     sections.push("Antonyms:", ...antonyms.map((a) => thesaurusRow(a)));
+    const total = opts.antonymTotal ?? antonyms.length;
+    const more = total - (offset + antonyms.length);
+    if (more > 0) sections.push(`  … and ${more} more`);
   }
   return sections.length === 0 ? "" : sections.join("\n") + "\n";
 }
 
+/** One thesaurus row: `  text  [reading]` then `     gloss` (5-space indent). */
 function thesaurusRow(hit: ThesaurusHit): string {
   const { text, reading } = lookupHeader(hit.word);
-  return `  ${text}  [${reading ?? ""}]  ${hit.gloss}`;
+  return `  ${text}  [${reading ?? ""}]\n     ${hit.gloss}`;
+}
+
+/** Thesaurus rows for a page continuation, joined by newlines + trailing
+ * newline (the web worker renders page windows through this). */
+export function thesaurusRowList(hits: ThesaurusHit[]): string {
+  return hits.map((s) => thesaurusRow(s)).join("\n") + "\n";
+}
+
+/** Compound rows for a kanji page continuation (window already produced by
+ * loadKanji), joined by newlines + trailing newline. */
+export function kanjiCompoundRows(kanji: LoadedKanji): string {
+  return kanji.compounds.map((c) => `  ${c.writing}  [${c.ruby}]\n     ${c.gloss}`).join("\n") + "\n";
+}
+
+/** One search-section row, per section kind, for a page continuation: the
+ * same row renderers searchSections uses (color off — the web never bolds),
+ * rows already windowed by the caller, joined by newlines + trailing newline. */
+export function searchRowList(section: "readings" | "meanings" | "kanji", hits: SearchHit[] | KanjiReadingHit[]): string {
+  const rows = section === "readings"
+    ? (hits as SearchHit[]).map((h) => readingRow(h, "", false, false))
+    : section === "meanings"
+      ? (hits as SearchHit[]).map((h) => meaningRow(h, [], false))
+      : (hits as KanjiReadingHit[]).map(kanjiHitRow);
+  return rows.join("\n") + "\n";
 }
 
 /** Examples section (render-goldens render_examples), or "" when none. */
@@ -201,9 +242,11 @@ export function renderExamples(examples: LoadedSentence[]): string {
  * The Radicals line lists the kradfile component decomposition when present
  * (omitted for characters kradfile has no components for). When the
  * compounds list was capped (kanji.compoundTotal > shown count) a trailing
- * “… and N more” note reports the rest.
+ * ``… and N more`` note reports the rest. `offset` is the number of
+ * compound rows already shown before this window (loadKanji produced the
+ * window), so the note counts what remains past the whole window.
  */
-export function renderKanji(kanji: LoadedKanji, radicalDisplay: string | null): string {
+export function renderKanji(kanji: LoadedKanji, radicalDisplay: string | null, offset = 0): string {
   const lines: string[] = [];
   lines.push(`${kanji.literal}  [${kanji.strokeCount ?? "?"} strokes]`);
   lines.push("");
@@ -222,15 +265,18 @@ export function renderKanji(kanji: LoadedKanji, radicalDisplay: string | null): 
   if (kanji.kun.length > 0) lines.push("Kun:  " + kanji.kun.join("  "));
   if (kanji.nanori.length > 0) lines.push("Nanori: " + kanji.nanori.join(" "));
   lines.push("");
-  lines.push("Meanings: " + kanji.meanings.join("; "));
+  lines.push("Meanings:");
+  lines.push("     " + kanji.meanings.join("; "));
   lines.push("");
   if (kanji.compounds.length > 0) {
     lines.push("Compounds:");
     for (const c of kanji.compounds) {
-      lines.push(`  ${c.writing}  [${c.ruby}]  ${c.gloss}`);
+      lines.push(`  ${c.writing}  [${c.ruby}]`);
+      lines.push(`     ${c.gloss}`);
     }
-    if (kanji.compoundTotal > kanji.compounds.length) {
-      lines.push(`  … and ${kanji.compoundTotal - kanji.compounds.length} more`);
+    const shown = offset + kanji.compounds.length;
+    if (kanji.compoundTotal > shown) {
+      lines.push(`  … and ${kanji.compoundTotal - shown} more`);
     }
   }
   return lines.join("\n") + "\n";
@@ -240,22 +286,27 @@ export function renderKanji(kanji: LoadedKanji, radicalDisplay: string | null): 
  * Multi-kanji “Words” section (render-goldens render_kanji_words): words
  * containing any of the requested kanji, ranked most-matched first, capped
  * at `max` rows, with the full candidate count in the header and a trailing
- * “… and N more” note when capped. Mirrors the search section header shape.
+ * ``… and N more`` note when capped. Mirrors the search section header shape.
+ * `offset` is the number of rows already shown before this window
+ * (wordsContainingKanji produced the window), so the note counts what
+ * remains past the whole window.
  */
-export function renderKanjiWords(hits: KanjiWordHit[], total: number, max: number): string {
+export function renderKanjiWords(hits: KanjiWordHit[], total: number, max: number, offset = 0): string {
   if (hits.length === 0) return "";
   const lines: string[] = [`Words (${total}):`];
   for (const h of hits) {
-    lines.push(`  ${h.writing}  [${h.ruby}]  ${h.gloss}`);
+    lines.push(`  ${h.writing}  [${h.ruby}]`);
+    lines.push(`     ${h.gloss}`);
   }
-  if (total > hits.length) {
-    lines.push(`  … and ${total - hits.length} more`);
+  const shown = offset + hits.length;
+  if (total > shown) {
+    lines.push(`  … and ${total - shown} more`);
   }
   return lines.join("\n") + "\n";
 }
 
 function kanjiHitRow(k: KanjiReadingHit): string {
-  return `  ${k.literal}  [${k.readings.join("  ")}]  ${k.meanings.join("; ")}`;
+  return `  ${k.literal}  [${k.readings.join("  ")}]\n     ${k.meanings.join("; ")}`;
 }
 
 // ---- search rendering ------------------------------------------------------
@@ -310,7 +361,8 @@ function glossBoldRanges(text: string, tokens: string[]): [number, number][] {
   return ranges;
 }
 
-/** One reading-section row: `text  [kana (romaji)]  gloss`, overlap bolded. */
+/** One reading-section row: `text  [kana (romaji)]` then `     gloss`, the
+ * bracket keeping the boldable romaji/kana on line 1. */
 function readingRow(hit: SearchHit, needle: string, kanaQuery: boolean, color: boolean): string {
   const { text } = lookupHeader(hit.word);
   let reading = hit.reading;
@@ -323,14 +375,14 @@ function readingRow(hit: SearchHit, needle: string, kanaQuery: boolean, color: b
     }
   }
   const bracket = romaji ? `${reading} (${romaji})` : reading;
-  return `  ${text}  [${bracket}]  ${hit.gloss}`;
+  return `  ${text}  [${bracket}]\n     ${hit.gloss}`;
 }
 
-/** One meaning-section row: `text  [reading]  gloss`, gloss overlap bolded. */
+/** One meaning-section row: `text  [reading]` then `     gloss`, gloss overlap bolded. */
 function meaningRow(hit: SearchHit, tokens: string[], color: boolean): string {
   const { text } = lookupHeader(hit.word);
   const gloss = color ? applyBold(hit.gloss, glossBoldRanges(hit.gloss, tokens), true) : hit.gloss;
-  return `  ${text}  [${hit.reading}]  ${gloss}`;
+  return `  ${text}  [${hit.reading}]\n     ${gloss}`;
 }
 
 /**
@@ -364,9 +416,11 @@ export function searchSections(
     max?: number;
     color?: boolean;
     totals?: { readings?: number; meanings?: number; kanji?: number };
+    offset?: number;
   } = {},
 ): string[] {
   const max = opts.max ?? SEARCH_MAX_DEFAULT;
+  const offset = opts.offset ?? 0;
   const color = opts.color ?? false;
   const totals = opts.totals ?? {};
   const kanaQuery = isKanaInput(query);
@@ -374,11 +428,16 @@ export function searchSections(
   const tokens = glossQueryTokens(query);
 
   const sections: string[] = [`${query}\n`]; // echoed query + blank line
+  // Rows are sliced [offset, offset+max) here: callers hand over lists that
+  // start at offset 0 (searchMeanings / searchKanjiByReading are uncapped;
+  // searchReadingPrefix is called with a LIMIT of offset+max), so the window
+  // lands exactly on the requested page. The remainder note counts what is
+  // left past the WHOLE window (total - (offset + shown)).
   const addSection = (title: string, rows: string[], total: number): void => {
     if (total === 0) return;
-    const shown = rows.slice(0, max);
+    const shown = rows.slice(offset, offset + max);
     const lines = [`${title} (${total}):`, ...shown];
-    if (total > max) lines.push(`  … and ${total - max} more`);
+    if (total > offset + shown.length) lines.push(`  … and ${total - (offset + shown.length)} more`);
     sections.push(lines.join("\n") + "\n");
   };
 
@@ -405,19 +464,22 @@ export function renderSearch(
     max?: number;
     color?: boolean;
     totals?: { readings?: number; meanings?: number; kanji?: number };
+    offset?: number;
   } = {},
 ): string {
   return searchSections(query, readings, meanings, kanjiHits, opts).join("\n");
 }
 
-/** `kanji <reading>` result list — same rows as the search Kanji section. */
-export function renderKanjiReadingSearch(query: string, hits: KanjiReadingHit[], max?: number): string {
+/** `kanji <reading>` result list — same rows as the search Kanji section,
+ * sliced [offset, offset+max) (searchKanjiByReading is uncapped, so the
+ * caller hands over the full list). */
+export function renderKanjiReadingSearch(query: string, hits: KanjiReadingHit[], max?: number, offset = 0): string {
   const lines: string[] = [query, ""];
-  const shown = max === undefined ? hits : hits.slice(0, max);
+  const shown = max === undefined ? hits.slice(offset) : hits.slice(offset, offset + max);
   for (const k of shown) lines.push(kanjiHitRow(k));
   if (hits.length === 0) lines.push("  (no results)");
-  if (max !== undefined && hits.length > shown.length) {
-    lines.push(`  … and ${hits.length - shown.length} more`);
+  if (max !== undefined && offset + shown.length < hits.length) {
+    lines.push(`  … and ${hits.length - (offset + shown.length)} more`);
   }
   return lines.join("\n") + "\n";
 }

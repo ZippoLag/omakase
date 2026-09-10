@@ -124,10 +124,15 @@ const KANJI_GOLDENS: [string, string][] = [
   ["kanji-inshoku.txt", "飲食"],
 ];
 
-const SEARCH_GOLDENS: [string, string][] = [
+const SEARCH_GOLDENS: [string, string, number?, number?][] = [
   ["search-eat.txt", "eat"],
   ["search-taberu.txt", "たべ"],
   ["search-taberu-romaji.txt", "taberu"],
+  // --offset paging: an empty window past the end of a small section (the
+  // header keeps its count, no negative note) and a mid-list window with
+  // the remainder note (to has 12 meaning hits in the fixtures).
+  ["search-eat-offset5.txt", "eat", undefined, 5],
+  ["search-to-offset1-max5.txt", "to", 5, 1],
 ];
 
 test("word goldens (dictionary entries + examples, byte-for-byte)", () => {
@@ -160,9 +165,12 @@ test("kanji goldens (kanji pages, byte-for-byte)", () => {
 test("search goldens (English / kana / romaji, byte-for-byte)", async () => {
   const db = buildFixtureDb();
   try {
-    for (const [file, query] of SEARCH_GOLDENS) {
-      const { readings, meanings } = await cmdSearch(db, query);
-      const out = renderSearch(query, readings, meanings, searchKanjiByReading(db, query));
+    for (const [file, query, max, offset] of SEARCH_GOLDENS) {
+      const { readings, meanings } = await cmdSearch(db, query, max ?? 30, offset ?? 0);
+      const out = renderSearch(query, readings, meanings, searchKanjiByReading(db, query), {
+        max: max ?? 30,
+        offset: offset ?? 0,
+      });
       assert.equal(out, golden(file), file);
     }
   } finally {
@@ -215,11 +223,14 @@ test("thesaurus caps synonyms and antonyms at 5 each", () => {
     );
     for (const target of ["1169870", "1210360", "1296400", "1358280", "1358490", "1591900"]) antLink.run(target);
 
+    // Two-line rows (W17a): only the writing line carries the ``  word  [ruby]``
+    // shape, so hits are counted by that pattern — the gloss lines and the
+    // ``… and N more`` note are excluded.
     const section = (out: string, header: string, next?: string): string[] => {
       const lines = out.split("\n");
       const start = lines.indexOf(header) + 1;
       const end = next ? lines.indexOf(next, start) : lines.length;
-      return end < 0 ? [] : lines.slice(start, end).filter((l) => l.trim() !== "");
+      return end < 0 ? [] : lines.slice(start, end).filter((l) => /^  \S+  \[/.test(l));
     };
 
     const out = cmdWord(db, "暑い", tags);
@@ -472,8 +483,10 @@ test("wordsContainingKanji: SQL rank+cap puts most-matched words first, total in
 test("kanji -max caps compounds, words and reading results", () => {
   const db = buildFixtureDb();
   try {
+    // Two-line rows (W17a): count the ``  writing  [ruby]`` writing lines
+    // only — each hit also carries a 5-space-indented gloss line.
     const rows = (out: string): string[] =>
-      out.split("\n").filter((l) => l.startsWith("  ") && !l.startsWith("  …"));
+      out.split("\n").filter((l) => /^  \S+  \[/.test(l));
     // Compounds capped: 食 has 5 compound words in the fixtures.
     const capped = cmdKanji(db, "食", 2)!;
     assert.equal(rows(capped).length, 2);
@@ -1090,7 +1103,7 @@ test("renderSearch: sections with counts; reading rows print kana + romaji", () 
   ];
   const out = renderSearch("taberu", readings, [], []);
   assert.ok(out.startsWith("taberu\n"));
-  assert.ok(out.includes("Readings (1):\n  たべる  [たべる (taberu)]  to eat"));
+  assert.ok(out.includes("Readings (1):\n  たべる  [たべる (taberu)]\n     to eat"));
   // Empty result keeps the old plain shape (used for the hint tail).
   assert.equal(renderSearch("zqxjk", [], [], []), "zqxjk\n\n  (no results)\n");
 });
@@ -1103,8 +1116,8 @@ test("renderSearch: multi-section output separates Readings / Meanings / Kanji",
     { word: fakeWord("2", "とる", "to take"), reading: "とる", gloss: "to take" },
   ];
   const out = renderSearch("take", readings, meanings, []);
-  assert.ok(out.includes("Readings (1):\n  たけ  [たけ (take)]  bamboo"));
-  assert.ok(out.includes("\n\nMeanings (1):\n  とる  [とる]  to take"));
+  assert.ok(out.includes("Readings (1):\n  たけ  [たけ (take)]\n     bamboo"));
+  assert.ok(out.includes("\n\nMeanings (1):\n  とる  [とる]\n     to take"));
   assert.ok(!out.includes("Kanji:"));
 });
 
@@ -1113,9 +1126,9 @@ test("renderSearch bolds literal query overlap when color is on, plain when off"
   const B_OFF = "\u001b[22m";
   // Reading rows: the romaji (ASCII query) / kana (kana query) overlap is bolded.
   const take = renderSearch("take", [{ word: fakeWord("1", "たけ", "bamboo"), reading: "たけ", romaji: "take", gloss: "bamboo" }], [], [], { color: true });
-  assert.ok(take.includes(`  たけ  [たけ (${B}take${B_OFF})]  bamboo`), "romaji overlap bolded");
+  assert.ok(take.includes(`  たけ  [たけ (${B}take${B_OFF})]\n     bamboo`), "romaji overlap bolded");
   const kana = renderSearch("たべ", [{ word: fakeWord("1", "たべる", "to eat"), reading: "たべる", romaji: "taberu", gloss: "to eat" }], [], [], { color: true });
-  assert.ok(kana.includes(`  たべる  [${B}たべ${B_OFF}る (taberu)]  to eat`), "kana overlap bolded");
+  assert.ok(kana.includes(`  たべる  [${B}たべ${B_OFF}る (taberu)]\n     to eat`), "kana overlap bolded");
   // Meaning rows: matched gloss words (and their matched prefix) are bolded.
   const gloss = renderSearch(
     "develop film",
@@ -1125,7 +1138,7 @@ test("renderSearch bolds literal query overlap when color is on, plain when off"
     { color: true },
   );
   assert.ok(
-    gloss.includes(`  げんぞう  [げんぞう]  ${B}develop${B_OFF}ment (of ${B}film${B_OFF}); photographic processing`),
+    gloss.includes(`  げんぞう  [げんぞう]\n     ${B}develop${B_OFF}ment (of ${B}film${B_OFF}); photographic processing`),
     "gloss overlaps bolded",
   );
   // Without color there are no escape codes anywhere.

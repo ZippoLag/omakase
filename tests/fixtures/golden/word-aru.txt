@@ -14,4 +14,5 @@ Auxiliary verb; godan verb with 'ru' ending (irregular verb); intransitive verb
   6. to exist (in a completed state); to be (something unchanged in its current state)
 
 Synonyms:
-  居る  [いる]  to be (of animate objects); to exist
+  居る  [いる]
+     to be (of animate objects); to exist

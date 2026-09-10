@@ -7,11 +7,17 @@ On:   ショク  ジキ
 Kun:  く.う  く.らう  た.べる  は.む
 Nanori: ぐい
 
-Meanings: eat; food
+Meanings:
+     eat; food
 
 Compounds:
-  食べる  [食[た]べる]  to eat
-  食べ物  [食[た]べ物[もの]]  food
-  食べもの  [食[た]べもの]  food
-  食事  [食[しょく]事[じ]]  meal (e.g. lunch, dinner)
-  食う  [食[く]う]  to eat
+  食べる  [食[た]べる]
+     to eat
+  食べ物  [食[た]べ物[もの]]
+     food
+  食べもの  [食[た]べもの]
+     food
+  食事  [食[しょく]事[じ]]
+     meal (e.g. lunch, dinner)
+  食う  [食[く]う]
+     to eat

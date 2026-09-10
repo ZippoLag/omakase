@@ -55,56 +55,63 @@ export function loadTags(db: DB): Record<string, string> {
 }
 
 /**
- * `word <query> [--limit N]` — exact match on a writing. Renders the entry
- * body, then the thesaurus (top 5 synonyms/antonyms, when present), then
- * example sentences.
+ * `word <query> [--limit N] [--offset N]` — exact match on a writing. Renders
+ * the entry body, then the thesaurus (top 5 synonyms/antonyms, when present),
+ * then example sentences. `offset` starts the thesaurus window `offset` rows
+ * in (each list shows rows N..N+5 with the remainder note).
  */
 export function cmdWord(
   db: DB,
   query: string,
   tags: Record<string, string>,
   limit?: number,
+  offset = 0,
 ): string | null {
   const word = findWordByWriting(db, query);
   if (!word) return null;
   const body = renderWordBody(word, tags, limit);
-  let { synonyms, antonyms } = wordThesaurus(db, word);
+  let { synonyms, antonyms, synonymTotal, antonymTotal } = wordThesaurus(db, word, 5, offset);
   // Fallback for entries with no cross-reference links at all: related words
   // inferred from shared distinctive English gloss tokens (glosses_fts).
   if (synonyms.length === 0 && antonyms.length === 0) {
-    synonyms = glossThesaurus(db, word).synonyms;
+    const fallback = glossThesaurus(db, word, 5, offset);
+    synonyms = fallback.synonyms;
+    synonymTotal = fallback.synonymTotal;
   }
-  const thesaurus = renderThesaurus(synonyms, antonyms);
+  const thesaurus = renderThesaurus(synonyms, antonyms, { synonymTotal, antonymTotal, offset });
   const examples = renderExamples(exampleSentences(db, word));
   return [body, thesaurus, examples].filter(Boolean).join("\n");
 }
 
 /**
- * `kanji <query> [-max N]` — when the query is one or more kanji literals:
+ * `kanji <query> [-max N] [--offset N]` — when the query is one or more
+ * kanji literals:
  *   - a multi-kanji query first lists words containing the characters
  *     (all before subsets, ranked), capped at `max`;
  *   - then renders one page per character (`kanji 制作者` ≡ `kanji 制` `kanji 作`
  *     `kanji 者`), each page's compounds capped at `max`;
  * otherwise fall back to the kanji-by-reading search (kana or romaji prefix
- * on on/kun/nanori readings), also capped at `max`.
+ * on on/kun/nanori readings), also capped at `max`. `offset` starts every
+ * capped list `offset` rows in (words, compounds, reading rows), with the
+ * remainder note counting what is left past the window.
  */
-export function cmdKanji(db: DB, query: string, max: number = KANJI_MAX_DEFAULT): string | null {
+export function cmdKanji(db: DB, query: string, max: number = KANJI_MAX_DEFAULT, offset = 0): string | null {
   const literals = kanjiLiterals(db, query);
   if (literals) {
     const parts: string[] = [];
     if (literals.length > 1) {
-      const words = wordsContainingKanji(db, literals, max);
-      const wordsText = renderKanjiWords(words.hits, words.total, max);
+      const words = wordsContainingKanji(db, literals, max, offset);
+      const wordsText = renderKanjiWords(words.hits, words.total, max, offset);
       if (wordsText !== "") parts.push(wordsText);
     }
     for (const literal of literals) {
-      const kanji = loadKanji(db, literal, max);
+      const kanji = loadKanji(db, literal, max, offset);
       if (!kanji) return null; // every literal passed kanjiLiterals, so unreachable
       let radicalDisplay: string | null = null;
       if (kanji.classicalRadical != null) {
         radicalDisplay = `${radicalChar(db, kanji.classicalRadical) ?? "?"} (${kanji.classicalRadical})`;
       }
-      parts.push(renderKanji(kanji, radicalDisplay));
+      parts.push(renderKanji(kanji, radicalDisplay, offset));
     }
     // No separator: every part ends with a newline, so the pages are
     // byte-identical to running `kanji 制` + `kanji 作` + `kanji 者` back to
@@ -113,7 +120,7 @@ export function cmdKanji(db: DB, query: string, max: number = KANJI_MAX_DEFAULT)
   }
   const hits = searchKanjiByReading(db, query);
   if (hits.length === 0) return null;
-  return renderKanjiReadingSearch(query, hits, max);
+  return renderKanjiReadingSearch(query, hits, max, offset);
 }
 
 /**
@@ -197,9 +204,14 @@ export async function cmdSearch(
   db: DB,
   query: string,
   max: number = SEARCH_MAX_DEFAULT,
+  offset = 0,
 ): Promise<{ readings: SearchHit[]; readingsTotal: number; meanings: SearchHit[] }> {
   const trimmed = query.trim();
-  const { hits: readings, total: readingsTotal } = searchReadingPrefix(db, trimmed, max);
+  // Reading rows are SQL-ranked and capped at `max` rows, so a short prefix
+  // never loads every match; with an offset the LIMIT grows to offset+max
+  // (the renderer slices the window [offset, offset+max) out of it — the
+  // SQL cap is preserved, at most offset+max words are ever loaded).
+  const { hits: readings, total: readingsTotal } = searchReadingPrefix(db, trimmed, offset + max);
   const meanings = isAscii(trimmed) ? await searchMeanings(db, trimmed) : [];
   const keepReadings = isKanaInput(trimmed)
     || meanings.length === 0
@@ -268,7 +280,7 @@ Data: JMdict/KANJIDIC2/kradfile/radkfile (EDRDG, CC BY-SA 4.0) · KanjiVG (CC BY
 /** Detailed help per command, shown by `omakase <command> --help`. */
 const COMMAND_HELP: Record<Command, string> = {
   word: `Usage:
-  omakase word <writing> [--limit N]
+  omakase word <writing> [--limit N] [--offset N]
 
 Look up a dictionary entry for a word, matching on its kanji or kana spelling,
 with a thesaurus: up to 5 related words (synonyms) and up to 5 antonyms,
@@ -283,13 +295,17 @@ Arguments:
 Options:
   --limit N      show only the first N senses, with a trailing
                  "… and M more senses" note; also accepts --limit=N
+  --offset N     start the thesaurus window N rows in; each paged list shows
+                 rows N..N+5 with the remainder note (also accepts
+                 --offset=N)
 
 Examples:
   omakase word 食べる
   omakase word 為る --limit 3
+  omakase word 行く --offset 5
 `,
   kanji: `Usage:
-  omakase kanji <query> [-max N]
+  omakase kanji <query> [-max N] [--offset N]
 
 When <query> is one or more kanji literals, render a kanji page per character
 (stroke count, grade/JLPT/frequency, classical radical, a kradfile radical
@@ -308,6 +324,9 @@ Options:
   -max N / --max N   cap words / compounds / reading results at N rows
                      (default ${KANJI_MAX_DEFAULT}; also accepts --max=N or
                      -max N)
+  --offset N     start every capped list (words, compounds, reading rows)
+                 N rows in; each list shows rows N..N+M with the remainder
+                 note (also accepts --offset=N)
   --strokes          render the stroke order of a single kanji literal as
                      braille frames (one frame per stroke, each showing the
                      glyph drawn so far) from its KanjiVG diagram
@@ -319,9 +338,10 @@ Examples:
   omakase kanji まか
   omakase kanji makase
   omakase kanji 食 --strokes
+  omakase kanji 食 --max 5 --offset 5
 `,
   search: `Usage:
-  omakase search <query> [--max N]
+  omakase search <query> [--max N] [--offset N]
 
 Search the dictionary, returning up to ${SEARCH_MAX_DEFAULT} hits per section
 (raise the cap with --max). Results are split into ranked sections:
@@ -342,6 +362,9 @@ Arguments:
 Options:
   --max N        show at most N hits per section instead of
                  ${SEARCH_MAX_DEFAULT} (also accepts --max=N or -max N)
+  --offset N     start the result window N rows in; each paged list shows
+                 rows N..N+M with the remainder note (also accepts
+                 --offset=N)
 
 Examples:
   omakase search たべ
@@ -350,11 +373,12 @@ Examples:
   omakase search "develop film"
   omakase search take
   omakase search eat --max 10
+  omakase search eat --max 10 --offset 10
 `,
 };
 
 /** Flags that take a separate following value, per the USAGE text (e.g. `--limit 3`). */
-const VALUE_FLAGS = new Set(["limit", "max"]);
+const VALUE_FLAGS = new Set(["limit", "max", "offset"]);
 
 function parseArgs(argv: string[]): { args: string[]; flags: Map<string, string | null> } {
   const args: string[] = [];
@@ -429,6 +453,22 @@ function searchMax(flags: Map<string, string | null>, stderr: (s: string) => voi
   return n;
 }
 
+/**
+ * `--offset` window start for word/kanji/search: a non-negative integer
+ * (0 allowed), defaulting to 0. Prints an error (and returns null) when
+ * invalid.
+ */
+function searchOffset(flags: Map<string, string | null>, stderr: (s: string) => void): number | null {
+  const raw = flags.get("offset");
+  if (raw === null || raw === undefined) return 0;
+  const n = Number(raw);
+  if (!Number.isInteger(n) || n < 0) {
+    stderr("error: --offset must be a non-negative integer\n");
+    return null;
+  }
+  return n;
+}
+
 /** Run one command against an open DB, returning its output (or null for error+exit). */
 export async function runCommand(
   db: DB,
@@ -447,7 +487,9 @@ export async function runCommand(
       }
       const limitStr = flags.get("limit");
       const limit = limitStr ? Number(limitStr) : undefined;
-      const out = cmdWord(db, query, tags, limit);
+      const offsetWord = searchOffset(flags, stderr);
+      if (offsetWord === null) return "";
+      const out = cmdWord(db, query, tags, limit, offsetWord);
       if (!out) {
         stderr(`no entry for "${query}"\n`);
         return "";
@@ -461,7 +503,9 @@ export async function runCommand(
       }
       const max = searchMax(flags, stderr);
       if (max === null) return "";
-      const out = cmdKanji(db, query, max);
+      const offsetKanji = searchOffset(flags, stderr);
+      if (offsetKanji === null) return "";
+      const out = cmdKanji(db, query, max, offsetKanji);
       if (!out) {
         stderr(`no kanji "${query}"\n`);
         return "";
@@ -483,13 +527,16 @@ export async function runCommand(
       const trimmed = query.trim();
       const max = searchMax(flags, stderr);
       if (max === null) return "";
-      const { readings, readingsTotal, meanings } = await cmdSearch(db, trimmed, max);
+      const offsetSearch = searchOffset(flags, stderr);
+      if (offsetSearch === null) return "";
+      const { readings, readingsTotal, meanings } = await cmdSearch(db, trimmed, max, offsetSearch);
       // Surface kanji whose readings start with the query too (Tangorin-style).
       const kanjiHits = isKanaInput(trimmed) || isAscii(trimmed)
         ? searchKanjiByReading(db, trimmed)
         : [];
       const out = renderSearch(trimmed, readings, meanings, kanjiHits, {
         max,
+        offset: offsetSearch,
         color: opts.color ?? false,
         totals: { readings: readingsTotal },
       });

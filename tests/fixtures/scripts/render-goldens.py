@@ -140,10 +140,11 @@ for _name in sorted(os.listdir(E)):
         _k = load(os.path.join(E, _name))
         KRAD[_k["literal"]] = _k["components"]
 
-def render_kanji_words(lits, entries, max_n=30):
+def render_kanji_words(lits, entries, max_n=30, offset=0):
     """Words containing any of `lits`, ranked: most distinct matched kanji
     first, then common, then entry id — mirrors src/lookup.ts
-    wordsContainingKanji + src/format.ts renderKanjiWords."""
+    wordsContainingKanji + src/format.ts renderKanjiWords (two-line rows:
+    `  writing  [ruby]` then `     gloss`)."""
     cand = {}
     for wid in sorted(entries, key=lambda i: int(i)):
         w = entries[wid]
@@ -158,14 +159,15 @@ def render_kanji_words(lits, entries, max_n=30):
         cand.values(),
         key=lambda r: (-r[2], not entries[r[0]].get("common", False), int(r[0])),
     )
-    shown = ranked[:max_n]
+    shown = ranked[offset:offset + max_n]
     if not shown:
         return ""
     lines = ["Words (%d):" % len(cand)]
     for _wid, writing, _matched, fg, gloss in shown:
-        lines.append("  %s  [%s]  %s" % (writing, fg, gloss))
-    if len(cand) > len(shown):
-        lines.append("  … and %d more" % (len(cand) - len(shown)))
+        lines.append("  %s  [%s]" % (writing, fg))
+        lines.append("     %s" % gloss)
+    if len(cand) > offset + len(shown):
+        lines.append("  … and %d more" % (len(cand) - (offset + len(shown))))
     return "\n".join(lines) + "\n"
 
 # ---- renderers --------------------------------------------------------------
@@ -379,10 +381,11 @@ def coarse_classes(word):
     return out
 
 
-def render_gloss_thesaurus(word, entries):
+def render_gloss_thesaurus(word, entries, offset=0):
     """Fallback thesaurus: shared distinctive gloss tokens over `glosses_fts`
     (mirrored in-memory here), scored by ln(1 + N/df), same-POS preferred,
-    capped at 5. Mirrors src/lookup.ts glossThesaurus."""
+    capped at 5, with the pre-window candidate count for the remainder note.
+    Mirrors src/lookup.ts glossThesaurus (two-line rows)."""
     tokens = word_tokens(word)
     if not tokens:
         return ""
@@ -411,20 +414,27 @@ def render_gloss_thesaurus(word, entries):
         cands.append((owid, score, len(toks)))
     cands.sort(key=lambda c: (-c[1], -c[2], not entries[c[0]].get("common", False), int(c[0])))
 
+    shown = cands[offset:offset + 5]
     rows = []
-    for owid, _score, _n in cands[:5]:
+    for owid, _score, _n in shown:
         text, reading, _ = display_header(entries[owid])
-        rows.append("  %s  [%s]  %s" % (text, reading, first_gloss(entries[owid])))
+        rows.append("  %s  [%s]" % (text, reading or ""))
+        rows.append("     %s" % first_gloss(entries[owid]))
     if not rows:
         return ""
-    return "Synonyms:\n" + "\n".join(rows) + "\n"
+    out = ["Synonyms:"]
+    out.extend(rows)
+    if len(cands) > offset + len(shown):
+        out.append("  … and %d more" % (len(cands) - (offset + len(shown))))
+    return "\n".join(out) + "\n"
 
 
-def render_thesaurus(word, entries):
+def render_thesaurus(word, entries, offset=0):
     """Thesaurus: up to 5 synonyms (related links) and 5 antonyms (antonym links)
     from the materialized link table (forward + reverse + 2-hop closure),
     mirroring src/lookup.ts wordThesaurus: first link to a target wins, common
-    words first, capped at 5."""
+    words first, windowed at [offset, offset+5) with a ``… and N more`` note
+    per block (two-line rows: `  text  [reading]` then `     gloss`)."""
     def gloss_at(target, sense):
         if sense is not None and 1 <= sense <= len(target["sense"]):
             glosses = [g["text"] for g in target["sense"][sense - 1]["gloss"]]
@@ -442,22 +452,26 @@ def render_thesaurus(word, entries):
             target = entries[to]
             hits.append((target, gloss_at(target, sense)))
         hits.sort(key=lambda h: (not h[0].get("common", False), int(h[0]["id"])))
-        return hits[:5]
+        return hits
 
     sections = []
     for kind, header in [("related", "Synonyms:"), ("antonym", "Antonyms:")]:
         hits = collect(kind)
-        if hits:
+        shown = hits[offset:offset + 5]
+        if shown:
             if sections:
                 sections.append("")
             sections.append(header)
-            for target, gloss in hits:
+            for target, gloss in shown:
                 text, reading, _ = display_header(target)
-                sections.append("  %s  [%s]  %s" % (text, reading, gloss))
+                sections.append("  %s  [%s]" % (text, reading or ""))
+                sections.append("     %s" % gloss)
+            if len(hits) > offset + len(shown):
+                sections.append("  … and %d more" % (len(hits) - (offset + len(shown))))
     if sections:
         return "\n".join(sections) + "\n"
     # No cross-reference links at all: infer related words from gloss overlap.
-    return render_gloss_thesaurus(word, entries)
+    return render_gloss_thesaurus(word, entries, offset)
 
 def render_kanji(lit, kanji_data, word_entries, max_compounds=30):
     m = kanji_data["misc"]
@@ -491,13 +505,15 @@ def render_kanji(lit, kanji_data, word_entries, max_compounds=30):
     if rm["nanori"]:
         lines.append("Nanori: " + " ".join(rm["nanori"]))
     lines.append("")
-    lines.append("Meanings: " + "; ".join(meanings))
+    lines.append("Meanings:")
+    lines.append("     " + "; ".join(meanings))
     lines.append("")
     comps = COMPOUNDS.get(lit, [])
     if comps:
         lines.append("Compounds:")
         for wid, writing, fg, gloss in comps[:max_compounds]:
-            lines.append("  %s  [%s]  %s" % (writing, fg, gloss))
+            lines.append("  %s  [%s]" % (writing, fg))
+            lines.append("     %s" % gloss)
         if len(comps) > max_compounds:
             lines.append("  … and %d more" % (len(comps) - max_compounds))
     return "\n".join(lines) + "\n"
@@ -505,11 +521,12 @@ def render_kanji(lit, kanji_data, word_entries, max_compounds=30):
 # Default per-section row cap for `search` (mirrors format.ts SEARCH_MAX_DEFAULT).
 SEARCH_MAX = 30
 
-def render_search(query, sections):
+def render_search(query, sections, offset=0, max_n=SEARCH_MAX):
     """Sectioned `search` output: query echo, then each non-empty ranked
-    section (`Readings (N):` / `Meanings (N):` / `Kanji (N):`) with up to
-    SEARCH_MAX rows and a remainder note. Mirrors src/format.ts renderSearch
-    (plain text — bolding is a terminal-only concern in the TS formatter)."""
+    section (`Readings (N):` / `Meanings (N):` / `Kanji (N):`) with rows
+    windowed at [offset, offset+max_n) and a remainder note counting what is
+    left past the whole window. Mirrors src/format.ts renderSearch (plain
+    text — bolding is a terminal-only concern in the TS formatter)."""
     lines = [query, ""]
     emitted = False
     for header, rows in sections:
@@ -518,10 +535,11 @@ def render_search(query, sections):
         if emitted:
             lines.append("")
         lines.append("%s (%d):" % (header, len(rows)))
-        for row in rows[:SEARCH_MAX]:
+        shown = rows[offset:offset + max_n]
+        for row in shown:
             lines.append(row)
-        if len(rows) > SEARCH_MAX:
-            lines.append("  … and %d more" % (len(rows) - SEARCH_MAX))
+        if len(rows) > offset + len(shown):
+            lines.append("  … and %d more" % (len(rows) - (offset + len(shown))))
         emitted = True
     if not emitted:
         lines.append("  (no results)")
@@ -709,7 +727,7 @@ def main():
             rows.append((text, reading or "", display, exact_c, prefix_c, sense_i, common, int(i)))
         # exact beats prefix; then the earliest covering sense, then common, then id
         rows.sort(key=lambda r: (-r[3], -r[4], r[5], -r[6], r[7]))
-        return ["  %s  [%s]  %s" % (r[0], r[1], r[2]) for r in rows]
+        return ["  %s  [%s]\n     %s" % (r[0], r[1], r[2]) for r in rows]
 
     def reading_rows(query, is_kana):
         """Ranked reading-prefix rows: `text  [kana (romaji)]  gloss`."""
@@ -725,7 +743,7 @@ def main():
                 cands.append((k["text"], romaji(k["text"]), first_gloss(w_), value == needle, common, int(i), text))
                 break
         cands.sort(key=lambda r: (-r[3], -r[4], len(r[0]), r[5]))
-        return ["  %s  [%s (%s)]  %s" % (r[6], r[0], r[1], r[2]) for r in cands]
+        return ["  %s  [%s (%s)]\n     %s" % (r[6], r[0], r[1], r[2]) for r in cands]
 
     def search_sections(read_rows, mean_rows, kanji):
         sections = []
@@ -734,12 +752,17 @@ def main():
         if mean_rows:
             sections.append(("Meanings", mean_rows))
         if kanji:
-            sections.append(("Kanji", ["  %s  [%s]  %s" % (lit, "  ".join(rs), "; ".join(ms)) for lit, rs, ms in kanji]))
+            sections.append(("Kanji", ["  %s  [%s]\n     %s" % (lit, "  ".join(rs), "; ".join(ms)) for lit, rs, ms in kanji]))
         return sections
 
     write("search-eat.txt", render_search("eat", search_sections([], meaning_rows("eat"), kanji_reading_hits("eat", False))))
     write("search-taberu.txt", render_search("たべ", search_sections(reading_rows("たべ", True), [], kanji_reading_hits("たべ", True))))
     write("search-taberu-romaji.txt", render_search("taberu", search_sections(reading_rows("taberu", False), meaning_rows("taberu"), kanji_reading_hits("taberu", False))))
+    # --offset paging goldens: an empty window past the end of a small
+    # section (no negative note, header intact) and a mid-list window with
+    # the remainder note (search to → 12 meaning hits in the fixtures).
+    write("search-eat-offset5.txt", render_search("eat", search_sections([], meaning_rows("eat"), kanji_reading_hits("eat", False)), offset=5))
+    write("search-to-offset1-max5.txt", render_search("to", search_sections([], meaning_rows("to"), kanji_reading_hits("to", False)), offset=1, max_n=5))
 
     # --- radical ---
     write("radical-mizu.txt", render_radical("水", load(os.path.join(E, "radk-水.json"))))

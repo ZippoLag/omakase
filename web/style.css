@@ -546,6 +546,39 @@ button.busy {
 .tok-word:focus svg,
 .tok-word:focus-visible svg { stroke-width: 3.6; }
 
+/* ---- load-more paging buttons (W17i) -------------------------------------- */
+/* Small inline continuation buttons after a pane's “… and N more” note: a
+   framed cousin of the .tok tokens (1px border, 4px radius, pane surface)
+   so it reads as a control, not as result text. Disabled (request in
+   flight, or the engine is down) dims through the accent color. */
+.pane pre button.load-more {
+  font: 600 12px/1 var(--mono);
+  display: inline-block;
+  padding: 3px 8px;
+  margin: 4px 0 2px;
+  border: 1px solid var(--line);
+  border-radius: 4px;
+  background: var(--bg-pane);
+  color: var(--accent);
+  box-shadow: none;
+  vertical-align: baseline;
+  cursor: pointer;
+}
+
+.pane pre button.load-more:hover,
+.pane pre button.load-more:focus-visible {
+  border-color: var(--accent);
+  box-shadow: 0 0 0 2px color-mix(in srgb, var(--accent) 25%, transparent);
+}
+
+.pane pre button.load-more:active { transform: none; }
+
+.pane pre button.load-more:disabled {
+  color: color-mix(in srgb, var(--accent) 45%, var(--muted));
+  background: var(--bg-pane);
+  cursor: default;
+}
+
 .pane.error pre { color: var(--accent); }
 
 /* ---- stroke-order widgets -------------------------------------------------- */

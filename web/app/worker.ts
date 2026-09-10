@@ -9,9 +9,9 @@
  */
 import sqlite3InitModule, { type OpfsDatabase, type Sqlite3Static } from "../vendor/index.mjs";
 import { WasmDb } from "./shim.js";
-import { dbLooksHealthy, kanjiStrokePages, loadTags, streamKanji, streamSearch, streamWord } from "./commands.js";
+import { dbLooksHealthy, kanjiStrokePages, loadTags, streamKanji, streamPage, streamSearch, streamWord } from "./commands.js";
 import { OP_LADDERS } from "./worker-api.js";
-import type { WorkerMessage, WorkerRequest } from "./worker-api.js";
+import type { PageAnchor, WorkerMessage, WorkerRequest } from "./worker-api.js";
 
 /** OPFS path of the dictionary (also its URL on the server). */
 const DB_PATH = "/kanji.db";
@@ -223,6 +223,30 @@ async function boot(): Promise<void> {
 }
 
 /**
+ * One load-more continuation: render the next window of rows for a pane's
+ * paged list (streamPage) and reply with the raw rows + the remaining
+ * count. Same try/catch discipline as runs: a torn dictionary surfaces as
+ * `fatal` so the UI restarts the worker and re-imports.
+ */
+async function handlePage(req: WorkerRequest & { kind: "page" }): Promise<void> {
+  if (!db) {
+    send({ kind: "page-result", id: req.id, rowsText: "", remaining: 0, error: "dictionary not ready" });
+    return;
+  }
+  try {
+    const r = await streamPage(db, req);
+    send({ kind: "page-result", id: req.id, rowsText: r.rowsText, remaining: r.remaining, error: r.error });
+  } catch (err) {
+    const message = err instanceof Error ? err.message : String(err);
+    if (/database disk image is malformed|not a database/i.test(message)) {
+      send({ kind: "fatal", message: `dictionary is corrupt — restarting to re-import (${message})` });
+      return;
+    }
+    send({ kind: "page-result", id: req.id, rowsText: "", remaining: 0, error: `lookup failed: ${message}` });
+  }
+}
+
+/**
  * One lookup, streamed exactly like the CLI renders it: each section is
  * posted as it completes (the UI appends it to the pane), then a terminal
  * `result` — `text: null` on a streamed success, `error` on a miss. The
@@ -240,8 +264,8 @@ async function handleRun(req: WorkerRequest & { kind: "run" }): Promise<void> {
     send({ kind: "result", id: req.id, text: null, error: "type something to look up" });
     return;
   }
-  const emit = async (label: string, text: string): Promise<void> => {
-    send({ kind: "op-section", id: req.id, label, text });
+  const emit = async (label: string, text: string, pages?: PageAnchor[]): Promise<void> => {
+    send({ kind: "op-section", id: req.id, label, text, pages });
   };
   try {
     switch (req.command) {
@@ -306,7 +330,19 @@ async function handleRun(req: WorkerRequest & { kind: "run" }): Promise<void> {
 
 addEventListener("message", (ev: MessageEvent) => {
   const req = ev.data as WorkerRequest;
-  if (!req || req.kind !== "run") return;
+  if (!req || (req.kind !== "run" && req.kind !== "page")) return;
+  if (req.kind === "page") {
+    void handlePage(req).catch((err) => {
+      send({
+        kind: "page-result",
+        id: req.id,
+        rowsText: "",
+        remaining: 0,
+        error: `lookup crashed: ${err instanceof Error ? err.message : String(err)}`,
+      });
+    });
+    return;
+  }
   void handleRun(req).catch((err) => {
     send({
       kind: "result",

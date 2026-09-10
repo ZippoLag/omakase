@@ -3,10 +3,22 @@
  * Handles nested result nodes, duplicate prevention, and tree operations.
  */
 
-import type { Command, StrokePage } from "./worker-api.js";
+import type { Command, PageSection, StrokePage } from "./worker-api.js";
 
 /** Unique identifier generator */
 let nextNodeId = 1;
+
+/** One paged list of a finished pane (W17i): the section, the list's full
+ * pre-cap count, how many rows are already shown in the pane (the next
+ * page starts at this offset), and the 0-based GLOBAL line index (within
+ * node.text) of the ``… and N more`` note line the load-more button sits
+ * after. Persisted and validated like every other field. */
+export interface PageState {
+  section: PageSection;
+  total: number;
+  offset: number;
+  line: number;
+}
 
 /**
  * A result node in the hierarchical tree structure.
@@ -20,6 +32,8 @@ export interface ResultNode {
   text: string;
   error: boolean;
   strokes?: StrokePage[];
+  /** Paged lists (load-more continuations) of this pane, in render order. */
+  pages?: PageState[];
   children: ResultNode[];
   collapsed: boolean;
   createdAt: number;
@@ -71,7 +85,10 @@ export function seedNodeIdFromTree(rootNodes: ResultNode[]): void {
 }
 
 /**
- * Create a new result node
+ * Create a new result node. `pages` (optional) carries the node's paged
+ * lists; callers pass their OWN array — a node built from a cache entry
+ * must clone `cached.pages` (map each PageState) so mutating one pane's
+ * pages never corrupts the cached sibling (W17i ★W18a).
  */
 export function createResultNode(
   command: Command,
@@ -80,7 +97,8 @@ export function createResultNode(
   error: boolean,
   strokes: StrokePage[] | undefined,
   parentId: string | null = null,
-  max: number = 5
+  max: number = 5,
+  pages?: PageState[]
 ): ResultNode {
   return {
     id: generateNodeId(),
@@ -90,6 +108,7 @@ export function createResultNode(
     text,
     error,
     strokes,
+    pages,
     children: [],
     collapsed: false,
     createdAt: Date.now(),
@@ -345,6 +364,16 @@ function isValidStrokePage(v: unknown): v is StrokePage {
   return typeof o.literal === "string" && typeof o.svgFile === "string";
 }
 
+const PAGE_SECTIONS = new Set<string>(["synonyms", "antonyms", "compounds", "readings", "meanings", "kanji"]);
+
+/** Shape check for one persisted page state entry (W17i, W8 discipline). */
+function isValidPageState(v: unknown): v is PageState {
+  if (typeof v !== "object" || v === null) return false;
+  const o = v as Record<string, unknown>;
+  return typeof o.section === "string" && PAGE_SECTIONS.has(o.section)
+    && typeof o.total === "number" && typeof o.offset === "number" && typeof o.line === "number";
+}
+
 /** Own-field shape check for a result node (children aside). */
 function isValidNodeShape(o: Record<string, unknown>): o is ResultNodeShape {
   if (typeof o.id !== "string") return false;
@@ -354,6 +383,7 @@ function isValidNodeShape(o: Record<string, unknown>): o is ResultNodeShape {
   if (typeof o.text !== "string") return false;
   if (typeof o.error !== "boolean") return false;
   if (o.strokes !== undefined && !(Array.isArray(o.strokes) && o.strokes.every(isValidStrokePage))) return false;
+  if (o.pages !== undefined && !(Array.isArray(o.pages) && o.pages.every(isValidPageState))) return false;
   if (typeof o.collapsed !== "boolean") return false;
   if (typeof o.max !== "number") return false;
   return true;

@@ -1,5 +1,7 @@
 eat
 
 Meanings (2):
-  食べる  [たべる]  to eat
-  食う  [くう]  to eat
+  食べる  [たべる]
+     to eat
+  食う  [くう]
+     to eat

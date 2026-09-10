@@ -7,5 +7,6 @@ On:   スイ
 Kun:  みず  みず-
 Nanori: うず ずみ つ ど み みさ みつ みな みん
 
-Meanings: water
+Meanings:
+     water
 

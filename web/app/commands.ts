@@ -5,6 +5,7 @@
  * what `omakase` prints — byte-for-byte, minus ANSI color.
  */
 import type { DbLike } from "../../src/lookup.js";
+import type { SearchHit } from "../../src/lookup.js";
 import {
   displayHeader,
   exampleSentences,
@@ -22,16 +23,19 @@ import {
   suggestReading,
   wordThesaurus,
 } from "../../src/lookup.js";
-import type { StrokePage } from "./worker-api.js";
+import type { PageAnchor, PageRequest, PageSection, StrokePage } from "./worker-api.js";
 import {
   KANJI_MAX_DEFAULT,
+  kanjiCompoundRows,
   renderExamples,
   renderKanji,
   renderKanjiReadingSearch,
   renderKanjiWords,
+  searchRowList,
   searchSections,
   renderThesaurus,
   renderWordBody,
+  thesaurusRowList,
 } from "../../src/format.js";
 
 /**
@@ -80,29 +84,69 @@ export interface StreamResult {
  * one section per part in render order. Each section carries the separator
  * the CLI's `filter(Boolean).join("\n")` would insert (a blank line), so
  * concatenating the emitted sections reproduces `cmdWord` byte-for-byte;
- * empty parts are skipped exactly like `filter(Boolean)`.
+ * empty parts are skipped exactly like `filter(Boolean)`. The thesaurus
+ * section carries load-more anchors for its capped synonyms/antonyms lists.
  */
 export async function streamWord(
   db: DbLike,
   query: string,
   tags: Record<string, string>,
-  emit: (label: string, text: string) => Promise<void> | void,
+  emit: (label: string, text: string, pages?: PageAnchor[]) => Promise<void> | void,
 ): Promise<StreamResult> {
   const word = findWordByWriting(db, query);
   if (!word) return { error: `no entry for "${query}"` };
   const body = renderWordBody(word, tags);
   if (body) await emit("body", body);
-  let { synonyms, antonyms } = wordThesaurus(db, word);
+  let { synonyms, antonyms, synonymTotal, antonymTotal } = wordThesaurus(db, word);
   // Fallback for entries with no cross-reference links at all: related words
   // inferred from shared distinctive English gloss tokens (glosses_fts).
   if (synonyms.length === 0 && antonyms.length === 0) {
-    synonyms = glossThesaurus(db, word).synonyms;
+    const fallback = glossThesaurus(db, word);
+    synonyms = fallback.synonyms;
+    synonymTotal = fallback.synonymTotal;
   }
-  const thesaurus = renderThesaurus(synonyms, antonyms);
-  if (thesaurus) await emit("thesaurus", "\n" + thesaurus);
+  const thesaurus = renderThesaurus(synonyms, antonyms, { synonymTotal, antonymTotal });
+  if (thesaurus) {
+    // One anchor per capped list, located by scanning the rendered block for
+    // its ``… and N more`` note lines in block order (synonyms first).
+    const anchors = noteAnchors("\n" + thesaurus, [
+      { section: "synonyms", total: synonymTotal, shown: synonyms.length },
+      { section: "antonyms", total: antonymTotal, shown: antonyms.length },
+    ]);
+    await emit("thesaurus", "\n" + thesaurus, anchors);
+  }
   const examples = renderExamples(exampleSentences(db, word));
   if (examples) await emit("examples", "\n" + examples);
   return { error: null };
+}
+
+/**
+ * Find the ``… and N more`` note line(s) inside a rendered section text,
+ * pairing each with its paged list. `blocks` must be in render order (the
+ * lists appear in that order inside `text`); a block whose list is not
+ * capped (no note line follows) contributes no anchor. The note line's
+ * 0-based index is into `text.split("\n")` — the section's separator
+ * newline (leading "\n") counts as line 0, exactly how the UI folds
+ * per-section anchors into global node lines (paging.ts foldAnchors).
+ */
+function noteAnchors(
+  text: string,
+  blocks: { section: PageSection; total: number; shown: number }[],
+): PageAnchor[] {
+  const lines = text.split("\n");
+  const anchors: PageAnchor[] = [];
+  let cursor = 0;
+  for (const b of blocks) {
+    if (b.total <= b.shown) continue;
+    for (let i = cursor; i < lines.length; i++) {
+      if (/^  … and \d+ more$/.test(lines[i]!)) {
+        anchors.push({ section: b.section, total: b.total, shown: b.shown, line: i });
+        cursor = i + 1;
+        break;
+      }
+    }
+  }
+  return anchors;
 }
 
 /**
@@ -119,7 +163,7 @@ export async function streamKanji(
   db: DbLike,
   query: string,
   max: number = KANJI_MAX_DEFAULT,
-  emit: (label: string, text: string) => Promise<void> | void,
+  emit: (label: string, text: string, pages?: PageAnchor[]) => Promise<void> | void,
 ): Promise<StreamResult> {
   const literals = kanjiLiterals(db, query);
   if (literals) {
@@ -135,7 +179,14 @@ export async function streamKanji(
       if (kanji.classicalRadical != null) {
         radicalDisplay = `${radicalChar(db, kanji.classicalRadical) ?? "?"} (${kanji.classicalRadical})`;
       }
-      await emit("page", renderKanji(kanji, radicalDisplay));
+      const page = renderKanji(kanji, radicalDisplay);
+      // The compounds list is the only capped list on a kanji page (the web
+      // never sends multi-kanji boxes, so the Words section carries no
+      // anchor — CLI parity only).
+      const anchors = kanji.compoundTotal > kanji.compounds.length
+        ? noteAnchors(page, [{ section: "compounds", total: kanji.compoundTotal, shown: kanji.compounds.length }])
+        : [];
+      await emit("page", page, anchors);
     }
     return { error: null };
   }
@@ -171,11 +222,30 @@ export function kanjiStrokePages(db: DbLike, query: string): StrokePage[] {
  * emitted with the blank-line separator between them, and the hint (when an
  * ASCII search finds nothing) concatenates as its own trailing section.
  */
+/**
+ * Per-query ranked meaning lists for fast page continuations: the full
+ * searchMeanings result per trimmed query, capped at a few entries (the
+ * oldest evicted on insert — Map iteration order). Populated by streamSearch
+ * AND by meanings page requests, so the first page click on a section that
+ * was already searched once is instant; a click on a query whose cache
+ * entry was evicted (or that never searched meanings) re-runs the search.
+ */
+const MEANING_CACHE_CAP = 8;
+const meaningRankCache = new Map<string, SearchHit[]>();
+
+function trimMeaningCache(): void {
+  while (meaningRankCache.size > MEANING_CACHE_CAP) {
+    const first = meaningRankCache.keys().next().value;
+    if (first === undefined) break;
+    meaningRankCache.delete(first);
+  }
+}
+
 export async function streamSearch(
   db: DbLike,
   query: string,
   max: number = 30,
-  emit: (label: string, text: string) => Promise<void> | void,
+  emit: (label: string, text: string, pages?: PageAnchor[]) => Promise<void> | void,
   onProgress?: (done: number, total: number) => Promise<void> | void,
 ): Promise<StreamResult> {
   const trimmed = query.trim();
@@ -197,6 +267,12 @@ export async function streamSearch(
   // LIMIT); `total` feeds the header/remainder note.
   const { hits: readings, total: readingsTotal } = searchReadingPrefix(db, trimmed, max);
   const meanings = isAscii(trimmed) ? await searchMeanings(db, trimmed, onProgress) : [];
+  // The full ranked meaning list is cached for fast page continuations (a
+  // page click on the Meanings note slices it instead of re-searching).
+  if (isAscii(trimmed)) {
+    meaningRankCache.set(trimmed, meanings);
+    trimMeaningCache();
+  }
   const keepReadings = isKanaInput(trimmed)
     || meanings.length === 0
     || readings.some((h) => h.exact);
@@ -221,12 +297,103 @@ export async function streamSearch(
   if (kanjiHits.length > 0) labels.push("kanji");
   if (labels.length === 0) labels.push("none"); // the "(no results)" block
   for (let i = 1; i < secs.length; i++) {
-    await emit(labels[i - 1]!, "\n" + secs[i]!);
+    const label = labels[i - 1]!;
+    // Per-section page anchor: the section shows at most `max` rows, so a
+    // full section beyond the cap gets a load-more button after its note.
+    // `shown`/`total` mirror searchSections' own arithmetic (rows sliced at
+    // offset 0 here), so the button's "N more" matches the note's count.
+    const total = label === "readings" ? (keepReadings ? readingsTotal : 0)
+      : label === "meanings" ? meanings.length
+        : label === "kanji" ? kanjiHits.length
+          : 0;
+    const shown = label === "readings" ? shownReadings.length
+      : label === "meanings" ? Math.min(meanings.length, max)
+        : label === "kanji" ? Math.min(kanjiHits.length, max)
+          : 0;
+    const anchors = label === "none" || label === "hint"
+      ? []
+      : noteAnchors("\n" + secs[i]!, [{ section: label as PageSection, total, shown }]);
+    await emit(label, "\n" + secs[i]!, anchors);
   }
   if (shownReadings.length === 0 && meanings.length === 0 && kanjiHits.length === 0 && isAscii(trimmed)) {
     await emit("hint", webSearchHint(db, trimmed));
   }
   return { error: null };
+}
+
+/**
+ * One load-more continuation: fetch the next `max` rows of a pane's paged
+ * list starting at `offset` and render them raw (byte-identical to what the
+ * CLI prints for that window — the same row renderers). `remaining` is how
+ * many rows are still left after this window, so the UI can re-add the
+ * ``… and N more`` note and button. Meanings page requests hit the per-query
+ * ranked-list cache (only the first click re-runs the search); every other
+ * section is a bounded SQL window.
+ */
+export async function streamPage(
+  db: DbLike,
+  req: PageRequest,
+): Promise<{ rowsText: string; remaining: number; error: string | null }> {
+  try {
+    const { max, offset, section, query } = req;
+    const remaining = (total: number, shown: number): number => Math.max(0, total - (offset + shown));
+    switch (section) {
+      case "synonyms":
+      case "antonyms": {
+        const word = findWordByWriting(db, query);
+        if (!word) return { rowsText: "", remaining: 0, error: `no entry for "${query}"` };
+        let { synonyms, antonyms, synonymTotal, antonymTotal } = wordThesaurus(db, word, max, offset);
+        // Mirror cmdWord's fallback: entries with no cross-reference links at
+        // all infer synonyms from shared English gloss tokens. Only the
+        // first window can be empty-with-a-fallback (a later window of a
+        // fallback list pages the same inferred ranking).
+        if (section === "synonyms" && offset === 0 && synonyms.length === 0 && antonyms.length === 0) {
+          const fb = glossThesaurus(db, word, max, offset);
+          synonyms = fb.synonyms;
+          synonymTotal = fb.synonymTotal;
+        }
+        const hits = section === "synonyms" ? synonyms : antonyms;
+        const total = section === "synonyms" ? synonymTotal : antonymTotal;
+        return { rowsText: thesaurusRowList(hits), remaining: remaining(total, hits.length), error: null };
+      }
+      case "compounds": {
+        const kanji = loadKanji(db, query, max, offset);
+        if (!kanji) return { rowsText: "", remaining: 0, error: `no kanji "${query}"` };
+        return { rowsText: kanjiCompoundRows(kanji), remaining: remaining(kanji.compoundTotal, kanji.compounds.length), error: null };
+      }
+      case "readings": {
+        const { hits, total } = searchReadingPrefix(db, query.trim(), max, offset);
+        return { rowsText: searchRowList("readings", hits), remaining: remaining(total, hits.length), error: null };
+      }
+      case "meanings": {
+        const trimmed = query.trim();
+        let ranked = meaningRankCache.get(trimmed);
+        if (!ranked) {
+          // Only ASCII queries produce a Meanings section; a cache miss (or
+          // eviction) re-runs the ranked search — the one slow page.
+          if (!isAscii(trimmed)) return { rowsText: "", remaining: 0, error: "no meaning matches for this query" };
+          ranked = await searchMeanings(db, trimmed);
+          meaningRankCache.set(trimmed, ranked);
+          trimMeaningCache();
+        }
+        const hits = ranked.slice(offset, offset + max);
+        return { rowsText: searchRowList("meanings", hits), remaining: remaining(ranked.length, hits.length), error: null };
+      }
+      case "kanji": {
+        // searchKanjiByReading is uncapped: slice the full list for the window
+        // and report what is still left past it.
+        const all = searchKanjiByReading(db, query.trim());
+        const hits = all.slice(offset, offset + max);
+        return { rowsText: searchRowList("kanji", hits), remaining: remaining(all.length, hits.length), error: null };
+      }
+    }
+  } catch (err) {
+    return {
+      rowsText: "",
+      remaining: 0,
+      error: `lookup failed: ${err instanceof Error ? err.message : String(err)}`,
+    };
+  }
 }
 
 /** "did you mean" hint — mirrors cli.ts searchHint. */
