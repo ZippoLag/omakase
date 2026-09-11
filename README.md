@@ -1,11 +1,8 @@
 # omakase
 
-A 100% offline Japanese quick-reference CLI. Look up dictionary entries with
-a thesaurus — synonyms and antonyms — via `word`, kanji pages via `kanji`,
-and search the dictionary by kana, romaji, or English gloss via `search`, all
-against a local SQLite database — no network access at query time.
+A 100% offline Japanese quick-reference utilities, available as CLI tool and installable Progressive Web Application hosted at [omakase-kun.pages.dev](https://omakase-kun.pages.dev/). This tool can be used to look up dictionary entries with a thesaurus — synonyms and antonyms — via `word`, kanji pages via `kanji`, and search the dictionary by kana, romaji, or English gloss via `search`, all against a local SQLite database — no network access at query time.
 
-> **Note from author:** Hi, I'm [Sebastián](https://github.com/zippolag), I love [tangorin](https://tangorin.com/), and if I could I would economically support them so their servers have all the oomph required to always reply in milliseconds, but sadly, I cannot. Hence, faced with the need to have a quick Japanese reference always available, and since I had access to [FREEBUFF](https://freebuff.com/get-started?ref=ref-48e765cb-2146-4cf9-8fba-2a2af1676e77&referrer=Sebasti%C3%A1n+Vansteenkiste) (affiliate link), I took the chance to iterate over my use cases and build just what I needed: a japanese reference app which I can access both as a CLI in my terminal and as a PWA in any device.
+> **Note from author:** Hi, I'm [Sebastián](https://github.com/zippolag), I love [tangorin](https://tangorin.com/), and if I could I would economically support them so their servers have all the oomph required to always reply in milliseconds, but sadly, I cannot. Hence, faced with the need to have a quick Japanese reference always available, and since I had access to [FREEBUFF](https://freebuff.com/get-started?ref=ref-48e765cb-2146-4cf9-8fba-2a2af1676e77&referrer=Sebasti%C3%A1n+Vansteenkiste) (affiliate link), I took the chance to iterate over my use cases and build just what I needed: a japanese reference app which I can access both as a CLI in my terminal and as a PWA in any device. I still have many improvements I would love to build on top of thise, but I've already exceeded the time limit I had set for myself not to go overboard with the scope.
 
 ## Requirements
 
@@ -337,7 +334,9 @@ The lookups reuse the exact query + rendering code as the CLI
 prints. The row-cap input next to the search box (a small integer box,
 default 30) plays the role of the CLI's `-max`. Nothing is published
 anywhere: you serve the app from your own computer over your home Wi-Fi,
-once, to install it.
+once, to install it — or, if you'd rather have a public URL that works
+forever, publish it to the free Cloudflare tier (see
+[Publish it online for free](#publish-it-online-for-free-cloudflare-pages--r2)).
 
 Lookups are **queued, never dropped**: only one runs at a time, and any
 clicks that land while one is in flight (the interactive tokens below stay
@@ -451,6 +450,107 @@ when you (re)install or update.
   differ (you see the import progress bar again).
 - `web/vendor/` holds the pinned sqlite-wasm engine (see its README) so the
   web app builds and serves without `node_modules`.
+
+### Publish it online for free (Cloudflare Pages + R2)
+
+The same `dist/` can be published to the **permanent free tier** of
+Cloudflare — no server, no credit card, no bandwidth bill. This is the
+"host it forever" path: anyone opens the URL (or installs the PWA from it)
+and the ~300 MB dictionary is downloaded once per device into its own
+storage, exactly like the LAN install.
+
+Why Cloudflare, specifically:
+
+- The app must run under **cross-origin isolation** — the sqlite-wasm OPFS
+  engine needs SharedArrayBuffer, which requires `Cross-Origin-Opener-Policy`
+  / `Cross-Origin-Embedder-Policy` response headers. Cloudflare Pages is the
+  free host that lets you set custom headers (via `dist/_headers`, emitted
+  by `web:build`); GitHub Pages, Neocities, Surge, etc. cannot, so the app
+  can't run there.
+- The 308 MB `kanji.db` exceeds every free host's per-file limit (Pages
+  itself caps assets at 25 MiB), so it is stored in **Cloudflare R2** (10 GB
+  free, no egress fees) and streamed to the app through a tiny Pages
+  Function at `/kanji.db`.
+- Pages and R2 charge **nothing for bandwidth** on the free tier — each
+  device's 308 MB one-time import costs $0, forever. Netlify/Vercel's free
+  100 GB/month would be exhausted after ~300 imports.
+
+```
+browser / phone
+  ├─ https://<project>.pages.dev/         app shell = dist/ minus kanji.db
+  │     · index.html, sw.js, web/app/*.js, strokes/, …
+  │     · _headers → COOP/COEP/CORP (cross-origin isolation)
+  └─ https://<project>.pages.dev/kanji.db  Pages Function → R2 bucket
+        · streams the dist/kanji.db uploaded by deploy:web
+```
+
+#### One-time setup (manual steps)
+
+1. **Create a free Cloudflare account** at dash.cloudflare.com/sign-up (no
+   credit card).
+2. **Install dependencies**: `pnpm install` (wrangler is a devDependency).
+3. **Log in wrangler**: `pnpm exec wrangler login` (opens a browser). For
+   CI, set `CLOUDFLARE_API_TOKEN` + `CLOUDFLARE_ACCOUNT_ID` instead.
+4. **Create R2 API credentials** (for the dictionary upload — wrangler's
+   `r2 object put` caps files at 300 MiB, and `kanji.db` is ~307 MiB, so
+   the upload goes through R2's S3-compatible multipart API instead):
+   dash.cloudflare.com → R2 → **Manage R2 API Tokens** → **Create API
+   Token** (Object Read & Write, bucket: `omakase-db`), then:
+   ```bash
+   export R2_ACCESS_KEY_ID=<access key id>
+   export R2_SECRET_ACCESS_KEY=<secret access key>
+   ```
+5. **Build**: `pnpm run web:build` (needs `dist/kanji.db` — run
+   `./install.sh` or `pnpm run build:db` first).
+6. **Deploy**: `pnpm run deploy:web` — it creates the R2 bucket
+   (`omakase-db`) and the Pages project (`omakase-kun`, live at
+   <https://omakase-kun.pages.dev>) automatically on first run, and prints
+   the exact URL afterwards (edit `name` in `wrangler.toml` first if you
+   want a different project). Cloudflare suffixes the domain when
+   `<name>.pages.dev` is already taken globally (the earlier `omakase`
+   project landed at `omakase-cub.pages.dev` for exactly that reason), so
+   trust the printed URL over a hardcoded one.
+7. **Open the printed URL** — the first visit shows the one-time
+   import progress bar (~300 MB); afterwards the app works offline exactly
+   like the LAN install, and can be added to the home screen.
+
+#### Every release
+
+```bash
+pnpm run web:build && pnpm run deploy:web    # or: pnpm run deploy:web -- --build
+```
+
+`deploy:web` uploads `dist/kanji.db` to R2 via multipart (key `kanji.db`;
+needs the `R2_ACCESS_KEY_ID` / `R2_SECRET_ACCESS_KEY` env vars from step
+4), temporarily
+parks it out of `dist/` (Pages rejects the 25 MiB-per-asset limit), deploys
+the rest to Pages, and restores it. Both halves come from the **same build**,
+so the served `dist/meta.json` stamp and the dictionary in R2 always match:
+existing installs re-import exactly when a new build ships, and never
+twice. (Run `node scripts/deploy-web.mjs --help` for options: `--build`,
+`--branch`.)
+
+Notes:
+
+- **Stamp sync is by construction** — never upload a `kanji.db` to R2 from a
+  different build than the `dist/` you deploy, or the worker would re-import
+  on every boot (its update check compares the served `meta.json` stamp with
+  the copy in OPFS).
+- **Shell-only re-deploys need no R2 credentials**: when the bucket already
+  holds the dictionary for the current build (e.g. a second Pages project
+  bound to the same bucket), parking `dist/kanji.db` aside and running
+  `pnpm exec wrangler pages deploy --branch main` publishes the shell on its
+  own — the `/kanji.db` route keeps streaming the R2 object unchanged.
+- **Several projects can share one bucket** — they then serve the same
+  dictionary, so one `deploy:web` release updates all of them at once (and
+  they can never drift apart).
+- **Custom domain**: add it in the Pages dashboard (free plan: 100 custom
+  domains); the app's root-relative paths work unchanged.
+- **Free-tier budget**: R2 storage 10 GB (this app: ~0.3 GB), Pages 20,000
+  files (we ship ~6.5k), Pages Functions 100k requests/day; bandwidth is
+  unmetered on both. `web:build` stamps a fresh build number into the shell
+  and `meta.json` on every release, so the header badge always shows the
+  deployed version.
 
 ## Development
 

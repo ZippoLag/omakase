@@ -1,0 +1,26 @@
+# Cloudflare Pages project config — the free, permanent host for the web app.
+#
+# The app shell (index.html, sw.js, web/app/*.js, strokes/, … — everything in
+# dist/ except kanji.db) is served as static assets; the ~308 MB dictionary
+# (dist/kanji.db) exceeds Pages' 25 MiB per-asset limit, so it is uploaded to
+# the R2 bucket below and streamed to the app through functions/kanji.db.ts.
+# `pnpm run deploy:web` does both halves from the same dist/ build, so the
+# served dist/meta.json stamp and the dictionary in R2 always match.
+#
+# `name` is the Pages project, and it decides the free URL —
+# https://omakase-kun.pages.dev. (Cloudflare appends a suffix when the plain
+# <name>.pages.dev is taken globally — this account's earlier `omakase`
+# project landed at omakase-cub.pages.dev for that reason — so deploy:web
+# reads the real domain from the project instead of assuming it.)
+#
+# With pages_build_output_dir set, this file is the source of truth for the
+# Pages project: `wrangler pages deploy` deploys dist/ and applies these
+# settings — don't also edit the same fields in the dashboard.
+
+name = "omakase-kun"
+pages_build_output_dir = "./dist"
+compatibility_date = "2026-08-01"
+
+[[r2_buckets]]
+binding = "DB"
+bucket_name = "omakase-db"

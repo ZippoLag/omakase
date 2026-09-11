@@ -87,6 +87,32 @@ try {
 mkdirSync(join(root, "dist", "web", "vendor"), { recursive: true });
 cpSync(join(root, "web", "vendor"), join(root, "dist", "web", "vendor"), { recursive: true });
 
+// Cloudflare Pages _headers: cross-origin isolation (the sqlite-wasm OPFS
+// engine needs SharedArrayBuffer, which requires COOP/COEP) plus revalidation
+// for the shell files whose freshness matters (index.html, sw.js, meta.json).
+// Mirrors the headers scripts/serve-web.mjs sends in dev. The dictionary
+// route is a Pages Function (functions/kanji.db.ts), so it sets its own.
+writeFileSync(
+  join(root, "dist", "_headers"),
+  [
+    "/*",
+    "  Cross-Origin-Opener-Policy: same-origin",
+    "  Cross-Origin-Embedder-Policy: require-corp",
+    "  Cross-Origin-Resource-Policy: same-origin",
+    "  X-Content-Type-Options: nosniff",
+    "",
+    "/index.html",
+    "  Cache-Control: no-cache",
+    "",
+    "/sw.js",
+    "  Cache-Control: no-cache",
+    "",
+    "/meta.json",
+    "  Cache-Control: no-cache",
+    "",
+  ].join("\n"),
+);
+
 const dbPath = join(root, "dist", "kanji.db");
 if (!existsSync(dbPath)) {
   console.warn("⚠  dist/kanji.db missing — run `pnpm run build:db` (or `./install.sh`) before serving.");

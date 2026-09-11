@@ -65,6 +65,9 @@ web/            phone app (PWA)
 scripts/        version.mjs (stamp) · build-web.mjs · sw-version.mjs ·
                 verify-web.mjs (e2e) · serve-web.mjs (TLS LAN server) ·
                 profile-web.mjs · link-global.mjs
+functions/      Cloudflare Pages Function — kanji.db.ts streams the dictionary
+                from R2 · wrangler.toml (Pages + R2 config) ·
+                pnpm-workspace.yaml (pnpm 11 build approvals)
 tests/          node:test suites (goldens + unit) · fixtures/
 data/           build pipeline (fetch/parse/transform → dist/kanji.db)
 dist/           build artifact: kanji.db + strokes/ + web shell (gitignored)
@@ -86,6 +89,8 @@ better-sqlite3`. Run everything with pnpm (corepack).
 | `pnpm exec tsx --test tests/web.test.ts` | web unit tests — run on **any** Node (no native deps; some tests skip below Node 22.13) | Always |
 | `pnpm run validate:conjugations` | conjugation diff + gap fixtures | When touching conjugation |
 | `pnpm run web:build && pnpm run web:verify` | full e2e in headless Chrome (import → lookups → offline reload). Needs `web/.certs` (`pnpm run web:gen-cert`) and Chrome (`CHROME_PATH` if not default) | When touching the web app |
+| `pnpm run typecheck:functions` | `tsc -p tsconfig.functions.json --noEmit` (Cloudflare Pages Functions) | When touching `functions/` |
+| `pnpm run deploy:web` | publish `dist/` to Cloudflare Pages + R2 (see README "Publish it online for free") | When publishing the web app |
 | `pnpm run build:db` | rebuild `dist/kanji.db` (long; needs `data/raw/` sources) | Only when data/build changes |
 
 **Definition of done for any web change:** both typechecks pass, `pnpm test`
@@ -228,8 +233,35 @@ in W10 — before adding any cache API, grep for callers first.
   caches when the current cache holds every precache entry; navigations are
   network-first, other requests cache-first **scoped to the current cache
   name** (`caches.match(req, { cacheName: CACHE })`).
-- The 289 MB dictionary is **not** precached — it lives in OPFS only;
+-  The 289 MB dictionary is **not** precached — it lives in OPFS only;
   `/kanji.db` requests always hit the network (browser HTTP cache applies).
+
+### Free deployment (Cloudflare Pages + R2)
+
+`functions/kanji.db.ts` + `wrangler.toml` + `scripts/deploy-web.mjs` publish
+the app on Cloudflare's permanent free tier (see README "Publish it online
+for free" for the manual one-time setup). The live project is `omakase-kun`
+→ <https://omakase-kun.pages.dev>, bound to the R2 bucket `omakase-db` (the
+`name` in wrangler.toml is the Pages project and the pages.dev label follows
+from it — Cloudflare suffixes the label when the plain name is taken, which
+is why the earlier `omakase` project served omakase-cub.pages.dev; deploy:web
+prints the real domain rather than assuming it). The old `omakase` project
+has since been deleted; the bucket stays, because it holds the dictionary.
+
+The shell (dist/ minus kanji.db) goes to Pages — `dist/_headers`, emitted by build-web.mjs, supplies
+COOP/COEP/CORP (cross-origin isolation the OPFS engine needs) and
+`Cache-Control: no-cache` for index.html / sw.js / meta.json — while the
+308 MB dictionary (over Pages' 25 MiB per-asset limit) lives in an R2
+bucket and is streamed through the `kanji.db.ts` Function
+(`env.DB.get("kanji.db")`, `Cache-Control: no-cache` so the browser
+revalidates via the object's ETag instead of serving a stale overwritten
+copy). `deploy:web` uploads dist/kanji.db to R2 and deploys the rest of
+dist/ (parking the DB in `.deploy-tmp/` first; a leftover parked file is
+restored on the next run). The R2 object and the served dist/meta.json
+stamp must **always come from the same build** — the worker re-imports
+whenever the stamps differ, so a mismatched pair re-imports every boot.
+Keep `DB_PATH` root-absolute and the shell paths relative; the SW's
+`/kanji.db` bypass is what lets the import always hit the network.
 
 ## 6. Quality procedures & test conventions
 
@@ -379,3 +411,11 @@ in W10 — before adding any cache API, grep for callers first.
     dark, so theme-dependent probes must force the theme explicitly first.
 12. **`REVIEW-FIXES.md` is temporary** — finish W1–W16, delete it, and keep
     this file as the durable record.
+13. **Free hosting is Pages + R2, deployed via `pnpm run deploy:web`** — the
+    shell goes to Pages (with `_headers` supplying COOP/COEP/CORP), the
+    dictionary streams from R2 through `functions/kanji.db.ts`, and the R2
+    object must always come from the same build as the deployed
+    `dist/meta.json` (a stale pair makes the worker re-import on every boot).
+    `name` in wrangler.toml is the Pages project *and* the pages.dev label,
+    and several projects may share one bucket (they then serve the same
+    dictionary — a shell-only re-deploy needs no R2 credentials at all).

@@ -24,17 +24,23 @@
     "web:serve": "node scripts/serve-web.mjs",
     "web:gen-cert": "node scripts/serve-web.mjs --gen-cert",
     "web:verify": "node scripts/verify-web.mjs",
+    "typecheck:functions": "tsc -p tsconfig.functions.json --noEmit",
+    "deploy:web": "node scripts/deploy-web.mjs",
     "setup": "bash ./install.sh",
     "uninstall": "bash ./uninstall.sh"
   },
   "devDependencies": {
+    "@aws-sdk/client-s3": "^3.1128.0",
+    "@aws-sdk/lib-storage": "^3.1128.0",
+    "@cloudflare/workers-types": "^4.20260702.1",
     "@sqlite.org/sqlite-wasm": "3.53.0-build1",
     "@types/better-sqlite3": "^7.6.11",
     "@types/node": "^22.0.0",
     "better-sqlite3": "^11.0.0",
     "puppeteer-core": "^25.9.0",
     "tsx": "^4.19.0",
-    "typescript": "^5.5.0"
+    "typescript": "^5.5.0",
+    "wrangler": "^4.130.0"
   },
   "dependencies": {
     "omakase": "link:"

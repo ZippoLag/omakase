@@ -1,5 +1,13 @@
+# pnpm configuration (pnpm 11 reads settings from this file, not from the
+# `pnpm` field in package.json).
+#
+# Build scripts pnpm is allowed to run on install (pnpm 11's supply-chain
+# protection ignores unapproved lifecycle scripts by default):
+#   - better-sqlite3 — the CLI's native binding (Node 20–22); required.
+#   - esbuild — platform binary used by tsx and wrangler; required.
+#   - workerd — wrangler's local runtime (needed for `wrangler pages dev`;
+#     deploy-only workflows never invoke it).
 allowBuilds:
   better-sqlite3: true
   esbuild: true
-overrides:
-  omakase: 'link:'
+  workerd: true

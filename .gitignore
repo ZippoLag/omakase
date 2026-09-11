@@ -1,5 +1,13 @@
 node_modules/
 dist/
+# kanji.db park-out during `pnpm run deploy:web` (scripts/deploy-web.mjs)
+.deploy-tmp/
+# wrangler's local state — miniflare's simulated R2 bucket keeps a full 308 MB
+# copy of the dictionary after a local `pages dev` / `--local` run: never commit
+.wrangler/
+# local Cloudflare credentials for `pnpm run deploy:web` (wrangler reads these)
+.env
+.dev.vars
 data/raw/
 # per-build version counter (scripts/version.mjs)
 .build-number
