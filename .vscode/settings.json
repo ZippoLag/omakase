@@ -23,7 +23,9 @@
         "titleBar.activeBackground": "#b3adb9",
         "titleBar.activeForeground": "#15202b",
         "titleBar.inactiveBackground": "#b3adb999",
-        "titleBar.inactiveForeground": "#15202b99"
+        "titleBar.inactiveForeground": "#15202b99",
+        "activityBar.activeBorder": "#15202b",
+        "activityBarTop.activeBorder": "#15202b"
     },
     "peacock.color": "#b3adb9",
     "workbench.experimental.modernUI": false
