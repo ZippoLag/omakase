@@ -1,0 +1,104 @@
+{
+  "id": "9000201",
+  "kanji": [],
+  "kana": [
+    {
+      "common": true,
+      "text": "ぺーじんぐ",
+      "tags": [],
+      "appliesToKanji": [
+        "*"
+      ]
+    }
+  ],
+  "sense": [
+    {
+      "partOfSpeech": [
+        "n"
+      ],
+      "appliesToKanji": [
+        "*"
+      ],
+      "appliesToKana": [
+        "*"
+      ],
+      "related": [
+        [
+          "飲む",
+          1
+        ],
+        [
+          "来る",
+          1
+        ],
+        [
+          "食う",
+          1
+        ],
+        [
+          "感ずる",
+          1
+        ],
+        [
+          "食べ物",
+          1
+        ],
+        [
+          "死す",
+          1
+        ],
+        [
+          "覆う",
+          1
+        ]
+      ],
+      "antonym": [
+        [
+          "愛する",
+          1
+        ],
+        [
+          "検討",
+          1
+        ],
+        [
+          "感ずる",
+          1
+        ],
+        [
+          "飲む",
+          1
+        ],
+        [
+          "来る",
+          1
+        ],
+        [
+          "食う",
+          1
+        ],
+        [
+          "寒い",
+          1
+        ],
+        [
+          "食べ物",
+          1
+        ]
+      ],
+      "field": [],
+      "dialect": [],
+      "misc": [],
+      "info": [],
+      "languageSource": [],
+      "gloss": [
+        {
+          "lang": "eng",
+          "gender": null,
+          "type": null,
+          "text": "paging probe"
+        }
+      ]
+    }
+  ]
+}

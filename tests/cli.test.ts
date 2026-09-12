@@ -262,6 +262,35 @@ test("word --limit N: space and equals flag forms both truncate senses", async (
   }
 });
 
+test("word --offset: windows the thesaurus with its per-block remainder notes", async () => {
+  const { dbPath, dir } = buildFixtureDbFile();
+  try {
+    // The synthetic ぺーじんぐ entry carries 7 related + 8 antonym links:
+    // --offset 1 shows rows [1, 6) of each block with the note counting what
+    // remains past the whole window (1 synonym, 2 antonyms).
+    const { code, stdout } = await runOnDb(["word", "ぺーじんぐ", "--offset", "1"], dbPath);
+    assert.equal(code, 0);
+    assert.ok(stdout.includes("Synonyms:") && stdout.includes("Antonyms:"), stdout);
+    assert.ok(stdout.includes("  … and 1 more"), stdout);
+    assert.ok(stdout.includes("  … and 2 more"), stdout);
+    // The equals form matches the space form, and --offset 0 the plain command.
+    assert.equal((await runOnDb(["word", "ぺーじんぐ", "--offset=1"], dbPath)).stdout, stdout);
+    const zero = await runOnDb(["word", "ぺーじんぐ", "--offset", "0"], dbPath);
+    const plain = await runOnDb(["word", "ぺーじんぐ"], dbPath);
+    assert.equal(zero.stdout, plain.stdout);
+    // Past the end of both lists the thesaurus section disappears entirely.
+    const past = await runOnDb(["word", "ぺーじんぐ", "--offset", "8"], dbPath);
+    assert.equal(past.code, 0);
+    assert.ok(!past.stdout.includes("Synonyms:") && !past.stdout.includes("Antonyms:"), past.stdout);
+    // Invalid values are errors on stderr, no output.
+    const bad = await runOnDb(["word", "ぺーじんぐ", "--offset", "-1"], dbPath);
+    assert.equal(bad.stdout, "");
+    assert.ok(bad.stderr.includes("error: --offset must be a non-negative integer"), bad.stderr);
+  } finally {
+    rmSync(dir, { recursive: true, force: true });
+  }
+});
+
 test("word <missing>: error to stderr, no stdout (exits 0)", async () => {
   const { dbPath, dir } = buildFixtureDbFile();
   try {

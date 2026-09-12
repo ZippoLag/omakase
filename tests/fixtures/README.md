@@ -9,13 +9,15 @@ expected outputs they must reproduce byte-for-byte.
 tests/fixtures/
   manifest.json                  sha256 of the pinned source downloads
   entries/                       exact JSON snapshots from the source release
-    jmdict-<id>-<name>.json      JMdict word entries (19: taberu, kuru, yoi,
+    jmdict-<id>-<name>.json      JMdict word entries (21: taberu, kuru, yoi,
                                  ii, suru, shokuji, kanzuru, aru, tabemono,
                                  kirei, atsui, nomu, kuu, iru, samui, shisu,
                                  aisuru, aikyogen [間狂言], plus synthetic
-                                 ou/kentou — synthetic entries are hand-pinned
-                                 [G] words for classes absent from the release,
-                                 see conjugations/)
+                                 ou/kentou [G] gap classes — hand-pinned
+                                 words for classes absent from the release,
+                                 see conjugations/ — and paging, a hand-pinned
+                                 kana-only word carrying 7 related + 8 antonym
+                                 links for the `word --offset` goldens)
     kanjidic2-<name>.json        KANJIDIC2 characters (10: 食 水 飲 見 行 来 良 暑 綺 喰)
     krad-<kanji>.json            kradfile component slices
     radk-<radical>.json          radkfile radical slices (水 食 口)
@@ -104,7 +106,13 @@ seed `stroke_order` rows and copy the fixture SVGs next to their temp DB.
   header and capped at 30 rows with a `… and N more` note (mirrors
   `format.ts`; bolding is terminal-only and never appears in goldens).
 - `word` shows all senses; `--limit N` truncates with a trailing
-  `… and N more senses` line (see `word-suru-limit3.txt`).
+  `… and N more senses` line (see `word-suru-limit3.txt`). `--offset N`
+  starts the thesaurus window N rows in (up to 5 rows per Synonyms/Antonyms
+  block, each with its own `… and N more` note counting what is left past
+  the window); the `word-paging-offset{1,5,8}.txt` goldens pin a mid-list
+  window (notes), a tail window (no notes) and a window past the end (the
+  whole thesaurus section is dropped) — the synthetic ぺーじんぐ entry
+  (`jmdict-9000201-paging.json`) supplies the links.
 - **[G] gap-class goldens:** `conjugate-aru` (suppletive ない, blank
   potential/passive/causative), `conjugate-shokuji` (suru noun: 食事する…),
   `conjugate-kanzuru` (vz: 感ずる→感じます…), `conjugate-shisu` (vs-c 死す→死します),

@@ -100,7 +100,8 @@ function golden(name: string): string {
   return readFileSync(join(FIXTURES, "golden", name), "utf-8");
 }
 
-const WORD_GOLDENS: [string, string, string?, number?][] = [
+// [golden file, query, (unused), --limit, --offset]
+const WORD_GOLDENS: [string, string, string?, number?, number?][] = [
   ["word-taberu.txt", "食べる"],
   ["word-shokuji.txt", "食事"],
   ["word-kirei.txt", "綺麗"],
@@ -114,6 +115,13 @@ const WORD_GOLDENS: [string, string, string?, number?][] = [
   // dataset (never in the hand-pinned map): 間狂言 / あいきょうげん ->
   // 間[あい]狂[きょう]言[げん]. Regression for the "Furigana: <writing>" echo.
   ["word-aikyogen.txt", "間狂言"],
+  // --offset thesaurus paging: the synthetic ぺーじんぐ entry carries 7
+  // related + 8 antonym links, so a mid-list window keeps each block's
+  // remainder note, a tail window has none, and a window past the end drops
+  // the thesaurus section entirely.
+  ["word-paging-offset1.txt", "ぺーじんぐ", undefined, undefined, 1],
+  ["word-paging-offset5.txt", "ぺーじんぐ", undefined, undefined, 5],
+  ["word-paging-offset8.txt", "ぺーじんぐ", undefined, undefined, 8],
 ];
 
 const KANJI_GOLDENS: [string, string][] = [
@@ -139,8 +147,8 @@ test("word goldens (dictionary entries + examples, byte-for-byte)", () => {
   const db = buildFixtureDb();
   try {
     const tags = loadTags(db);
-    for (const [file, query, , limit] of WORD_GOLDENS) {
-      const out = cmdWord(db, query, tags, limit);
+    for (const [file, query, , limit, offset] of WORD_GOLDENS) {
+      const out = cmdWord(db, query, tags, limit, offset);
       assert.ok(out != null, `no word output for ${query} (${file})`);
       assert.equal(out, golden(file), file);
     }

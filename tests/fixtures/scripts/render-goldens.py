@@ -116,6 +116,12 @@ def display_header(word):
     common = any(k.get("common") for k in kanji) or any(k.get("common") for k in kana)
     return text, reading, common
 
+def is_common(word):
+    """JMdict common flag: any common kanji or kana writing (mirrors
+    data/build/transform.ts isCommon)."""
+    return any(k.get("common") for k in word.get("kanji", [])) or any(
+        k.get("common") for k in word.get("kana", []))
+
 def compound_rows(entries):
     """kanji literal -> sorted [(word_id, writing, furigana, first_gloss)]"""
     rows = {}
@@ -248,7 +254,7 @@ def build_thesaurus_links(entries):
             cands = by_text.get(text, [])
         if not cands:
             return None
-        return min(cands, key=lambda i: (not entries[i].get("common", False), int(i)))
+        return min(cands, key=lambda i: (not is_common(entries[i]), int(i)))
 
     links = []  # (kind, from_id, to_id, to_sense, hops)
     seen = set()
@@ -412,7 +418,7 @@ def render_gloss_thesaurus(word, entries, offset=0):
             continue
         score = sum(math.log(1 + total / df[t]) for t in toks)
         cands.append((owid, score, len(toks)))
-    cands.sort(key=lambda c: (-c[1], -c[2], not entries[c[0]].get("common", False), int(c[0])))
+    cands.sort(key=lambda c: (-c[1], -c[2], not is_common(entries[c[0]]), int(c[0])))
 
     shown = cands[offset:offset + 5]
     rows = []
@@ -451,7 +457,7 @@ def render_thesaurus(word, entries, offset=0):
             seen.add(to)
             target = entries[to]
             hits.append((target, gloss_at(target, sense)))
-        hits.sort(key=lambda h: (not h[0].get("common", False), int(h[0]["id"])))
+        hits.sort(key=lambda h: (not is_common(h[0]), int(h[0]["id"])))
         return hits
 
     sections = []
@@ -602,10 +608,11 @@ def main():
             f.write(text)
         print("wrote golden/%s" % name)
 
-    def word_out(eid, limit=None):
-        """Word body + thesaurus section (when the word has synonyms/antonyms)."""
+    def word_out(eid, limit=None, offset=0):
+        """Word body + thesaurus section (when the word has synonyms/antonyms),
+        with each thesaurus window starting `offset` rows in."""
         body = render_word(w(eid), limit=limit)
-        thes = render_thesaurus(w(eid), entries)
+        thes = render_thesaurus(w(eid), entries, offset)
         return body + "\n" + thes if thes else body
 
     # --- word ---
@@ -618,6 +625,14 @@ def main():
     write("word-atsui.txt", word_out("1343460"))
     write("word-aru.txt", word_out("1296400"))
     write("word-aikyogen.txt", word_out("1215390"))
+    # --offset thesaurus paging: synthetic 9000201 ("ぺーじんぐ") carries 7
+    # related + 8 antonym links, so offset 1 shows a mid-list window (5 rows
+    # + a per-block ``… and N more`` note), offset 5 the tail (2/3 rows, no
+    # note), and offset 8 an empty window past the end (the whole thesaurus
+    # section is dropped).
+    write("word-paging-offset1.txt", word_out("9000201", offset=1))
+    write("word-paging-offset5.txt", word_out("9000201", offset=5))
+    write("word-paging-offset8.txt", word_out("9000201", offset=8))
 
     # --- kanji ---
     for lit, name in [("食", "kanji-shoku"), ("水", "kanji-mizu"), ("喰", "kanji-kuu")]:
