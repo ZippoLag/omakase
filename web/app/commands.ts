@@ -10,7 +10,6 @@ import {
   displayHeader,
   exampleSentences,
   findWordByWriting,
-  glossThesaurus,
   isKanaInput,
   kanjiLiterals,
   loadKanji,
@@ -85,7 +84,8 @@ export interface StreamResult {
  * the CLI's `filter(Boolean).join("\n")` would insert (a blank line), so
  * concatenating the emitted sections reproduces `cmdWord` byte-for-byte;
  * empty parts are skipped exactly like `filter(Boolean)`. The thesaurus
- * section carries load-more anchors for its capped synonyms/antonyms lists.
+ * section carries load-more anchors for its capped synonyms/antonyms/related
+ * lists.
  */
 export async function streamWord(
   db: DbLike,
@@ -97,21 +97,16 @@ export async function streamWord(
   if (!word) return { error: `no entry for "${query}"` };
   const body = renderWordBody(word, tags);
   if (body) await emit("body", body);
-  let { synonyms, antonyms, synonymTotal, antonymTotal } = wordThesaurus(db, word);
-  // Fallback for entries with no cross-reference links at all: related words
-  // inferred from shared distinctive English gloss tokens (glosses_fts).
-  if (synonyms.length === 0 && antonyms.length === 0) {
-    const fallback = glossThesaurus(db, word);
-    synonyms = fallback.synonyms;
-    synonymTotal = fallback.synonymTotal;
-  }
-  const thesaurus = renderThesaurus(synonyms, antonyms, { synonymTotal, antonymTotal });
+  const { synonyms, antonyms, related, synonymTotal, antonymTotal, relatedTotal } = wordThesaurus(db, word);
+  const thesaurus = renderThesaurus(synonyms, antonyms, related, { synonymTotal, antonymTotal, relatedTotal });
   if (thesaurus) {
     // One anchor per capped list, located by scanning the rendered block for
-    // its ``… and N more`` note lines in block order (synonyms first).
+    // its ``… and N more`` note lines in block order (synonyms → antonyms →
+    // related).
     const anchors = noteAnchors("\n" + thesaurus, [
       { section: "synonyms", total: synonymTotal, shown: synonyms.length },
       { section: "antonyms", total: antonymTotal, shown: antonyms.length },
+      { section: "related", total: relatedTotal, shown: related.length },
     ]);
     await emit("thesaurus", "\n" + thesaurus, anchors);
   }
@@ -339,21 +334,14 @@ export async function streamPage(
     const remaining = (total: number, shown: number): number => Math.max(0, total - (offset + shown));
     switch (section) {
       case "synonyms":
-      case "antonyms": {
+      case "antonyms":
+      case "related": {
         const word = findWordByWriting(db, query);
         if (!word) return { rowsText: "", remaining: 0, error: `no entry for "${query}"` };
-        let { synonyms, antonyms, synonymTotal, antonymTotal } = wordThesaurus(db, word, max, offset);
-        // Mirror cmdWord's fallback: entries with no cross-reference links at
-        // all infer synonyms from shared English gloss tokens. Only the
-        // first window can be empty-with-a-fallback (a later window of a
-        // fallback list pages the same inferred ranking).
-        if (section === "synonyms" && offset === 0 && synonyms.length === 0 && antonyms.length === 0) {
-          const fb = glossThesaurus(db, word, max, offset);
-          synonyms = fb.synonyms;
-          synonymTotal = fb.synonymTotal;
-        }
-        const hits = section === "synonyms" ? synonyms : antonyms;
-        const total = section === "synonyms" ? synonymTotal : antonymTotal;
+        const { synonyms, antonyms, related, synonymTotal, antonymTotal, relatedTotal } =
+          wordThesaurus(db, word, max, offset);
+        const hits = section === "synonyms" ? synonyms : section === "antonyms" ? antonyms : related;
+        const total = section === "synonyms" ? synonymTotal : section === "antonyms" ? antonymTotal : relatedTotal;
         return { rowsText: thesaurusRowList(hits), remaining: remaining(total, hits.length), error: null };
       }
       case "compounds": {

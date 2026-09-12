@@ -58,7 +58,8 @@ JmdictFurigana + kradfile/radkfile ──────┘     fetch.ts (pinned UR
                                                transform.ts (writings, senses, glosses,
                                                    kanji readings/meanings, radicals,
                                                    kanji_words, conjugations, furigana,
-                                                   word_sentences, romaji columns)
+                                                   word_sentences, thesaurus_links,
+                                                   romaji columns)
                                                buildDb.ts (one tx per dict → kanji.db)
                                                rebuild FTS (trigram + unicode61)
                                                package.ts (dist/: kanji.db, strokes/*.svg, meta.json)
@@ -86,7 +87,7 @@ All data is local; there is **no runtime network access** by design.
 | `omakase kanji 食 --words` | compounds: words containing the kanji (with furigana) | `kanji_words` |
 | `omakase kanji --radical 氵 --radical 口` | multi-radical search (intersection) | `kanji_radicals` (PK) |
 | `omakase kanji --stroke 8 --grade 3` | filter by stroke count / grade / JLPT | `kanji` covering indexes |
-| `omakase word 食べる` | definitions, readings, POS, furigana, common flag | `words` + `writings` + `senses` + `glosses` + `furigana` |
+| `omakase word 食べる` | definitions, readings, POS, furigana, common flag, thesaurus (synonyms / antonyms / related) | `words` + `writings` + `senses` + `glosses` + `furigana` + `thesaurus_links` |
 | `omakase word taberu` | romaji input | WanaKana → `writings.romaji` |
 | `omakase search eat` | English full-text search | `glosses_fts` (unicode61) |
 | `omakase search たべ` | reading prefix / kanji substring search | `writings_fts` (trigram) + `idx_writings_text` |

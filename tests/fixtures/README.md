@@ -106,13 +106,18 @@ seed `stroke_order` rows and copy the fixture SVGs next to their temp DB.
   header and capped at 30 rows with a `… and N more` note (mirrors
   `format.ts`; bolding is terminal-only and never appears in goldens).
 - `word` shows all senses; `--limit N` truncates with a trailing
-  `… and N more senses` line (see `word-suru-limit3.txt`). `--offset N`
-  starts the thesaurus window N rows in (up to 5 rows per Synonyms/Antonyms
-  block, each with its own `… and N more` note counting what is left past
-  the window); the `word-paging-offset{1,5,8}.txt` goldens pin a mid-list
-  window (notes), a tail window (no notes) and a window past the end (the
-  whole thesaurus section is dropped) — the synthetic ぺーじんぐ entry
-  (`jmdict-9000201-paging.json`) supplies the links.
+  `… and N more senses` line (see `word-suru-limit3.txt`). The thesaurus is
+  split by provenance into `Synonyms:` (reciprocal xrefs or gated gloss
+  edges), `Antonyms:` (explicit xrefs) and `Related:` (one-way xrefs), each
+  up to 5 rows, in that order, omitted when empty (`word-taberu.txt` keeps
+  食う and drops the false positive 有る; `word-suru-limit3.txt` has no
+  confident synonym and so no section). `--offset N` starts every thesaurus
+  window N rows in, each block with its own `… and N more` note counting what
+  is left past the window; the `word-paging-offset{1,5,8}.txt` goldens pin a
+  mid-list window (notes), a tail window (no notes) and a window past the end
+  (every block dropped) — the synthetic ぺーじんぐ entry
+  (`jmdict-9000201-paging.json`) supplies 7 one-way `related` links (so they
+  render as `Related:`) and 8 antonyms.
 - **[G] gap-class goldens:** `conjugate-aru` (suppletive ない, blank
   potential/passive/causative), `conjugate-shokuji` (suru noun: 食事する…),
   `conjugate-kanzuru` (vz: 感ずる→感じます…), `conjugate-shisu` (vs-c 死す→死します),

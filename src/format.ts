@@ -164,9 +164,11 @@ export function renderWordBody(word: LoadedWord, tags: Record<string, string>, l
 }
 
 /**
- * Thesaurus sections (render-goldens render_thesaurus): up to 5 synonyms and
- * up to 5 antonyms as `text [reading]` / `     gloss` two-line rows.
- * `synonymTotal`/`antonymTotal` report the full pre-cap counts (wordThesaurus
+ * Thesaurus sections (render-goldens render_thesaurus): up to 5 Synonyms, 5
+ * Antonyms and 5 Related as `text [reading]` / `     gloss` two-line rows.
+ * The sections are distinct by provenance, not just capped: Synonyms are
+ * mutual xrefs or gloss edges over the score gate, Related is a one-way JMdict
+ * "see also". `*Total` report the full pre-window counts (wordThesaurus
  * returns totals alongside the windowed rows) so a capped list gets a
  * trailing ``… and N more`` note per block; `offset` is the number of rows
  * already shown before this window, so the note counts what remains past the
@@ -175,23 +177,21 @@ export function renderWordBody(word: LoadedWord, tags: Record<string, string>, l
 export function renderThesaurus(
   synonyms: ThesaurusHit[],
   antonyms: ThesaurusHit[],
-  opts: { synonymTotal?: number; antonymTotal?: number; offset?: number } = {},
+  related: ThesaurusHit[] = [],
+  opts: { synonymTotal?: number; antonymTotal?: number; relatedTotal?: number; offset?: number } = {},
 ): string {
   const offset = opts.offset ?? 0;
   const sections: string[] = [];
-  if (synonyms.length > 0) {
-    sections.push("Synonyms:", ...synonyms.map((s) => thesaurusRow(s)));
-    const total = opts.synonymTotal ?? synonyms.length;
-    const more = total - (offset + synonyms.length);
-    if (more > 0) sections.push(`  … and ${more} more`);
-  }
-  if (antonyms.length > 0) {
+  const add = (header: string, hits: ThesaurusHit[], total: number | undefined): void => {
+    if (hits.length === 0) return;
     if (sections.length > 0) sections.push("");
-    sections.push("Antonyms:", ...antonyms.map((a) => thesaurusRow(a)));
-    const total = opts.antonymTotal ?? antonyms.length;
-    const more = total - (offset + antonyms.length);
+    sections.push(header, ...hits.map(thesaurusRow));
+    const more = (total ?? hits.length) - (offset + hits.length);
     if (more > 0) sections.push(`  … and ${more} more`);
-  }
+  };
+  add("Synonyms:", synonyms, opts.synonymTotal);
+  add("Antonyms:", antonyms, opts.antonymTotal);
+  add("Related:", related, opts.relatedTotal);
   return sections.length === 0 ? "" : sections.join("\n") + "\n";
 }
 

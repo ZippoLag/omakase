@@ -144,7 +144,15 @@ async function main(): Promise<void> {
     summary.radicals, summary.kanjiRadicals, summary.kanjiWords, summary.conjugations);
   console.log("  stroke_order=%d (KanjiVG %s)", summary.strokes, KANJIVG_RELEASE);
   console.log("  furigana=%d (JmdictFurigana %s)", summary.furigana, FURIGANA_RELEASE);
-  console.log("  thesaurus_links=%d (forward + reverse + 2-hop)", summary.thesaurusLinks);
+  console.log("  thesaurus_links=%d", summary.thesaurusLinks);
+  const linkBreakdown = new Map<string, number>();
+  for (const l of rows.thesaurusLinks) {
+    const key = `${l.kind}/${l.source}`;
+    linkBreakdown.set(key, (linkBreakdown.get(key) ?? 0) + 1);
+  }
+  console.log("    by kind/source: %s", [...linkBreakdown].sort()
+    .map(([k, n]) => `${k}=${n}`).join(", "));
+  console.log("    words with a relation: %d", new Set(rows.thesaurusLinks.map((l) => l.from_word)).size);
   const conjugatedWordIds = new Set(rows.conjugations.map((c) => c.word_id));
   console.log("  (conjugation tables generated for %d words)",
     rows.words.filter((w) => conjugatedWordIds.has(w.id)).length);

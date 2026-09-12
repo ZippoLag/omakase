@@ -20,7 +20,7 @@ export interface RunRequest {
 }
 
 /** Which paged list a load-more button continues (W17i). */
-export type PageSection = "synonyms" | "antonyms" | "compounds" | "readings" | "meanings" | "kanji";
+export type PageSection = "synonyms" | "antonyms" | "related" | "compounds" | "readings" | "meanings" | "kanji";
 
 /** One load-more request: fetch the next `max` rows of a pane's paged list
  * starting at `offset` (the number of rows already shown), tagged with the

@@ -3,6 +3,7 @@
  * in data-model.md §3. Deterministic: identical input ⇒ identical rows.
  */
 import { toRomaji } from "../../src/kana.js";
+import { coarsePosClasses, glossTokens } from "../../src/gloss.js";
 import { CONJUGATABLE, conjugateReading, type ConjClass } from "../../src/conjugation.js";
 import type {
   FuriganaEntry,
@@ -107,11 +108,16 @@ export interface FuriganaRow {
   segments: string;
 }
 export interface ThesaurusLinkRow {
-  kind: "related" | "antonym";
+  kind: "synonym" | "related" | "antonym";
+  source: "xref" | "gloss";
   from_word: string;
   to_word: string;
-  /** referenced sense number (1-based); null when unspecified / reverse / 2-hop. */
+  /** source sense number (1-based); null for synthetic reverse edges. */
+  from_sense: number | null;
+  /** referenced sense number (1-based); null when unspecified / reverse. */
   to_sense: number | null;
+  /** 1 for xref edges, the weighted-Dice confidence (0..1) for gloss edges. */
+  score: number;
   hops: 1 | 2;
 }
 
@@ -389,13 +395,17 @@ export function transform(
 
 /**
  * Resolve every sense-level `related`/`antonym` xref tuple in the dictionary
- * into `thesaurus_links` rows: forward links, reverse links (relatedness and
- * antonymy are symmetric), and 2-hop closure rows (related→related for
- * synonyms-of-synonyms; related→antonym for indirect antonyms). Self-links
- * and unresolvable xrefs are dropped; repeated targets are de-duplicated with
- * first occurrence winning (forward rows precede reverse/2-hop rows, so a
- * sense-specific gloss is preferred at query time). Resolution mirrors the
- * previous runtime lookups: common-first, then min word id.
+ * into `thesaurus_links` rows:
+ *   - a mutual `related` pair (both entries really cite each other) becomes
+ *     `kind='synonym'`; a one-way one stays honestly labeled `related`,
+ *   - explicit `antonym` xrefs stay `kind='antonym'`, plus the reverse of
+ *     one-way rows (relatedness and antonymy are symmetric),
+ *   - gloss-similarity synonyms are appended by `buildGlossSynonymLinks`.
+ * 2-hop closure is deliberately NOT materialized — see THESAURUS-PLAN.md.
+ * Self-links and unresolvable xrefs are dropped; repeated targets are
+ * de-duplicated with first occurrence winning (real forward rows precede the
+ * synthetic reverses, so a sense-specific gloss is preferred at query time).
+ * Resolution mirrors the runtime lookups: common-first, then min word id.
  */
 function buildThesaurusLinks(words: JmdictWord[]): ThesaurusLinkRow[] {
   // writing text -> candidate word ids (insertion order)
@@ -451,20 +461,11 @@ function buildThesaurusLinks(words: JmdictWord[]): ThesaurusLinkRow[] {
     return pick(allByText.get(text));
   };
 
-  const links: ThesaurusLinkRow[] = [];
-  const seen = new Set<string>();
-  const push = (kind: "related" | "antonym", from: string, to: string, toSense: number | null, hops: 1 | 2): void => {
-    if (from === to) return;
-    const key = `${kind}|${from}|${to}`;
-    if (seen.has(key)) return;
-    seen.add(key);
-    links.push({ kind, from_word: from, to_word: to, to_sense: toSense, hops });
-  };
-
-  // forward links, in word/sense/xref order (first occurrence keeps its gloss)
+  // 1-hop forward xrefs (real declarations only, in word/sense/xref order)
   const forward: ThesaurusLinkRow[] = [];
   for (const word of words) {
-    for (const sense of word.sense) {
+    word.sense.forEach((sense, si) => {
+      const fromSense = si + 1;
       for (const [kind, xrefs] of [
         ["related", sense.related],
         ["antonym", sense.antonym],
@@ -472,56 +473,83 @@ function buildThesaurusLinks(words: JmdictWord[]): ThesaurusLinkRow[] {
         for (const raw of xrefs) {
           if (!Array.isArray(raw) || typeof raw[0] !== "string") continue;
           let reading: string | null = null;
-          let senseNo: number | null = null;
+          let toSense: number | null = null;
           const second = raw[1];
           if (typeof second === "number") {
-            senseNo = second;
+            toSense = second;
           } else if (typeof second === "string") {
             // the reading may carry a "・N" sense disambiguator, e.g. "いる・1"
             const m = /・(\d+)$/.exec(second);
             reading = m ? second.slice(0, m.index) : second;
-            if (m) senseNo = Number(m[1]);
-            if (typeof raw[2] === "number") senseNo = raw[2];
+            if (m) toSense = Number(m[1]);
+            if (typeof raw[2] === "number") toSense = raw[2];
           }
           const target = resolve(raw[0], reading);
           if (!target) continue;
-          forward.push({ kind, from_word: word.id, to_word: target, to_sense: senseNo, hops: 1 });
+          forward.push({
+            kind,
+            source: "xref",
+            from_word: word.id,
+            to_word: target,
+            from_sense: fromSense,
+            to_sense: toSense,
+            score: 1,
+            hops: 1,
+          });
         }
       }
-    }
+    });
   }
-  for (const r of forward) push(r.kind, r.from_word, r.to_word, r.to_sense, 1);
 
-  // reverse edges
-  for (const r of forward) push(r.kind, r.to_word, r.from_word, null, 1);
+  // Reciprocal = the two entries really cite each other. Only the real forward
+  // edges count: the synthetic reverse below must not fabricate symmetry (that
+  // is exactly what turned every one-way "see also" into a "synonym").
+  const relatedPairs = new Set(
+    forward.filter((r) => r.kind === "related").map((r) => `${r.from_word}\u0000${r.to_word}`),
+  );
+  const isMutual = (a: string, b: string): boolean =>
+    relatedPairs.has(`${a}\u0000${b}`) && relatedPairs.has(`${b}\u0000${a}`);
 
-  // base 1-hop edge sets (forward + reverse) for the closure step
-  const relEdges = new Map<string, Set<string>>();
-  const antEdges = new Map<string, Set<string>>();
-  const addEdge = (map: Map<string, Set<string>>, from: string, to: string) => {
-    let set = map.get(from);
-    if (!set) {
-      set = new Set();
-      map.set(from, set);
-    }
-    set.add(to);
+  const links: ThesaurusLinkRow[] = [];
+  const seen = new Set<string>();
+  const push = (row: ThesaurusLinkRow): void => {
+    if (row.from_word === row.to_word) return;
+    const key = `${row.kind}|${row.from_word}|${row.to_word}`;
+    if (seen.has(key)) return;
+    seen.add(key);
+    links.push(row);
   };
-  for (const r of links) {
-    if (r.hops !== 1) continue;
-    if (r.kind === "related") addEdge(relEdges, r.from_word, r.to_word);
-    else addEdge(antEdges, r.from_word, r.to_word);
+
+  // Real links: a mutual `related` pair is a genuine synonym; a one-way one
+  // stays honestly labeled `related`.
+  for (const r of forward) {
+    push({
+      ...r,
+      kind: r.kind === "related" ? (isMutual(r.from_word, r.to_word) ? "synonym" : "related") : "antonym",
+    });
+  }
+  // See-also is symmetric: add the reverse of one-way pairs so the target can
+  // discover the source too. Mutual pairs already have both real rows above.
+  for (const r of forward) {
+    if (r.kind === "related" && isMutual(r.from_word, r.to_word)) continue;
+    push({
+      kind: r.kind,
+      source: "xref",
+      from_word: r.to_word,
+      to_word: r.from_word,
+      from_sense: null,
+      to_sense: null,
+      score: 1,
+      hops: 1,
+    });
   }
 
-  // 2-hop closure over a snapshot of the 1-hop rows (exactly one extra hop)
-  const base = links.filter((r) => r.hops === 1 && r.kind === "related");
-  for (const r of base) {
-    for (const u of relEdges.get(r.to_word) ?? []) {
-      if (u !== r.from_word) push("related", r.from_word, u, null, 2);
-    }
-    for (const u of antEdges.get(r.to_word) ?? []) {
-      if (u !== r.from_word) push("antonym", r.from_word, u, null, 2);
-    }
-  }
+  // Gloss-similarity synonyms, materialized here so the runtime is a plain
+  // indexed read (the old query-time FTS fallback is gone). Appended one row
+  // at a time on purpose: at full dictionary scale this array is far larger
+  // than V8's argument limit, so `links.push(...rows)` overflows the call
+  // stack ("Maximum call stack size exceeded" — hit on the first full build).
+  for (const row of buildGlossSynonymLinks(words, links)) links.push(row);
 
   return links;
 }
@@ -531,4 +559,249 @@ function isCommon(word: JmdictWord): boolean {
     word.kanji.some((k) => k.common) ||
     word.kana.some((k) => k.common)
   );
+}
+
+// ---- gloss-similarity synonyms (build-time) --------------------------------
+//
+// The old runtime fallback compared whole-word token bags with no threshold, so
+// multi-sense words matched anything sharing one English word (為る→飲む via
+// "carry"). This pass compares **sense to sense** instead, drops glue tokens by
+// document frequency, and only keeps edges that clear a weighted-Dice score
+// gate. Everything is materialized, so the hot path stays a single indexed
+// read. Tunables are mirrored in tests/fixtures/scripts/render-goldens.py.
+
+/** Max distinct gloss tokens considered per word (existing runtime cap). */
+export const GLOSS_TOKEN_CAP = 30;
+/**
+ * A shared token appearing in more than this many senses is glue — dropped.
+ *
+ * This is a *glue* ceiling, not a stopword filter: it must sit above the whole
+ * content vocabulary, not just above the function words. Measured over the
+ * full dictionary (253,299 senses): eat 123, beautiful 235, live 246, drink
+ * 286, story 322, run 440, food 791, work 1,026, make 1,142. The previous
+ * value of 200 therefore deleted the words that carry the meaning — every real
+ * synonym whose glosses are short and common was scored on the leftovers and
+ * fell below the gate (食べる→食う exists at 4,000 and does not at 200).
+ * 4,000 keeps the whole content vocabulary while still dropping tokens that
+ * appear everywhere; raising it further changes nothing at all (4,000 and
+ * 20,000 produce byte-identical edge sets), so it is deliberately not tighter.
+ */
+export const GLOSS_DF_CEIL = 4000;
+/**
+ * Minimum shared (kept) tokens before a candidate is scored at all.
+ *
+ * One is not enough: on the judged sample of common words, single-token
+ * matches were 54% wrong — they join words that merely occupy the same domain
+ * (観劇 "theatre-going" vs シアター "theater", 減速 "deceleration" vs 減衰時間
+ * "deceleration time") — while two-or-more-token matches were 85% right. A
+ * one-token overlap is too thin to tell synonymy from topical adjacency.
+ */
+export const GLOSS_MIN_SHARED = 2;
+/** Minimum weighted-Dice score (0..1) for a synonym edge.
+ *
+ * 0.5 let in a long tail of near-misses. 0.6 was picked on the judged sample
+ * (51 common words, every edge read by hand against both senses' glosses): it
+ * keeps 45/51 of those words showing a synonym while the edges it admits are
+ * ~94% defensible and only ~6% clearly wrong (at 0.5 those were 78% / 22%).
+ * Below the gate the honest answer is no synonym at all. */
+export const GLOSS_MIN_SCORE = 0.6;
+/** Max gloss-synonym edges materialized per word. */
+export const GLOSS_TOP_K = 5;
+
+function intersects(a: Set<string>, b: Set<string>): boolean {
+  for (const x of a) if (b.has(x)) return true;
+  return false;
+}
+
+interface GlossSense {
+  wordId: string;
+  senseNo: number;
+  /** kept tokens of this sense (word cap + df ceiling applied). */
+  tokens: string[];
+  classes: Set<string>;
+}
+
+/**
+ * Weighted-Dice similarity of two (already kept-token-filtered) senses:
+ * `2·Σ_{shared} w / (Σ_A w + Σ_B w)` with `w(t) = ln(1 + N/df(t))`.
+ */
+function senseScore(a: string[], b: string[], weight: (t: string) => number): number {
+  const bSet = new Set(b);
+  let num = 0;
+  let den = 0;
+  for (const t of a) {
+    const w = weight(t);
+    den += w;
+    if (bSet.has(t)) num += w;
+  }
+  for (const t of b) den += weight(t);
+  return den === 0 ? 0 : (2 * num) / den;
+}
+
+/**
+ * Materialize `kind='synonym', source='gloss'` edges for every word that has
+ * no explicit synonym/related signal of its own (a received backlink is not
+ * one), scoring sense pairs and keeping the top `GLOSS_TOP_K` targets per word.
+ */
+function buildGlossSynonymLinks(words: JmdictWord[], xrefLinks: ThesaurusLinkRow[]): ThesaurusLinkRow[] {
+  // Per-sense token lists (gloss order preserved, deduped), then the per-word
+  // cap: a word only ever considers its first GLOSS_TOKEN_CAP distinct tokens.
+  const rawTokens: string[][] = [];
+  const senseMeta: { wordId: string; senseNo: number; classes: Set<string> }[] = [];
+  const wordTokens = new Map<string, string[]>();
+  const wordTokenSet = new Map<string, Set<string>>();
+  for (const word of words) {
+    const seenTokens = new Set<string>();
+    const ordered: string[] = [];
+    word.sense.forEach((sense, si) => {
+      const toks: string[] = [];
+      const local = new Set<string>();
+      for (const g of sense.gloss) {
+        for (const t of glossTokens(g.text)) {
+          if (local.has(t)) continue;
+          local.add(t);
+          toks.push(t);
+          if (!seenTokens.has(t)) {
+            seenTokens.add(t);
+            if (ordered.length < GLOSS_TOKEN_CAP) ordered.push(t);
+          }
+        }
+      }
+      rawTokens.push(toks);
+      senseMeta.push({ wordId: word.id, senseNo: si + 1, classes: coarsePosClasses(sense.partOfSpeech) });
+    });
+    wordTokens.set(word.id, ordered);
+    wordTokenSet.set(word.id, new Set(ordered));
+  }
+
+  // Document frequency over senses (only tokens inside the per-word cap).
+  const df = new Map<string, number>();
+  rawTokens.forEach((toks, i) => {
+    const keep = wordTokenSet.get(senseMeta[i]!.wordId)!;
+    for (const t of new Set(toks.filter((t) => keep.has(t)))) df.set(t, (df.get(t) ?? 0) + 1);
+  });
+  const N = rawTokens.length;
+  const weight = (t: string): number => Math.log(1 + N / (df.get(t) ?? 1));
+  const kept = (t: string): boolean => (df.get(t) ?? 0) <= GLOSS_DF_CEIL;
+
+  const senses: GlossSense[] = rawTokens.map((toks, i) => {
+    const meta = senseMeta[i]!;
+    const keep = wordTokenSet.get(meta.wordId)!;
+    return { ...meta, tokens: toks.filter((t) => keep.has(t) && kept(t)) };
+  });
+  const postings = new Map<string, number[]>();
+  senses.forEach((s, i) => {
+    for (const t of s.tokens) {
+      let arr = postings.get(t);
+      if (!arr) {
+        arr = [];
+        postings.set(t, arr);
+      }
+      arr.push(i);
+    }
+  });
+
+  // Words that already carry a synonym/related signal OF THEIR OWN, and the
+  // targets each word already links to (an xref target is never re-proposed as
+  // a synonym). A synthetic backlink (`from_sense === null`) is not a signal of
+  // the target's own: it only exists so the target can discover the source, and
+  // treating it as one silently denied the gloss pass to every word that merely
+  // *received* a one-way xref (~19k of them) — they rendered a Related block of
+  // inbound links and no synonyms at all. `linked` deliberately keeps backlink
+  // targets, so such a related pair is still never promoted to a synonym.
+  const hasSignal = new Set<string>();
+  const linked = new Map<string, Set<string>>();
+  for (const r of xrefLinks) {
+    let set = linked.get(r.from_word);
+    if (!set) {
+      set = new Set();
+      linked.set(r.from_word, set);
+    }
+    set.add(r.to_word);
+    if (r.from_sense !== null && (r.kind === "synonym" || r.kind === "related")) hasSignal.add(r.from_word);
+  }
+  const common = new Map<string, boolean>(words.map((w) => [w.id, isCommon(w)]));
+  const sensesByWord = new Map<string, number[]>();
+  senses.forEach((s, i) => {
+    let arr = sensesByWord.get(s.wordId);
+    if (!arr) {
+      arr = [];
+      sensesByWord.set(s.wordId, arr);
+    }
+    arr.push(i);
+  });
+
+  const rows: ThesaurusLinkRow[] = [];
+  for (const word of words) {
+    if (hasSignal.has(word.id)) continue;
+    const mySenseIdx = sensesByWord.get(word.id)!;
+    const sourceTokens = wordTokens.get(word.id)!;
+    if (sourceTokens.length === 0) continue;
+    const skip = linked.get(word.id);
+
+    // Candidate words: those sharing at least one kept token, with the shared
+    // token set kept so the gate can look at count and rarity.
+    const shared = new Map<string, Set<string>>();
+    for (const t of sourceTokens) {
+      for (const j of postings.get(t) ?? []) {
+        const other = senses[j]!.wordId;
+        if (other === word.id) continue;
+        if (skip?.has(other)) continue;
+        let set = shared.get(other);
+        if (!set) {
+          set = new Set();
+          shared.set(other, set);
+        }
+        set.add(t);
+      }
+    }
+    if (shared.size === 0) continue;
+
+    const cands: { id: string; score: number; sharedCount: number; fromSense: number; toSense: number }[] = [];
+    for (const [otherId, sharedToks] of shared) {
+      // Gate: a single shared token is too weak a signal (see GLOSS_MIN_SHARED).
+      if (sharedToks.size < GLOSS_MIN_SHARED) continue;
+
+      // Best sense pair (same coarse POS when both sides categorise).
+      let best = 0;
+      let fromSense = 0;
+      let toSense = 0;
+      for (const i of mySenseIdx) {
+        const a = senses[i]!;
+        for (const j of sensesByWord.get(otherId)!) {
+          const b = senses[j]!;
+          if (a.classes.size > 0 && b.classes.size > 0 && !intersects(a.classes, b.classes)) continue;
+          const score = senseScore(a.tokens, b.tokens, weight);
+          if (score > best) {
+            best = score;
+            fromSense = a.senseNo;
+            toSense = b.senseNo;
+          }
+        }
+      }
+      if (best < GLOSS_MIN_SCORE) continue;
+      cands.push({ id: otherId, score: best, sharedCount: sharedToks.size, fromSense, toSense });
+    }
+    if (cands.length === 0) continue;
+
+    cands.sort((a, b) =>
+      b.score - a.score ||
+      b.sharedCount - a.sharedCount ||
+      Number(common.get(b.id)) - Number(common.get(a.id)) ||
+      a.id.localeCompare(b.id, undefined, { numeric: true }),
+    );
+    for (const c of cands.slice(0, GLOSS_TOP_K)) {
+      rows.push({
+        kind: "synonym",
+        source: "gloss",
+        from_word: word.id,
+        to_word: c.id,
+        from_sense: c.fromSense,
+        to_sense: c.toSense,
+        score: c.score,
+        hops: 1,
+      });
+    }
+  }
+  return rows;
 }

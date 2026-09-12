@@ -581,6 +581,40 @@ test("isValidResultNode: accepts valid persisted pages (W17i)", () => {
   assert.equal(isValidResultNode(node), true);
 });
 
+// ★The `PageSection` union (worker-api.ts) is the source of truth for the
+// restore validator's section list, and the two enumerations must not drift:
+// `related` was added to the union for the word thesaurus' Related block
+// without being added to tree.ts's list, so a pane paged on `Related:` was
+// treated as corrupt state and the WHOLE pane disappeared on reload. The list
+// below is deliberately independent of the one in tree.ts — the type guard
+// makes it exhaustive over the union (a new section fails to compile here) and
+// the loop then proves the validator accepts every member.
+const ALL_PAGE_SECTIONS = [
+  "synonyms",
+  "antonyms",
+  "related",
+  "compounds",
+  "readings",
+  "meanings",
+  "kanji",
+] as const;
+type UnlistedPageSection = Exclude<PageSection, (typeof ALL_PAGE_SECTIONS)[number]>;
+// `never` once every PageSection is listed above.
+const allPageSectionsAreListed: UnlistedPageSection extends never ? true : never = true;
+void allPageSectionsAreListed;
+
+test("isValidResultNode: accepts EVERY PageSection — the validator must cover the union", () => {
+  for (const section of ALL_PAGE_SECTIONS) {
+    const node = validNode({ pages: [{ section, total: 6, offset: 5, line: 3 }] });
+    assert.equal(isValidResultNode(node), true, `"${section}" must be a valid persisted section`);
+    assert.equal(
+      deserializeResultTree([node]).length,
+      1,
+      `a pane paged on "${section}" must survive a restore, not be pruned as corrupt`,
+    );
+  }
+});
+
 test("isValidResultNode: rejects malformed pages (W17i)", () => {
   // non-array
   assert.equal(isValidResultNode(validNode({ pages: "x" })), false);

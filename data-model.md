@@ -215,21 +215,32 @@ CREATE TABLE word_sentences (
 );
 
 -- ============ Enrichment: thesaurus links (derived at build time) ============
--- Resolved cross-reference graph from senses.related/antonym: one row per
--- forward link, its reverse (relatedness and antonymy are symmetric), and
--- 2-hop closure rows (related→related gives synonyms-of-synonyms;
--- related→antonym gives indirect antonyms). Self-links, unresolvable xrefs,
--- and repeated targets are dropped at build time (first occurrence keeps its
--- sense-specific gloss). Materialized offline so the runtime thesaurus is a
--- single indexed query instead of per-xref lookups.
+-- Scored relation graph, materialized offline so the runtime thesaurus is a
+-- single indexed read (no per-xref lookups, no query-time gloss scoring).
+--   kind    synonym  a defensible substitute: a RECIPROCAL JMdict `related`
+--                    pair (the two entries really cite each other), or a
+--                    gloss-similarity edge that cleared the score gate
+--           related  a one-directional JMdict `related` ("see also") term,
+--                    plus its backlink so the target can discover the source
+--           antonym  explicit JMdict `antonym` (+ its backlink)
+--   source  xref / gloss (a curated 'wn' source may join later)
+--   score   1 for xref edges, the weighted-Dice confidence (0..1) for gloss
+--   from_sense / to_sense  the matched sense numbers (1-based), so a hit shows
+--           the gloss of the sense that actually matched
+-- Self-links, unresolvable xrefs and repeated targets are dropped at build
+-- time (first occurrence wins). 2-hop closure is deliberately NOT materialized:
+-- synonyms-of-synonyms was the dominant noise source (see THESAURUS-PLAN.md).
 CREATE TABLE thesaurus_links (
-  kind      TEXT    NOT NULL CHECK (kind IN ('related','antonym')),
-  from_word TEXT    NOT NULL REFERENCES words(id),
-  to_word   TEXT    NOT NULL REFERENCES words(id),
-  to_sense  INTEGER,              -- referenced sense number (1-based); NULL when unspecified / reverse / 2-hop
-  hops      INTEGER NOT NULL DEFAULT 1 CHECK (hops IN (1,2))
+  kind       TEXT    NOT NULL CHECK (kind IN ('synonym','related','antonym')),
+  source     TEXT    NOT NULL DEFAULT 'xref' CHECK (source IN ('xref','gloss')),
+  from_word  TEXT    NOT NULL REFERENCES words(id),
+  to_word    TEXT    NOT NULL REFERENCES words(id),
+  from_sense INTEGER,                    -- source sense number (1-based); NULL for reverse/backlink edges
+  to_sense   INTEGER,                    -- target sense number (1-based); NULL when unspecified
+  score      REAL    NOT NULL DEFAULT 1, -- 0..1 confidence (xref edges are 1)
+  hops       INTEGER NOT NULL DEFAULT 1 CHECK (hops IN (1,2))  -- vestigial: always 1, no 2-hop rows
 );
-CREATE INDEX idx_thesaurus_from ON thesaurus_links(kind, from_word);
+CREATE INDEX idx_thesaurus_from ON thesaurus_links(kind, from_word, score DESC);
 CREATE INDEX idx_thesaurus_to   ON thesaurus_links(kind, to_word);
 
 -- ============ Enrichment: stroke order (KanjiVG) ============
@@ -253,7 +264,11 @@ CREATE VIRTUAL TABLE glosses_fts USING fts5(
 );
 ```
 
-**Row counts (full jmdict-eng build, 2026-09-02, with JmdictFurigana 2.3.1+2026-08-25 and KanjiVG r20260714):** words 218,577, writings 498,621, senses 253,299, glosses 442,536, kanji 13,108, kanji_readings 37,048, kanji_meanings 48,088, kanji_nanori 3,454, kanji_radicals 54,321, kanji_words 584,238, conjugations 506,348 (34,609 words), furigana 225,664 rows covering 96.8% of kanji writings (writings the dataset lacks no longer echo themselves on `word` — the Furigana line is omitted instead), sentences 25,980, word_sentences ~45k, thesaurus_links (schema v2) 129,673 rows, stroke_order 6,417 (kanji with a KanjiVG main-zip svg in `dist/strokes/`, ~40 MB — the Jōyō/Jinmeiyō core of the 13,108 kanji). All trivially within SQLite's comfort zone. The thesaurus_links closure lifts coverage from the raw xrefs: 32,014 → 50,917 words with synonym links and 1,054 → 1,546 words with antonym links (445 antonym pairs come from 2-hop closure, 524 from reverse edges).
+**Row counts (full jmdict-eng build, 2026-09-02, with JmdictFurigana 2.3.1+2026-08-25 and KanjiVG r20260714):** words 218,577, writings 498,621, senses 253,299, glosses 442,536, kanji 13,108, kanji_readings 37,048, kanji_meanings 48,088, kanji_nanori 3,454, kanji_radicals 54,321, kanji_words 584,238, conjugations 506,348 (34,609 words), furigana 225,664 rows covering 96.8% of kanji writings (writings the dataset lacks no longer echo themselves on `word` — the Furigana line is omitted instead), sentences 25,980, word_sentences ~45k, stroke_order 6,417 (kanji with a KanjiVG main-zip svg in `dist/strokes/`, ~40 MB — the Jōyō/Jinmeiyō core of the 13,108 kanji). All trivially within SQLite's comfort zone.
+
+**thesaurus_links (schema v4)** is a scored relation graph: `synonym` rows are reciprocal JMdict `related` pairs plus build-time gloss-similarity edges, `related` rows are one-way `related` xrefs (with backlinks), and `antonym` rows are explicit antonyms (with backlinks). The old 129,673-row 2-hop closure was retired — synonyms-of-synonyms was the dominant noise source (see `THESAURUS-PLAN.md`), and the runtime no longer scores glosses at all, so the lookup is one indexed read.
+
+Measured on the full jmdict-eng build (2026-09-12): **277,919 rows** — `synonym`/`gloss` 211,075, `synonym`/`xref` 6,200, `related`/`xref` 59,404, `antonym`/`xref` 1,240 — covering 122,790 words (86,000 have a synonym; 80,104 of those via the gloss pass, 11,489 of them `common`). Gloss edges are sense-pair weighted Dice with ≥2 shared kept tokens, score ≥ 0.6, a 4,000-sense df ceiling and top-5 per word. Those constants are **scale-sensitive**: at the earlier fixture-tuned values (a single shared token allowed, score ≥ 0.5) the same judged sample of 51 common words scored 60% strict / 78% lenient precision with 22% clearly-wrong edges; the shipped values score 78% / 94% with 6% wrong (see `THESAURUS-PLAN.md` §4 P4).
 
 ---
 
@@ -272,8 +287,7 @@ CREATE VIRTUAL TABLE glosses_fts USING fts5(
 | Conjugation display | `conjugations WHERE word_id = ?` | `idx_conjugations_word` |
 | Deconjugation (食べて → 食べる) | `conjugations WHERE value = ?` | `idx_conjugations_value` |
 | Example sentences for a word | `word_sentences` → `sentences` | PK on `(word_id, sentence_id)` |
-| Thesaurus (synonyms/antonyms) | `thesaurus_links WHERE kind = ? AND from_word = ?` (forward + reverse + 2-hop already materialized) | `idx_thesaurus_from` |
-| Thesaurus fallback (words with no links) | one quoted `glosses_fts MATCH` per distinctive gloss token, scored ln(1 + N/df), same coarse POS preferred | FTS5 unicode61 |
+| Thesaurus (synonyms / antonyms / related) | `thesaurus_links WHERE kind = ? AND from_word = ?` (scored at build time; one indexed read) | `idx_thesaurus_from` |
 | Stroke order for a kanji | `stroke_order WHERE kanji = ?` | PK |
 | Romaji input | `writings.romaji` prefix | `idx_writings_romaji` |
 | Furigana ruby for a loaded word | `furigana WHERE word_id = ?` | `idx_furigana_word` |

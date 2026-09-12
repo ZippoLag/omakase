@@ -8,6 +8,7 @@
  */
 import { kangxiChar } from "./kangxi.js";
 import { katakanaToHiragana, toRomaji } from "./kana.js";
+import { GLOSS_STOPWORDS } from "./gloss.js";
 
 /** A value bound to a SQL parameter (strings, numbers, nulls). */
 export type SqlValue = string | number | null;
@@ -806,8 +807,10 @@ export function searchKanjiByReading(db: DB, query: string): KanjiReadingHit[] {
 
 export interface ThesaurusHit {
   word: LoadedWord;
-  /** gloss of the referenced sense (or the first gloss when no sense is given). */
+  /** gloss of the matched sense (or the first gloss when no sense is given). */
   gloss: string;
+  /** relation confidence: 1 for xref edges, 0..1 for gloss-similarity edges. */
+  score: number;
 }
 
 /** Glosses of the referenced sense (or the first gloss when no sense given). */
@@ -821,28 +824,41 @@ function xrefGloss(word: LoadedWord, sense: number | null): string {
 
 const THESAURUS_LIMIT = 5;
 
+export interface ThesaurusResult {
+  /** Substitutable words: mutual JMdict xrefs, or gloss edges over the gate. */
+  synonyms: ThesaurusHit[];
+  /** Explicit JMdict antonyms. */
+  antonyms: ThesaurusHit[];
+  /** One-directional JMdict "see also" terms (not synonyms). */
+  related: ThesaurusHit[];
+  synonymTotal: number;
+  antonymTotal: number;
+  relatedTotal: number;
+}
+
 /**
- * Thesaurus for a word: synonyms (`related`) and antonyms (`antonym`) from the
- * materialized `thesaurus_links` table — resolved offline into forward links,
- * reverse links, and 2-hop closure rows (see data/build/transform.ts). Rows
- * are read in build order, so the first link to a target wins (preferring the
- * sense-specific gloss of a forward link); targets are de-duplicated and
- * "top" = common words first, then by word id; each list is windowed at
- * [offset, offset+limit) (default limit 5) with the full pre-window counts
- * reported alongside, so a paged CLI/web can show the remainder note.
+ * Thesaurus for a word, read from the build-time `thesaurus_links` table.
+ * One indexed read per list: `kind = ? AND from_word = ?` is exactly the
+ * leading pair of `idx_thesaurus_from(kind, from_word, score DESC)`, so a
+ * lookup never scans the table (keep that equality pair together — filtering
+ * the kind in JS instead would turn every word lookup into a full scan).
+ * Hits are ranked by confidence (xref edges 1.0, gloss edges their
+ * weighted-Dice score), then common words first, then word id; each list is
+ * windowed at [offset, offset+limit) (default 5) with the full pre-window
+ * counts reported alongside so a paged CLI/web can show the remainder note.
  */
 export function wordThesaurus(
   db: DB,
   word: LoadedWord,
   limit: number = THESAURUS_LIMIT,
   offset = 0,
-): { synonyms: ThesaurusHit[]; antonyms: ThesaurusHit[]; synonymTotal: number; antonymTotal: number } {
-  const collect = (kind: "related" | "antonym"): { hits: ThesaurusHit[]; total: number } => {
+): ThesaurusResult {
+  const collect = (kind: "synonym" | "related" | "antonym"): { hits: ThesaurusHit[]; total: number } => {
     const rows = db.prepare(
-      `SELECT to_word, to_sense FROM thesaurus_links
-       WHERE kind = ? AND from_word = ? AND to_word != from_word
-       ORDER BY rowid`,
-    ).all(kind, word.id) as { to_word: string; to_sense: number | null }[];
+      `SELECT to_word, to_sense, score FROM thesaurus_links
+       WHERE kind = ? AND from_word = ? AND to_word != from_word`,
+    ).all(kind, word.id) as { to_word: string; to_sense: number | null; score: number }[];
+
     const hits: ThesaurusHit[] = [];
     const seen = new Set<string>();
     for (const r of rows) {
@@ -850,198 +866,29 @@ export function wordThesaurus(
       seen.add(r.to_word);
       const target = loadWord(db, r.to_word);
       if (!target) continue;
-      hits.push({ word: target, gloss: xrefGloss(target, r.to_sense) });
+      hits.push({ word: target, gloss: xrefGloss(target, r.to_sense), score: r.score });
     }
     hits.sort((a, b) =>
+      b.score - a.score ||
       Number(b.word.common) - Number(a.word.common) ||
       a.word.id.localeCompare(b.word.id, undefined, { numeric: true }),
     );
     return { hits, total: hits.length };
   };
-  const syn = collect("related");
+
+  const syn = collect("synonym");
   const ant = collect("antonym");
+  const rel = collect("related");
   return {
     synonyms: syn.hits.slice(offset, offset + limit),
     antonyms: ant.hits.slice(offset, offset + limit),
+    related: rel.hits.slice(offset, offset + limit),
     synonymTotal: syn.total,
     antonymTotal: ant.total,
+    relatedTotal: rel.total,
   };
 }
 
-// ---- gloss-token thesaurus fallback -----------------------------------------
-
-/**
- * Function words and other overly generic gloss tokens that say nothing about
- * semantic similarity ("to", "be", "of", "e.g.", …). Kept in sync with the
- * reference renderer in tests/fixtures/scripts/render-goldens.py
- * (GLOSS_STOPWORDS).
- */
-const GLOSS_STOPWORDS = new Set([
-  "a", "an", "the", "and", "or", "but", "nor", "so", "if", "then", "else",
-  "not", "no", "of", "to", "in", "on", "at", "for", "with", "by", "from",
-  "as", "is", "are", "was", "were", "be", "been", "being", "am", "do",
-  "does", "did", "done", "have", "has", "had", "it", "its", "this", "that",
-  "these", "those", "i", "you", "he", "she", "we", "they", "me", "him",
-  "her", "us", "them", "my", "your", "our", "their", "e", "g", "etc",
-  "eg", "ie", "sth", "sb", "some", "something", "someone", "somebody",
-  "anything", "anyone", "thing", "things", "way", "ways", "one", "two",
-  "used", "usu", "often", "also", "such", "very", "more", "most", "when",
-  "what", "which", "who", "whom", "whose", "how", "why", "up", "down",
-  "out", "off", "over", "under", "into", "onto", "about", "after", "before",
-  "between", "during", "through", "until", "against", "among", "along",
-  "lit", "arch", "obs", "dated", "rare", "uk", "sl", "coll", "fam",
-  "derog", "hon", "pol", "vulg", "esp", "first", "last", "kind", "sort",
-]);
-
-/** Lowercased [a-z]+ gloss tokens, minus stopwords and single letters. */
-function glossTokens(text: string): string[] {
-  return (text.toLowerCase().match(/[a-z]+/g) ?? [])
-    .filter((t) => t.length > 1 && !GLOSS_STOPWORDS.has(t));
-}
-
-/** Coarse POS class for a JMdict tag ("verb" / "adj" / "noun" / "adv"). */
-function coarseClass(tag: string): string | null {
-  if (tag.startsWith("v") || tag === "aux-v") return "verb";
-  if (tag.startsWith("adj")) return "adj";
-  if (/^n(?:-|$)/.test(tag) || tag === "pn" || tag === "pr" || tag === "num") return "noun";
-  if (tag === "adv") return "adv";
-  return null;
-}
-
-/** Coarse POS classes across all senses of a word (empty = uncategorisable). */
-function coarsePosClasses(senses: { partOfSpeech: string[] }[]): Set<string> {
-  const out = new Set<string>();
-  for (const s of senses) {
-    for (const tag of s.partOfSpeech) {
-      const c = coarseClass(tag);
-      if (c) out.add(c);
-    }
-  }
-  return out;
-}
-
-/** Cap on the number of distinct gloss tokens queried per word. */
-const GLOSS_TOKEN_CAP = 30;
-
-/**
- * Fallback thesaurus for entries with no cross-reference links at all:
- * related words are inferred from shared, distinctive English gloss tokens
- * over the existing `glosses_fts` index (one quoted FTS query per token). A
- * candidate scores the summed specificity (ln(1 + N/df)) of its shared
- * tokens; candidates must share a coarse POS class when both sides are
- * categorisable, and the word itself plus any already-linked targets are
- * excluded. Ties break common-first, then by word id; capped at `limit`.
- * Mirrors render-goldens.py `render_gloss_thesaurus`.
- */
-export function glossThesaurus(
-  db: DB,
-  word: LoadedWord,
-  limit: number = THESAURUS_LIMIT,
-  offset = 0,
-): { synonyms: ThesaurusHit[]; antonyms: ThesaurusHit[]; synonymTotal: number; antonymTotal: number } {
-  const tokens = new Set<string>();
-  for (const s of word.senses) {
-    for (const g of s.glosses) {
-      for (const t of glossTokens(g)) tokens.add(t);
-    }
-  }
-  if (tokens.size === 0) return { synonyms: [], antonyms: [], synonymTotal: 0, antonymTotal: 0 };
-
-  const sourceClasses = coarsePosClasses(word.senses);
-  const skip = new Set<string>([word.id]);
-  for (const r of db.prepare(
-    "SELECT DISTINCT to_word FROM thesaurus_links WHERE from_word = ?",
-  ).all(word.id) as { to_word: string }[]) {
-    skip.add(r.to_word);
-  }
-  const total = (db.prepare("SELECT COUNT(*) AS n FROM words").get() as { n: number }).n;
-
-  // Per token: FTS hit word ids. df = distinct words containing the token
-  // (computed before skipping self/linked targets); shared tokens per word.
-  const df = new Map<string, number>();
-  const shared = new Map<string, Set<string>>();
-  for (const t of [...tokens].slice(0, GLOSS_TOKEN_CAP)) {
-    const rows = db.prepare(`
-      SELECT DISTINCT s.word_id
-      FROM glosses_fts f
-      JOIN glosses g ON g.id = f.rowid
-      JOIN senses s ON s.id = g.sense_id
-      WHERE glosses_fts MATCH ?
-    `).all(`"${t}"`) as { word_id: string }[];
-    df.set(t, rows.length);
-    for (const r of rows) {
-      if (skip.has(r.word_id)) continue;
-      let set = shared.get(r.word_id);
-      if (!set) {
-        set = new Set();
-        shared.set(r.word_id, set);
-      }
-      set.add(t);
-    }
-  }
-
-  const candIds = [...shared.keys()];
-  if (candIds.length === 0) return { synonyms: [], antonyms: [], synonymTotal: 0, antonymTotal: 0 };
-
-  // Coarse POS per candidate (all senses) for the class-overlap filter.
-  const candClasses = new Map<string, Set<string>>();
-  const posRows = db.prepare(
-    `SELECT word_id, part_of_speech FROM senses WHERE word_id IN (${candIds.map(() => "?").join(",")})`,
-  ).all(...candIds) as { word_id: string; part_of_speech: string }[];
-  for (const r of posRows) {
-    let set = candClasses.get(r.word_id);
-    if (!set) {
-      set = new Set();
-      candClasses.set(r.word_id, set);
-    }
-    for (const c of coarsePosClasses([{ partOfSpeech: JSON.parse(r.part_of_speech) as string[] }])) set.add(c);
-  }
-
-  // common flag is a tie-breaker after score and shared-token count
-  const commonRows = db.prepare(
-    `SELECT id, common FROM words WHERE id IN (${candIds.map(() => "?").join(",")})`,
-  ).all(...candIds) as { id: string; common: number }[];
-  const commonById = new Map(commonRows.map((r) => [r.id, r.common === 1]));
-
-  interface Cand {
-    id: string;
-    score: number;
-    sharedCount: number;
-  }
-  const cands: Cand[] = [];
-  for (const id of candIds) {
-    const targetClasses = candClasses.get(id);
-    if (sourceClasses.size > 0 && targetClasses && targetClasses.size > 0) {
-      let overlap = false;
-      for (const c of sourceClasses) {
-        if (targetClasses.has(c)) {
-          overlap = true;
-          break;
-        }
-      }
-      if (!overlap) continue;
-    }
-    const toks = shared.get(id)!;
-    let score = 0;
-    for (const t of toks) score += Math.log(1 + total / (df.get(t) ?? 1));
-    cands.push({ id, score, sharedCount: toks.size });
-  }
-
-  cands.sort((a, b) =>
-    b.score - a.score ||
-    b.sharedCount - a.sharedCount ||
-    Number(commonById.get(b.id)) - Number(commonById.get(a.id)) ||
-    a.id.localeCompare(b.id, undefined, { numeric: true }),
-  );
-
-  const synonyms: ThesaurusHit[] = [];
-  for (const c of cands.slice(offset, offset + limit)) {
-    const target = loadWord(db, c.id);
-    if (!target) continue;
-    synonyms.push({ word: target, gloss: firstGloss(target) });
-  }
-  return { synonyms, antonyms: [], synonymTotal: cands.length, antonymTotal: 0 };
-}
 
 // ---- example sentences ----------------------------------------------------
 

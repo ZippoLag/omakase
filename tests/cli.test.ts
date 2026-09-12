@@ -267,12 +267,14 @@ test("word --offset: windows the thesaurus with its per-block remainder notes", 
   try {
     // The synthetic ぺーじんぐ entry carries 7 related + 8 antonym links:
     // --offset 1 shows rows [1, 6) of each block with the note counting what
-    // remains past the whole window (1 synonym, 2 antonyms).
+    // remains past the whole window (1 related, 2 antonyms). Its xrefs are
+    // one-way, so they render as Related — never as Synonyms.
     const { code, stdout } = await runOnDb(["word", "ぺーじんぐ", "--offset", "1"], dbPath);
     assert.equal(code, 0);
-    assert.ok(stdout.includes("Synonyms:") && stdout.includes("Antonyms:"), stdout);
-    assert.ok(stdout.includes("  … and 1 more"), stdout);
+    assert.ok(stdout.includes("Antonyms:") && stdout.includes("Related:"), stdout);
+    assert.ok(!stdout.includes("Synonyms:"), stdout);
     assert.ok(stdout.includes("  … and 2 more"), stdout);
+    assert.ok(stdout.includes("  … and 1 more"), stdout);
     // The equals form matches the space form, and --offset 0 the plain command.
     assert.equal((await runOnDb(["word", "ぺーじんぐ", "--offset=1"], dbPath)).stdout, stdout);
     const zero = await runOnDb(["word", "ぺーじんぐ", "--offset", "0"], dbPath);
@@ -281,7 +283,7 @@ test("word --offset: windows the thesaurus with its per-block remainder notes", 
     // Past the end of both lists the thesaurus section disappears entirely.
     const past = await runOnDb(["word", "ぺーじんぐ", "--offset", "8"], dbPath);
     assert.equal(past.code, 0);
-    assert.ok(!past.stdout.includes("Synonyms:") && !past.stdout.includes("Antonyms:"), past.stdout);
+    assert.ok(!past.stdout.includes("Antonyms:") && !past.stdout.includes("Related:"), past.stdout);
     // Invalid values are errors on stderr, no output.
     const bad = await runOnDb(["word", "ぺーじんぐ", "--offset", "-1"], dbPath);
     assert.equal(bad.stdout, "");

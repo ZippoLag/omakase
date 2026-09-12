@@ -6,12 +6,14 @@ lessons learned so past pitfalls are not repeated. **Read `README.md` first**
 for the product, usage, and install story; this file is the engineering
 companion.
 
-> **Work-in-progress note.** `REVIEW-FIXES.md` (untracked, temporary) holds
-> the numbered implementation plan (W1–W16) for the review of the last 15
-> unpushed commits. It must be **deleted once every item is done and
-> verified** — see its "Definition of done". Its lessons are distilled here;
-> keep this file updated as the work progresses. Do not commit REVIEW-FIXES.md
-> as-is.
+> **Work-in-progress note.** `REVIEW-FIXES.md` is a *temporary* working file:
+> the numbered plan (W1–W18) for the review of the web-app commit run, plus the
+> open W18 mobile-load question. `THESAURUS-PLAN.md` is the same for the `word`
+> thesaurus rework (P1, P2 and P4 landed; P3, curated WordNet, is open). Both
+> are **gitignored** — they never ship in a commit — and must be **deleted once
+> every item is done and verified** (see REVIEW-FIXES.md's "Definition of
+> done"). Their durable lessons are distilled in this file, which is the record
+> that survives.
 
 ---
 
@@ -39,7 +41,8 @@ Authoritative docs:
 | `data-model.md` | Relational schema, indexes, FTS setup |
 | `conjugation-engine.md` | Conjugation engine spec + validation |
 | `tangorin_sources.md` | Data sources, licenses, provenance |
-| `REVIEW-FIXES.md` | TEMPORARY — the current review plan (delete when done) |
+| `REVIEW-FIXES.md` | TEMPORARY, gitignored — web-app review plan W1–W18 (W18 open; delete when done) |
+| `THESAURUS-PLAN.md` | TEMPORARY, gitignored — `word` thesaurus rework P1–P4 (P3 open; delete when done) |
 
 ## 2. Repo layout
 
@@ -95,7 +98,7 @@ better-sqlite3`. Run everything with pnpm (corepack).
 
 **Definition of done for any web change:** both typechecks pass, `pnpm test`
 green on Node 22, and `pnpm run web:build && pnpm run web:verify` fully green
-(was 2× red on HEAD at review start; must stay 85/85). `pnpm test` needs the
+(was 2× red on HEAD at review start; must stay green — 151 checks). `pnpm test` needs the
 Node 22 runtime — a local Node 24 cannot load better-sqlite3 (run under nvm or
 rely on CI).
 
@@ -110,6 +113,27 @@ rely on CI).
 - `tests/lookups.test.ts` contains the **`searchSections` join-equality guard**
   (a web-streaming invariant, see §5): section concatenation must equal the
   CLI's single-shot output.
+- **The `word` thesaurus is a build-time scored relation graph**
+  (`thesaurus_links`, schema v4). `synonym` = reciprocal JMdict `related`
+  pairs + build-time gloss edges that cleared a sense-level confidence gate;
+  `related` = one-way xrefs (not synonyms); `antonym` = explicit xrefs — all
+  with backlinks. 2-hop closure is deliberately **not** materialized
+  (synonyms-of-synonyms was the dominant noise source). The runtime is ONE
+  indexed read: never reintroduce a query-time gloss/FTS pass — the retired
+  `glossThesaurus` ran up to 30 `MATCH`es per word and always returned 5 rows
+  regardless of confidence. Render order is Synonyms → Antonyms → Related,
+  each block omitted when empty; goldens and `render-goldens.py` pin it.
+- **The gloss gate's constants are scale-sensitive — never re-tune them on the
+  fixture; measure.** `GLOSS_DF_CEIL` is a *glue* ceiling that must sit above
+  the content vocabulary, not just above the function words (200 — the
+  original fixture-tuned value — is 0.08% of the 253k senses and deleted
+  eat/beautiful/run/food/work/make, so `食べる`→`食う` did not exist at full
+  scale); `GLOSS_MIN_SHARED = 2` (a single shared gloss token is 54% wrong vs
+  15% for two) and `GLOSS_MIN_SCORE = 0.6` (0.5 was 22% clearly-wrong edges,
+  0.6 is 6%). Measured by re-implementing the pass over the shipped DB, proving
+  fidelity by reproducing the materialized rows byte-for-byte, then judging
+  edges by hand over a fixed common-word sample (see THESAURUS-PLAN.md §4 P4).
+  The fixture goldens cannot catch a regression here — they are scale-blind.
 
 ## 5. Web app architecture & invariants
 
@@ -155,8 +179,8 @@ Requests carry an `id`; replies pair back by id.
 - `resultTree` holds top-level nodes **newest-first** (`addResultToParent`
   unshifts); live DOM insertion prepends. **`renderResultTree` must iterate
   top-level nodes in reverse** so a reload preserves the live top-down order
-  — **W4 is still open** (current code iterates forward, which flips history
-  after reload; see REVIEW-FIXES W4).
+  — iterating forward flips the history after reload (fixed as W4; keep the
+  reverse loop).
 - **Dedupe is action-level, keyed on the RAW box value** (`submit` in
   `main.ts`): `registerResult(parentId, command, raw)` once at submit time.
   Never re-register per expanded query (per-literal tracking is what swallowed
@@ -305,7 +329,7 @@ Keep `DB_PATH` root-absolute and the shell paths relative; the SW's
 - The SW cache name, index.html asset links, `dist/meta.json`, and the DB
   `meta` table all carry the same stamp — keep them consistent when touching
   versioning. `--print --json` reports a real `commitDate` parsed from the
-  committed `COMMIT_DATE` (W12), never `""`.## 8. Known open work (from REVIEW-FIXES.md)
+  committed `COMMIT_DATE` (W12), never `""`.## 8. Review outcomes & open work (from REVIEW-FIXES.md)
 
 - **W13 (stroke-widget UX) and W14 (settings pane) are DONE** — see their statuses
   in REVIEW-FIXES.md. W14 moved the max cap into the settings dialog (default 5) and
@@ -365,7 +389,7 @@ Keep `DB_PATH` root-absolute and the shell paths relative; the SW's
   `documentElement.clientHeight/clientWidth` (900×420) — compare rects against
   the latter, never `window.inner*` — and `%` on a fixed element resolves
   against the emulated ICB, so the panel centers with vw/vh (identical on real
-  devices). All W1–W16 are now implemented, and W17 Phases 1 + 2 are
+  devices). All W1–W16 are now implemented, and W17 phases 1–3 are
   landed. Phase 1 (cosmetic): W17h font bump, W17g nested centering, W17b
   bar-to-top, W17-width overflow hardening, W17-settings-dvh fallback.
   Phase 2 (structural UI): W17c About modal (the header #version badge and
@@ -381,6 +405,11 @@ Keep `DB_PATH` root-absolute and the shell paths relative; the SW's
   probe) and its waitFor keys on a zero-pane fresh shell — the pre-wipe
   page is also idle "ready", so a status-only poll matches it before the
   async wipe + reload land.
+- **W18 (mobile load performance) is OPEN** — no implementation yet; the
+  remaining item in `REVIEW-FIXES.md`. The installed PWA can sit on the
+  splash / "starting the engine…" for over a minute on a phone, so the plan
+  is to list the top three speed-ups (and the compromises if a straight
+  quality fix is impossible) before changing anything.
 
 ## 9. Golden rules (the short version)
 
@@ -409,8 +438,10 @@ Keep `DB_PATH` root-absolute and the shell paths relative; the SW's
     text to catch a regression, so a restyle that visually breaks can stay green.
     Never assume the browser's system color scheme: headless Chrome here reports
     dark, so theme-dependent probes must force the theme explicitly first.
-12. **`REVIEW-FIXES.md` is temporary** — finish W1–W16, delete it, and keep
-    this file as the durable record.
+12. **`REVIEW-FIXES.md` / `THESAURUS-PLAN.md` are temporary and gitignored** —
+    finish their remaining items (REVIEW-FIXES W18, THESAURUS-PLAN P3), delete
+    them, and keep this file as the durable record. Never un-ignore and commit
+    them: their headers forbid it.
 13. **Free hosting is Pages + R2, deployed via `pnpm run deploy:web`** — the
     shell goes to Pages (with `_headers` supplying COOP/COEP/CORP), the
     dictionary streams from R2 through `functions/kanji.db.ts`, and the R2
@@ -419,3 +450,8 @@ Keep `DB_PATH` root-absolute and the shell paths relative; the SW's
     `name` in wrangler.toml is the Pages project *and* the pages.dev label,
     and several projects may share one bucket (they then serve the same
     dictionary — a shell-only re-deploy needs no R2 credentials at all).
+14. **Never label relatedness as synonymy, and never guess at query time** —
+    the `word` thesaurus shows `Synonyms:` only for reciprocal xrefs or gated
+    gloss edges, `Related:` for one-way "see also", and omits a block rather
+    than filling it with low-confidence matches. Heavier scoring belongs in
+    the build (`buildGlossSynonymLinks`), not on the read path.

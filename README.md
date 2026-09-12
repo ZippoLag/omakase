@@ -1,6 +1,6 @@
 # omakase
 
-A 100% offline Japanese quick-reference utilities, available as CLI tool and installable Progressive Web Application hosted at [omakase-kun.pages.dev](https://omakase-kun.pages.dev/). This tool can be used to look up dictionary entries with a thesaurus — synonyms and antonyms — via `word`, kanji pages via `kanji`, and search the dictionary by kana, romaji, or English gloss via `search`, all against a local SQLite database — no network access at query time.
+A 100% offline Japanese quick-reference utilities, available as CLI tool and installable Progressive Web Application hosted at [omakase-kun.pages.dev](https://omakase-kun.pages.dev/). This tool can be used to look up dictionary entries with a thesaurus — synonyms, antonyms and related terms — via `word`, kanji pages via `kanji`, and search the dictionary by kana, romaji, or English gloss via `search`, all against a local SQLite database — no network access at query time.
 
 > **Note from author:** Hi, I'm [Sebastián](https://github.com/zippolag), I love [tangorin](https://tangorin.com/), and if I could I would economically support them so their servers have all the oomph required to always reply in milliseconds, but sadly, I cannot. Hence, faced with the need to have a quick Japanese reference always available, and since I had access to [FREEBUFF](https://freebuff.com/get-started?ref=ref-48e765cb-2146-4cf9-8fba-2a2af1676e77&referrer=Sebasti%C3%A1n+Vansteenkiste) (affiliate link), I took the chance to iterate over my use cases and build just what I needed: a japanese reference app which I can access both as a CLI in my terminal and as a PWA in any device. I still have many improvements I would love to build on top of thise, but I've already exceeded the time limit I had set for myself not to go overboard with the scope.
 
@@ -126,7 +126,7 @@ Usage:
   omakase <command> --help    show help for a specific command
 
 Commands:
-  word    dictionary entry + thesaurus (synonyms/antonyms) + example sentences
+  word    dictionary entry + thesaurus (synonyms/antonyms/related) + example sentences
   kanji   kanji page (readings, meanings, compounds)
   search  English gloss / kana / romaji search
 
@@ -140,14 +140,25 @@ omakase word 食べる
 omakase word 為る --limit 3          # first 3 senses only (also --limit=3)
 ```
 
-Each entry also works as a thesaurus: the top **synonyms** (up to 5) and
-**antonyms** (up to 5) are taken from the entry's JMdict cross-references —
-extended at build time with reverse links and 2-hop closure so referenced
-words and indirect relationships show up too — and shown after the senses,
-when present — common words first. When an entry has no cross-references at
-all, up to 5 related words are inferred from shared, distinctive English
-gloss tokens (same part of speech preferred), so nearly every common word
-gets a thesaurus.
+Each entry also works as a thesaurus. Three provenance-separated blocks are
+shown after the senses (up to 5 rows each, highest confidence first):
+
+- **Synonyms** — words you could actually substitute: JMdict entries that
+  cite each other, or build-time gloss-similarity edges whose best
+  sense-level match clears a confidence gate (same part of speech, shared
+  distinctive English gloss tokens).
+- **Antonyms** — explicit JMdict antonyms (plus their backlinks).
+- **Related** — one-way JMdict “see also” terms (plus backlinks), which are
+  *not* synonyms and are labeled accordingly.
+
+The relations are materialized at build time, so a lookup is a single indexed
+read — no query-time full-text scoring. When nothing clears the bar the entry
+shows no thesaurus block at all, rather than a list of guesses.
+
+`--limit N` caps the senses; `--offset N` starts every thesaurus block N rows
+in, and each block then shows its own `… and N more` remainder note. The same
+`--offset` (and `--max`) windowing applies to the capped lists of `kanji` and
+`search`.
 
 ```
 $ omakase word 食べる
@@ -174,7 +185,8 @@ Adjective (keiyoushi)
   1. hot; warm; sultry; heated
 
 Antonyms:
-  寒い  [さむい]  cold (e.g. weather)
+  寒い  [さむい]
+     cold (e.g. weather)
 ```
 
 ### `kanji` — kanji pages and reading search

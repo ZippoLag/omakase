@@ -268,61 +268,84 @@ def build_thesaurus_links(entries):
         seen.add(key)
         links.append((kind, frm, to, sense, hops))
 
-    forward = []
+    forward = []  # real xref declarations, in word/sense/xref order
     for wid in sorted(entries):
         w = entries[wid]
-        for s in w["sense"]:
+        for si, s in enumerate(w["sense"]):
             for kind, xrefs in (("related", s.get("related", [])), ("antonym", s.get("antonym", []))):
                 for x in xrefs:
                     if not x or not isinstance(x[0], str):
                         continue
                     text = x[0]
                     reading = None
-                    sense = None
+                    to_sense = None
                     if len(x) > 1 and isinstance(x[1], int):
-                        sense = x[1]
+                        to_sense = x[1]
                     elif len(x) > 1 and isinstance(x[1], str):
                         m = re.search(r"・(\d+)$", x[1])
                         reading = x[1][:m.start()] if m else x[1]
                         if m:
-                            sense = int(m.group(1))
+                            to_sense = int(m.group(1))
                         if len(x) > 2 and isinstance(x[2], int):
-                            sense = x[2]
+                            to_sense = x[2]
                     target = resolve(text, reading)
                     if target is None:
                         continue
-                    forward.append((kind, wid, target, sense))
+                    forward.append((kind, wid, target, si + 1, to_sense))
 
-    for kind, frm, to, sense in forward:
-        push(kind, frm, to, sense, 1)
-    for kind, frm, to, _ in forward:
-        push(kind, to, frm, None, 1)
+    # A reciprocal pair is one the two entries really cite each other for; the
+    # synthetic backlink must not fabricate symmetry.
+    related_pairs = {(f, t) for (k, f, t, _fs, _ts) in forward if k == "related"}
 
-    rel_edges = {}
-    ant_edges = {}
-    for kind, frm, to, _, hops in links:
-        if hops != 1:
+    def is_mutual(a, b):
+        return (a, b) in related_pairs and (b, a) in related_pairs
+
+    links = []
+    seen = set()
+
+    def push(row):
+        if row["from_word"] == row["to_word"]:
+            return
+        key = (row["kind"], row["from_word"], row["to_word"])
+        if key in seen:
+            return
+        seen.add(key)
+        links.append(row)
+
+    for kind, frm, to, from_sense, to_sense in forward:
+        push({
+            "kind": "synonym" if (kind == "related" and is_mutual(frm, to)) else kind,
+            "source": "xref",
+            "from_word": frm,
+            "to_word": to,
+            "from_sense": from_sense,
+            "to_sense": to_sense,
+            "score": 1.0,
+        })
+    for kind, frm, to, _from_sense, _to_sense in forward:
+        if kind == "related" and is_mutual(frm, to):
             continue
-        m = rel_edges if kind == "related" else ant_edges
-        m.setdefault(frm, set()).add(to)
-
-    # exactly one extra hop over a snapshot of the 1-hop related rows
-    base = [(k, f, t) for k, f, t, _, h in links if h == 1 and k == "related"]
-    for _k, frm, to in base:
-        for u in rel_edges.get(to, ()):
-            if u != frm:
-                push("related", frm, u, None, 2)
-        for u in ant_edges.get(to, ()):
-            if u != frm:
-                push("antonym", frm, u, None, 2)
+        push({
+            "kind": kind,
+            "source": "xref",
+            "from_word": to,
+            "to_word": frm,
+            "from_sense": None,
+            "to_sense": None,
+            "score": 1.0,
+        })
     return links
 
-THESAURUS_LINKS = build_thesaurus_links(word_entries())
 
-# ---- gloss-token thesaurus fallback (mirrors src/lookup.ts) ----------------
+# ---- gloss-similarity synonyms (mirrors transform.ts buildGlossSynonymLinks) --
 
-# Function words / generic tokens ignored by the fallback (kept in sync with
-# src/lookup.ts GLOSS_STOPWORDS).
+GLOSS_TOKEN_CAP = 30
+GLOSS_DF_CEIL = 4000     # glue ceiling; must sit above the content vocabulary
+GLOSS_MIN_SHARED = 2     # one shared token is too weak a signal
+GLOSS_MIN_SCORE = 0.6
+GLOSS_TOP_K = 5
+
+# Function words / generic tokens (kept in sync with src/gloss.ts).
 GLOSS_STOPWORDS = set([
     "a", "an", "the", "and", "or", "but", "nor", "so", "if", "then", "else",
     "not", "no", "of", "to", "in", "on", "at", "for", "with", "by", "from",
@@ -340,29 +363,10 @@ GLOSS_STOPWORDS = set([
     "derog", "hon", "pol", "vulg", "esp", "first", "last", "kind", "sort",
 ])
 
-GLOSS_TOKEN_CAP = 30
-
 
 def gloss_tokens(text):
-    toks = re.findall(r"[a-z]+", text.lower())
-    out = []
-    for t in toks:
-        if len(t) > 1 and t not in GLOSS_STOPWORDS and t not in out:
-            out.append(t)
-    return out
-
-
-def word_tokens(word):
-    out = []
-    for s in word["sense"]:
-        for g in s["gloss"]:
-            for t in gloss_tokens(g["text"]):
-                if t not in out:
-                    out.append(t)
-    return out
-
-
-ENTRY_TOKENS = {wid: set(word_tokens(w)) for wid, w in word_entries().items()}
+    return [t for t in re.findall(r"[a-z]+", text.lower())
+            if len(t) > 1 and t not in GLOSS_STOPWORDS]
 
 
 def coarse_class(tag):
@@ -377,70 +381,172 @@ def coarse_class(tag):
     return None
 
 
-def coarse_classes(word):
+def coarse_pos_classes(tags):
     out = set()
-    for s in word["sense"]:
-        for tag in s["partOfSpeech"]:
-            c = coarse_class(tag)
-            if c:
-                out.add(c)
+    for tag in tags:
+        c = coarse_class(tag)
+        if c:
+            out.add(c)
     return out
 
 
-def render_gloss_thesaurus(word, entries, offset=0):
-    """Fallback thesaurus: shared distinctive gloss tokens over `glosses_fts`
-    (mirrored in-memory here), scored by ln(1 + N/df), same-POS preferred,
-    capped at 5, with the pre-window candidate count for the remainder note.
-    Mirrors src/lookup.ts glossThesaurus (two-line rows)."""
-    tokens = word_tokens(word)
-    if not tokens:
-        return ""
-    capped = tokens[:GLOSS_TOKEN_CAP]
-    wid = word["id"]
-    skip = {wid} | {to for k, frm, to, _, _ in THESAURUS_LINKS if frm == wid}
-    total = len(entries)
+def sense_score(a_tokens, b_tokens, weight):
+    """Weighted-Dice similarity of two senses: 2*Σ_shared w / (Σ_A w + Σ_B w)."""
+    b_set = set(b_tokens)
+    num = 0.0
+    den = 0.0
+    for t in a_tokens:
+        w = weight(t)
+        den += w
+        if t in b_set:
+            num += w
+    for t in b_tokens:
+        den += weight(t)
+    return 0.0 if den == 0 else (2.0 * num) / den
+
+
+def build_gloss_synonyms(entries, xref_links):
+    """Materialize kind='synonym' gloss edges for words with no explicit
+    synonym/related signal of their own. Sense-pair weighted Dice, df ceiling,
+    shared-token gate, minimum score, top-K per word."""
+    raw_tokens = []
+    sense_meta = []
+    word_tokens = {}
+    word_token_set = {}
+    for wid in sorted(entries):
+        w = entries[wid]
+        seen_tokens = set()
+        ordered = []
+        for si, s in enumerate(w["sense"]):
+            toks = []
+            local = set()
+            for g in s["gloss"]:
+                for t in gloss_tokens(g["text"]):
+                    if t in local:
+                        continue
+                    local.add(t)
+                    toks.append(t)
+                    if t not in seen_tokens:
+                        seen_tokens.add(t)
+                        if len(ordered) < GLOSS_TOKEN_CAP:
+                            ordered.append(t)
+            raw_tokens.append(toks)
+            sense_meta.append((wid, si + 1, coarse_pos_classes(s["partOfSpeech"])))
+        word_tokens[wid] = ordered
+        word_token_set[wid] = set(ordered)
 
     df = {}
-    shared = {}
-    for t in capped:
-        ids = [owid for owid, toks in ENTRY_TOKENS.items() if t in toks]
-        df[t] = len(ids)
-        for owid in ids:
-            if owid in skip:
-                continue
-            shared.setdefault(owid, set()).add(t)
+    for i, toks in enumerate(raw_tokens):
+        keep = word_token_set[sense_meta[i][0]]
+        for t in set(t for t in toks if t in keep):
+            df[t] = df.get(t, 0) + 1
+    total = len(raw_tokens)
 
-    cands = []
-    source_classes = coarse_classes(word)
-    for owid, toks in shared.items():
-        target_classes = coarse_classes(entries[owid])
-        if source_classes and target_classes and not (source_classes & target_classes):
-            continue
-        score = sum(math.log(1 + total / df[t]) for t in toks)
-        cands.append((owid, score, len(toks)))
-    cands.sort(key=lambda c: (-c[1], -c[2], not is_common(entries[c[0]]), int(c[0])))
+    def weight(t):
+        return math.log(1 + total / df.get(t, 1))
 
-    shown = cands[offset:offset + 5]
+    def kept(t):
+        return df.get(t, 0) <= GLOSS_DF_CEIL
+
+    senses = []
+    for i, toks in enumerate(raw_tokens):
+        wid, sense_no, classes = sense_meta[i]
+        keep = word_token_set[wid]
+        senses.append({
+            "word_id": wid,
+            "sense_no": sense_no,
+            "classes": classes,
+            "tokens": [t for t in toks if t in keep and kept(t)],
+        })
+
+    postings = {}
+    for i, s in enumerate(senses):
+        for t in s["tokens"]:
+            postings.setdefault(t, []).append(i)
+
+    # A synthetic backlink (from_sense None) is not a signal of the target's
+    # own — it must not suppress that word's gloss pass. `linked` keeps backlink
+    # targets so a related pair is still never promoted to a synonym.
+    has_signal = set()
+    linked = {}
+    for r in xref_links:
+        linked.setdefault(r["from_word"], set()).add(r["to_word"])
+        if r["from_sense"] is not None and r["kind"] in ("synonym", "related"):
+            has_signal.add(r["from_word"])
+
+    senses_by_word = {}
+    for i, s in enumerate(senses):
+        senses_by_word.setdefault(s["word_id"], []).append(i)
+
     rows = []
-    for owid, _score, _n in shown:
-        text, reading, _ = display_header(entries[owid])
-        rows.append("  %s  [%s]" % (text, reading or ""))
-        rows.append("     %s" % first_gloss(entries[owid]))
-    if not rows:
-        return ""
-    out = ["Synonyms:"]
-    out.extend(rows)
-    if len(cands) > offset + len(shown):
-        out.append("  … and %d more" % (len(cands) - (offset + len(shown))))
-    return "\n".join(out) + "\n"
+    for wid in sorted(entries):
+        if wid in has_signal:
+            continue
+        my_idx = senses_by_word.get(wid)
+        if not my_idx:
+            continue
+        source_tokens = word_tokens[wid]
+        if not source_tokens:
+            continue
+        skip = linked.get(wid)
 
+        shared = {}
+        for t in source_tokens:
+            for j in postings.get(t, ()):
+                other = senses[j]["word_id"]
+                if other == wid:
+                    continue
+                if skip and other in skip:
+                    continue
+                shared.setdefault(other, set()).add(t)
+        if not shared:
+            continue
+
+        cands = []
+        for other, shared_toks in shared.items():
+            if len(shared_toks) < GLOSS_MIN_SHARED:
+                continue
+            best = 0.0
+            from_sense = 0
+            to_sense = 0
+            for i in my_idx:
+                a = senses[i]
+                for j in senses_by_word[other]:
+                    b = senses[j]
+                    if a["classes"] and b["classes"] and not (a["classes"] & b["classes"]):
+                        continue
+                    sc = sense_score(a["tokens"], b["tokens"], weight)
+                    if sc > best:
+                        best = sc
+                        from_sense = a["sense_no"]
+                        to_sense = b["sense_no"]
+            if best < GLOSS_MIN_SCORE:
+                continue
+            cands.append((other, best, len(shared_toks), from_sense, to_sense))
+
+        cands.sort(key=lambda c: (-c[1], -c[2], not is_common(entries[c[0]]), int(c[0])))
+        for other, score, _count, from_sense, to_sense in cands[:GLOSS_TOP_K]:
+            rows.append({
+                "kind": "synonym",
+                "source": "gloss",
+                "from_word": wid,
+                "to_word": other,
+                "from_sense": from_sense,
+                "to_sense": to_sense,
+                "score": score,
+            })
+    return rows
+
+
+THESAURUS_LINKS = build_thesaurus_links(word_entries())
+THESAURUS_LINKS += build_gloss_synonyms(word_entries(), THESAURUS_LINKS)
 
 def render_thesaurus(word, entries, offset=0):
-    """Thesaurus: up to 5 synonyms (related links) and 5 antonyms (antonym links)
-    from the materialized link table (forward + reverse + 2-hop closure),
-    mirroring src/lookup.ts wordThesaurus: first link to a target wins, common
-    words first, windowed at [offset, offset+5) with a ``… and N more`` note
-    per block (two-line rows: `  text  [reading]` then `     gloss`)."""
+    """Synonyms / Antonyms / Related from the materialized scored relation rows
+    (mirrors src/lookup.ts wordThesaurus + src/format.ts renderThesaurus): hits
+    ranked by confidence then common-then-id, windowed at [offset, offset+5)
+    with a ``… and N more`` note per block (two-line rows: `  text  [reading]`
+    then `     gloss`). A section is omitted when empty."""
     def gloss_at(target, sense):
         if sense is not None and 1 <= sense <= len(target["sense"]):
             glosses = [g["text"] for g in target["sense"][sense - 1]["gloss"]]
@@ -451,33 +557,33 @@ def render_thesaurus(word, entries, offset=0):
     def collect(kind):
         hits = []
         seen = set()
-        for k, frm, to, sense, _hops in THESAURUS_LINKS:
-            if k != kind or frm != word["id"] or to in seen:
+        for r in THESAURUS_LINKS:
+            if r["kind"] != kind or r["from_word"] != word["id"] or r["to_word"] in seen:
                 continue
-            seen.add(to)
-            target = entries[to]
-            hits.append((target, gloss_at(target, sense)))
-        hits.sort(key=lambda h: (not is_common(h[0]), int(h[0]["id"])))
+            seen.add(r["to_word"])
+            target = entries.get(r["to_word"])
+            if target is None:
+                continue
+            hits.append((target, gloss_at(target, r["to_sense"]), r["score"]))
+        hits.sort(key=lambda h: (-h[2], not is_common(h[0]), int(h[0]["id"])))
         return hits
 
     sections = []
-    for kind, header in [("related", "Synonyms:"), ("antonym", "Antonyms:")]:
+    for kind, header in (("synonym", "Synonyms:"), ("antonym", "Antonyms:"), ("related", "Related:")):
         hits = collect(kind)
         shown = hits[offset:offset + 5]
-        if shown:
-            if sections:
-                sections.append("")
-            sections.append(header)
-            for target, gloss in shown:
-                text, reading, _ = display_header(target)
-                sections.append("  %s  [%s]" % (text, reading or ""))
-                sections.append("     %s" % gloss)
-            if len(hits) > offset + len(shown):
-                sections.append("  … and %d more" % (len(hits) - (offset + len(shown))))
-    if sections:
-        return "\n".join(sections) + "\n"
-    # No cross-reference links at all: infer related words from gloss overlap.
-    return render_gloss_thesaurus(word, entries, offset)
+        if not shown:
+            continue
+        if sections:
+            sections.append("")
+        sections.append(header)
+        for target, gloss, _score in shown:
+            text, reading, _ = display_header(target)
+            sections.append("  %s  [%s]" % (text, reading or ""))
+            sections.append("     %s" % gloss)
+        if len(hits) > offset + len(shown):
+            sections.append("  … and %d more" % (len(hits) - (offset + len(shown))))
+    return "\n".join(sections) + "\n" if sections else ""
 
 def render_kanji(lit, kanji_data, word_entries, max_compounds=30):
     m = kanji_data["misc"]

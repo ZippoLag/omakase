@@ -364,13 +364,34 @@ function isValidStrokePage(v: unknown): v is StrokePage {
   return typeof o.literal === "string" && typeof o.svgFile === "string";
 }
 
-const PAGE_SECTIONS = new Set<string>(["synonyms", "antonyms", "compounds", "readings", "meanings", "kanji"]);
+/**
+ * Every `PageSection` (worker-api.ts) a persisted page may use. The union is
+ * the source of truth: a section added there without being listed here fails
+ * to COMPILE (see the guard), instead of silently rejecting valid state. That
+ * is exactly how `related` broke restore — the validator treated a pane paged
+ * on the new `Related:` block as corrupt and `deserializeResultTree` pruned the
+ * whole node.
+ */
+const PAGE_SECTIONS = [
+  "synonyms",
+  "antonyms",
+  "related",
+  "compounds",
+  "readings",
+  "meanings",
+  "kanji",
+] as const;
+type MissingPageSection = Exclude<PageSection, (typeof PAGE_SECTIONS)[number]>;
+// `never` once the list covers the union; a new PageSection fails this line.
+const pageSectionsAreExhaustive: MissingPageSection extends never ? true : never = true;
+void pageSectionsAreExhaustive;
+const PAGE_SECTION_SET: ReadonlySet<string> = new Set(PAGE_SECTIONS);
 
 /** Shape check for one persisted page state entry (W17i, W8 discipline). */
 function isValidPageState(v: unknown): v is PageState {
   if (typeof v !== "object" || v === null) return false;
   const o = v as Record<string, unknown>;
-  return typeof o.section === "string" && PAGE_SECTIONS.has(o.section)
+  return typeof o.section === "string" && PAGE_SECTION_SET.has(o.section)
     && typeof o.total === "number" && typeof o.offset === "number" && typeof o.line === "number";
 }
 

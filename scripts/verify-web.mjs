@@ -193,7 +193,11 @@ async function main() {
     // The native setter still runs (the proxy goes into whatever internal
     // slot the browser uses), so event dispatch is untouched — only the
     // stored handler is deferred. The timeout budget itself is overridable
-    // at runtime via window.__pageTimeoutMs.
+    // at runtime via window.__pageTimeoutMs. The same wrapper honors
+    // window.__resultDelayMs, which holds terminal `result`/`error` replies:
+    // a probe that needs to sample a mid-stream pane (body landed, result not
+    // yet applied) uses it, because a word lookup is now a single indexed read
+    // — too fast to catch by polling.
     await page.evaluateOnNewDocument(() => {
       const RealWorker = window.Worker;
       if (!RealWorker) return;
@@ -208,6 +212,11 @@ async function main() {
             const delay = window.__pageResultDelayMs ?? 0;
             if (delay > 0 && msg && msg.kind === "page-result") {
               setTimeout(() => fn(ev), delay);
+              return;
+            }
+            const resultDelay = window.__resultDelayMs ?? 0;
+            if (resultDelay > 0 && msg && (msg.kind === "result" || msg.kind === "error")) {
+              setTimeout(() => fn(ev), resultDelay);
               return;
             }
             fn(ev);
@@ -657,13 +666,15 @@ async function main() {
 
     // The shimmer rows are a placeholder: cleared the moment the first
     // section lands, so they are never left stacked above the streamed text.
-    // word 走る streams its body almost instantly, then spends a couple of
-    // hundred ms on the gloss-fallback thesaurus — a real window where the
-    // pane is still `.streaming` (the result has not rebuilt it yet), already
-    // holding body text, with zero skeleton rows left. Poll tight enough to
-    // land inside that window. (Runs after the Enter probe above: clicking
-    // word here would otherwise change the default command the Enter probe
-    // relies on.)
+    // word 走る streams its body almost instantly and the thesaurus is now a
+    // single indexed read (the old query-time gloss fallback used to keep this
+    // window open for a couple hundred ms), so the window is made
+    // deterministic: the terminal `result` reply is held for __resultDelayMs,
+    // leaving the pane `.streaming` (result not applied yet), already holding
+    // body text, with zero skeleton rows left. (Runs after the Enter probe
+    // above: clicking word here would otherwise change the default command the
+    // Enter probe relies on.)
+    await page.evaluate(() => { window.__resultDelayMs = 600; });
     await page.evaluate(() => {
       const input = document.querySelector("#query");
       input.value = "走る";
@@ -691,6 +702,8 @@ async function main() {
       !!midWord && midWord.q === "走る" && midWord.hasWord,
       JSON.stringify(midWord),
     );
+    // Let the held result through before waiting on the idle chrome.
+    await page.evaluate(() => { window.__resultDelayMs = 0; });
     // The probe sampled 走る mid-stream — let its result land and the queue
     // drain before the next lookup starts, like every other probe leaves the
     // app (never stack the next op on top of an in-flight one).
@@ -2641,11 +2654,36 @@ async function main() {
     // scroll-up; at scrollY=0 it is always visible. The 18+ pane page is
     // still up, so this probes the real long-page behavior (the no-overflow
     // case was checked right after the W15 anchor probe).
+    // The row is DIRECTION-sensitive (updateLookupVisibility hides it only
+    // while scrolling down), so this probe must pin its own starting position.
+    // The preceding probes leave an arbitrary offset AND an in-flight smooth
+    // auto-scroll behind (the W17g token click calls scrollIntoView on the new
+    // pane): those animation frames used to override this probe's scroll, which
+    // made the result depend on page height (extra synonyms moved where the
+    // auto-scroll landed). Wait until the position actually stops moving, then
+    // pin the top so the rAF handler has recorded y=0 before scrolling down.
+    // `startY`/`afterDownY` stay in the dump as diagnostics: a future failure
+    // will say whether the scroll was blocked or taken as upward.
     const w17f = await page.evaluate(async () => {
       const row = document.querySelector("#lookup");
       const wait = (ms) => new Promise((r) => setTimeout(r, ms));
+      // Resolves once the scroll position has held still for three frames.
+      const settleScroll = async () => {
+        let stable = 0;
+        let prev = window.scrollY;
+        for (let i = 0; i < 180 && stable < 3; i++) {
+          await new Promise((r) => requestAnimationFrame(r));
+          stable = window.scrollY === prev ? stable + 1 : 0;
+          prev = window.scrollY;
+        }
+      };
+      await settleScroll();
+      window.scrollTo(0, 0);
+      await settleScroll();
+      const startY = window.scrollY;
       window.scrollTo(0, 600);
       await wait(450); // rAF + the 0.25s transform transition
+      const afterDownY = window.scrollY;
       const hidden = row.classList.contains("scrolled-down");
       const hr = row.getBoundingClientRect();
       window.scrollTo(0, 0);
@@ -2655,6 +2693,8 @@ async function main() {
         hidden,
         hiddenBottom: Math.round(hr.bottom),
         shown,
+        startY,
+        afterDownY,
         scrollY: window.scrollY,
       };
     });
@@ -2858,57 +2898,64 @@ async function main() {
       JSON.stringify({ note: `${probeB.note.remaining}→${probeB2.note.remaining}`, rows: `${probeB.glossRows}→${probeB2.glossRows}` }),
     );
 
-    // word 行く (6 synonyms): one click exhausts the list — note + button go.
-    const countBeforeC = await page.evaluate(() => window.__pagingProbe("行く"));
-    await runLookup(page, "word", "行く");
-    const probeC = await page.evaluate(() => window.__pagingProbe("行く"));
+    // word 七夕 (6 related rows, 5 shown): one click exhausts the list — note
+    // + button go. The old probe used 行く/来る, whose 6/8-row "synonym" lists
+    // came from 2-hop closure; that closure is gone (THESAURUS-PLAN.md), so
+    // these probe words carry the real, materialized relations.
+    const countBeforeC = await page.evaluate(() => window.__pagingProbe("七夕"));
+    await runLookup(page, "word", "七夕");
+    const probeC = await page.evaluate(() => window.__pagingProbe("七夕"));
     check(
-      "W17i: word 行く Synonyms note + load-more (6 synonyms, 5 shown)",
+      "W17i: word 七夕 Related note + load-more (6 related, 5 shown)",
       probeC.found && probeC.paneCount === countBeforeC.paneCount + 1
         && probeC.note?.text === "  … and 1 more" && !!probeC.note.button,
       JSON.stringify({ note: probeC.note, rows: probeC.glossRows }),
     );
-    check("W17i: word 行く load-more clicked (exhausting)", await clickLoadMore("行く"), "");
-    await waitLoadMoreSettled("行く");
-    const probeC2 = await page.evaluate(() => window.__pagingProbe("行く"));
+    check("W17i: word 七夕 load-more clicked (exhausting)", await clickLoadMore("七夕"), "");
+    await waitLoadMoreSettled("七夕");
+    const probeC2 = await page.evaluate(() => window.__pagingProbe("七夕"));
     check(
-      "W17i: word 行く one click exhausts the list — note and button gone, the remaining row appears",
+      "W17i: word 七夕 one click exhausts the list — note and button gone, the remaining row appears",
       !probeC2.note && probeC2.buttons.length === 0 && probeC2.glossRows === probeC.glossRows + 1,
       JSON.stringify({ note: probeC2.note, buttons: probeC2.buttons.length, rows: `${probeC.glossRows}→${probeC2.glossRows}` }),
     );
 
     // ★W18a regression: two panes from ONE cache entry must page
-    // independently. Top-level 来る (8 synonyms) sets the (word, 来る, 5)
-    // cache entry; the 来る row inside the 行く pane nests a second 来る pane
+    // independently. Top-level 南蛮 (6 related) sets the (word, 南蛮, 5) cache
+    // entry; the 南蛮 row inside the 唐辛子 pane nests a second 南蛮 pane
     // through submit's cached path, which must CLONE the pages array and its
     // PageState objects — paging the nested pane must leave the top-level
     // pane's note/button untouched, and vice versa.
-    const countBeforeD = await page.evaluate(() => window.__pagingProbe("来る", true));
-    await runLookup(page, "word", "来る");
-    const probeD = await page.evaluate(() => window.__pagingProbe("来る", true));
+    const countBeforeD = await page.evaluate(() => window.__pagingProbe("南蛮", true));
+    await runLookup(page, "word", "南蛮");
+    const probeD = await page.evaluate(() => window.__pagingProbe("南蛮", true));
     check(
-      "W17i: word 来る top-level Synonyms note + load-more (8 synonyms, 5 shown)",
+      "W17i: word 南蛮 top-level Related note + load-more (6 related, 5 shown)",
       probeD.found && probeD.paneCount === countBeforeD.paneCount + 1
-        && probeD.note?.text === "  … and 3 more" && !!probeD.note.button,
+        && probeD.note?.text === "  … and 1 more" && !!probeD.note.button,
       JSON.stringify({ note: probeD.note }),
     );
+    // The parent pane that renders the 南蛮 row (the old probe reused the pane
+    // step C had just created; 七夕 does not list 南蛮, so 唐辛子 gets its own
+    // lookup — its first related row is 南蛮).
+    await runLookup(page, "word", "唐辛子");
     const nestedClick = await page.evaluate(() => {
       const panes = [...document.querySelectorAll("#panes .pane")];
-      const iku = panes.find((p) => p.querySelector(".pane-query")?.textContent === "行く");
-      const b = [...(iku?.querySelectorAll("button.tok-word") ?? [])]
-        .find((x) => x.title === "word 来る");
+      const togarashi = panes.find((p) => p.querySelector(".pane-query")?.textContent === "唐辛子");
+      const b = [...(togarashi?.querySelectorAll("button.tok-word") ?? [])]
+        .find((x) => x.title === "word 南蛮");
       if (!b) return false;
       b.click();
       return true;
     });
-    check("W17i: the 来る synonym row inside the 行く pane nests a lookup (cache hit)", nestedClick, "");
+    check("W17i: the 南蛮 related row inside the 唐辛子 pane nests a lookup (cache hit)", nestedClick, "");
     const nestedReady = await waitFor(
       page,
       () => page.evaluate(() => {
         const panes = [...document.querySelectorAll("#panes .pane")];
-        const iku = panes.find((p) => p.querySelector(".pane-query")?.textContent === "行く");
-        const nested = [...(iku?.querySelectorAll(".pane-children .pane") ?? [])]
-          .find((p) => p.querySelector(".pane-query")?.textContent === "来る");
+        const togarashi = panes.find((p) => p.querySelector(".pane-query")?.textContent === "唐辛子");
+        const nested = [...(togarashi?.querySelectorAll(".pane-children .pane") ?? [])]
+          .find((p) => p.querySelector(".pane-query")?.textContent === "南蛮");
         if (!nested) return null;
         const pre = nested.querySelector("pre");
         const note = window.__noteScan(pre);
@@ -2926,18 +2973,18 @@ async function main() {
         };
       }),
       30000,
-      "nested 来る pane (cache clone)",
+      "nested 南蛮 pane (cache clone)",
     );
     check(
-      "W17i: the nested 来る pane gets its OWN note + button (clone, not shared array)",
+      "W17i: the nested 南蛮 pane gets its OWN note + button (clone, not shared array)",
       nestedReady.note === probeD.note.text && !!nestedReady.button && nestedReady.rows === 5,
       JSON.stringify(nestedReady),
     );
-    check("W17i: nested 来る load-more clicked", await page.evaluate(() => {
+    check("W17i: nested 南蛮 load-more clicked", await page.evaluate(() => {
       const panes = [...document.querySelectorAll("#panes .pane")];
-      const iku = panes.find((p) => p.querySelector(".pane-query")?.textContent === "行く");
-      const nested = [...(iku?.querySelectorAll(".pane-children .pane") ?? [])]
-        .find((p) => p.querySelector(".pane-query")?.textContent === "来る");
+      const togarashi = panes.find((p) => p.querySelector(".pane-query")?.textContent === "唐辛子");
+      const nested = [...(togarashi?.querySelectorAll(".pane-children .pane") ?? [])]
+        .find((p) => p.querySelector(".pane-query")?.textContent === "南蛮");
       const b = nested?.querySelector("button.load-more");
       if (!b || b.disabled) return false;
       b.click();
@@ -2945,17 +2992,17 @@ async function main() {
     }), "");
     await waitFor(page, () => page.evaluate(() => {
       const panes = [...document.querySelectorAll("#panes .pane")];
-      const iku = panes.find((p) => p.querySelector(".pane-query")?.textContent === "行く");
-      const nested = [...(iku?.querySelectorAll(".pane-children .pane") ?? [])]
-        .find((p) => p.querySelector(".pane-query")?.textContent === "来る");
+      const togarashi = panes.find((p) => p.querySelector(".pane-query")?.textContent === "唐辛子");
+      const nested = [...(togarashi?.querySelectorAll(".pane-children .pane") ?? [])]
+        .find((p) => p.querySelector(".pane-query")?.textContent === "南蛮");
       const b = nested?.querySelector("button.load-more");
       return b ? (b.disabled ? null : { label: b.textContent }) : { label: null };
-    }), 30000, "nested 来る page reply");
+    }), 30000, "nested 南蛮 page reply");
     const nestedAfter = await page.evaluate(() => {
       const panes = [...document.querySelectorAll("#panes .pane")];
-      const iku = panes.find((p) => p.querySelector(".pane-query")?.textContent === "行く");
-      const nested = [...(iku?.querySelectorAll(".pane-children .pane") ?? [])]
-        .find((p) => p.querySelector(".pane-query")?.textContent === "来る");
+      const togarashi = panes.find((p) => p.querySelector(".pane-query")?.textContent === "唐辛子");
+      const nested = [...(togarashi?.querySelectorAll(".pane-children .pane") ?? [])]
+        .find((p) => p.querySelector(".pane-query")?.textContent === "南蛮");
       const pre = nested?.querySelector("pre");
       const lines = pre?.textContent.split("\n") ?? [];
       return {
@@ -2965,23 +3012,23 @@ async function main() {
       };
     });
     check(
-      "W17i: paging the nested 来る pane exhausts IT (note+button gone, all rows shown) — the sibling pane's array is untouched",
-      !nestedAfter.note && nestedAfter.buttons === 0 && nestedAfter.rows === nestedReady.rows + 3,
+      "W17i: paging the nested 南蛮 pane exhausts IT (note+button gone, all rows shown) — the sibling pane's array is untouched",
+      !nestedAfter.note && nestedAfter.buttons === 0 && nestedAfter.rows === nestedReady.rows + 1,
       JSON.stringify(nestedAfter),
     );
-    const topBefore = await page.evaluate(() => window.__pagingProbe("来る", true));
+    const topBefore = await page.evaluate(() => window.__pagingProbe("南蛮", true));
     check(
-      "W17i: ★W18a — the top-level 来る pane is untouched by its cached sibling's paging",
-      topBefore.found && topBefore.note?.text === "  … and 3 more" && !!topBefore.note.button,
+      "W17i: ★W18a — the top-level 南蛮 pane is untouched by its cached sibling's paging",
+      topBefore.found && topBefore.note?.text === "  … and 1 more" && !!topBefore.note.button,
       JSON.stringify({ note: topBefore.note, buttons: topBefore.buttons.length }),
     );
-    check("W17i: top-level 来る load-more clicked (still armed)", await clickLoadMore("来る", true), "");
-    await waitLoadMoreSettled("来る", true);
-    const topAfter = await page.evaluate(() => window.__pagingProbe("来る", true));
+    check("W17i: top-level 南蛮 load-more clicked (still armed)", await clickLoadMore("南蛮", true), "");
+    await waitLoadMoreSettled("南蛮", true);
+    const topAfter = await page.evaluate(() => window.__pagingProbe("南蛮", true));
     check(
-      "W17i: the top-level 来る pane exhausts independently too",
+      "W17i: the top-level 南蛮 pane exhausts independently too",
       topAfter.found && !topAfter.note && topAfter.buttons.length === 0
-        && topAfter.glossRows === topBefore.glossRows + 3,
+        && topAfter.glossRows === topBefore.glossRows + 1,
       JSON.stringify({ note: topAfter.note, rows: `${topBefore.glossRows}→${topAfter.glossRows}` }),
     );
 

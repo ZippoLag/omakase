@@ -17,7 +17,6 @@ import { cmdWord, cmdKanji, cmdSearch, loadTags } from "../src/cli.js";
 import { renderKanjiWords, renderSearch, renderWordBody, searchSections } from "../src/format.js";
 import {
   exampleSentences,
-  glossThesaurus,
   loadKanji,
   loadWord,
   searchKanjiByReading,
@@ -218,11 +217,11 @@ test("thesaurus caps synonyms and antonyms at 5 each", () => {
   const db = buildFixtureDb();
   try {
     const tags = loadTags(db);
-    // Give 暑い 6 related links to existing fixture words, as the build would
+    // Give 暑い 6 synonym links to existing fixture words, as the build would
     // materialize into thesaurus_links. All six targets are common, so the
     // top-5 by word id are kept and 綺麗 (1591900, the largest id) is dropped.
     const link = db.prepare(
-      "INSERT INTO thesaurus_links (kind, from_word, to_word, to_sense, hops) VALUES ('related', '1343460', ?, 1, 1)",
+      "INSERT INTO thesaurus_links (kind, from_word, to_word, to_sense, hops) VALUES ('synonym', '1343460', ?, 1, 1)",
     );
     for (const target of ["1169870", "1210360", "1296400", "1358280", "1358490", "1591900"]) link.run(target);
     // And 6 antonym links for 良い (1605820), which has no built-in antonyms.
@@ -261,11 +260,13 @@ test("thesaurus caps synonyms and antonyms at 5 each", () => {
   }
 });
 
-test("thesaurus_links: forward, reverse and 2-hop closure built offline", () => {
-  const mk = (id: string, common: boolean, text: string, extra: { related?: unknown[]; antonym?: unknown[] } = {}): JmdictWord => ({
+test("thesaurus_links: mutual related becomes a synonym; one-way gets a related backlink", () => {
+  // Distinct glosses per word keep the gloss pass out of this test — it pins
+  // the xref policy only.
+  const mk = (id: string, text: string, gloss: string, extra: { related?: unknown[]; antonym?: unknown[] } = {}): JmdictWord => ({
     id,
     kanji: [],
-    kana: [{ common, text, tags: [], appliesToKanji: ["*"] }],
+    kana: [{ common: true, text, tags: [], appliesToKanji: ["*"] }],
     sense: [{
       partOfSpeech: ["n"],
       appliesToKanji: ["*"],
@@ -277,17 +278,17 @@ test("thesaurus_links: forward, reverse and 2-hop closure built offline", () => 
       misc: [],
       info: [],
       languageSource: [],
-      gloss: [{ lang: "eng", gender: null, type: null, text: "gloss of " + text }],
+      gloss: [{ lang: "eng", gender: null, type: null, text: gloss }],
     }],
   });
   const words: JmdictWord[] = [
-    mk("10", true, "ア", { related: [["ビ", 1]] }),
-    mk("20", true, "ビ", { related: [["シ", 1]], antonym: [["フ", 1]] }),
-    mk("30", true, "シ", { antonym: [["ド", 1]] }),
-    mk("40", false, "ド"),
-    mk("50", true, "フ"),
+    mk("10", "ア", "alpha", { related: [["ビ", 1]] }),
+    mk("20", "ビ", "bravo", { related: [["ア", 1], ["シ", 1]], antonym: [["フ", 1]] }),
+    mk("30", "シ", "charlie", { antonym: [["ド", 1]] }),
+    mk("40", "ド", "delta"),
+    mk("50", "フ", "foxtrot"),
   ];
-  // Real pipeline: xrefs are resolved and closed over before anything is queried.
+  // Real pipeline: xrefs are resolved and scored before anything is queried.
   const rows = transform(
     { words } as never,
     { characters: [] } as never,
@@ -298,90 +299,103 @@ test("thesaurus_links: forward, reverse and 2-hop closure built offline", () => 
   const db = buildDb(rows, { tags: "{}" }, { dbPath: ":memory:" });
   try {
     const links = db.prepare(
-      "SELECT kind, from_word, to_word, to_sense, hops FROM thesaurus_links ORDER BY rowid",
-    ).all() as { kind: string; from_word: string; to_word: string; to_sense: number | null; hops: number }[];
+      "SELECT kind, source, from_word, to_word, from_sense, to_sense, score FROM thesaurus_links ORDER BY rowid",
+    ).all() as { kind: string; source: string; from_word: string; to_word: string; from_sense: number | null; to_sense: number | null; score: number }[];
     assert.deepEqual(links, [
-      // forward links, in word/sense order, keeping the referenced sense
-      { kind: "related", from_word: "10", to_word: "20", to_sense: 1, hops: 1 },
-      { kind: "related", from_word: "20", to_word: "30", to_sense: 1, hops: 1 },
-      { kind: "antonym", from_word: "20", to_word: "50", to_sense: 1, hops: 1 },
-      { kind: "antonym", from_word: "30", to_word: "40", to_sense: 1, hops: 1 },
-      // reverse edges: one-directional references become bidirectional
-      { kind: "related", from_word: "20", to_word: "10", to_sense: null, hops: 1 },
-      { kind: "related", from_word: "30", to_word: "20", to_sense: null, hops: 1 },
-      { kind: "antonym", from_word: "50", to_word: "20", to_sense: null, hops: 1 },
-      { kind: "antonym", from_word: "40", to_word: "30", to_sense: null, hops: 1 },
-      // 2-hop closure per base row (related → related, then related → antonym;
-      // self-references dropped): ア→シ via ビ, ア→フ via ビ, ビ→ド via シ,
-      // シ→ア via ビ, シ→フ via ビ.
-      { kind: "related", from_word: "10", to_word: "30", to_sense: null, hops: 2 },
-      { kind: "antonym", from_word: "10", to_word: "50", to_sense: null, hops: 2 },
-      { kind: "antonym", from_word: "20", to_word: "40", to_sense: null, hops: 2 },
-      { kind: "related", from_word: "30", to_word: "10", to_sense: null, hops: 2 },
-      { kind: "antonym", from_word: "30", to_word: "50", to_sense: null, hops: 2 },
+      // ア and ビ really cite each other -> both real rows are synonyms
+      { kind: "synonym", source: "xref", from_word: "10", to_word: "20", from_sense: 1, to_sense: 1, score: 1 },
+      { kind: "synonym", source: "xref", from_word: "20", to_word: "10", from_sense: 1, to_sense: 1, score: 1 },
+      // a one-way related stays honestly "related", its antonym "antonym" ...
+      { kind: "related", source: "xref", from_word: "20", to_word: "30", from_sense: 1, to_sense: 1, score: 1 },
+      { kind: "antonym", source: "xref", from_word: "20", to_word: "50", from_sense: 1, to_sense: 1, score: 1 },
+      { kind: "antonym", source: "xref", from_word: "30", to_word: "40", from_sense: 1, to_sense: 1, score: 1 },
+      // ... plus a backlink so the target can discover the source. No 2-hop.
+      { kind: "related", source: "xref", from_word: "30", to_word: "20", from_sense: null, to_sense: null, score: 1 },
+      { kind: "antonym", source: "xref", from_word: "50", to_word: "20", from_sense: null, to_sense: null, score: 1 },
+      { kind: "antonym", source: "xref", from_word: "40", to_word: "30", from_sense: null, to_sense: null, score: 1 },
     ]);
 
-    // Runtime thesaurus reads the materialized table: forward + reverse +
-    // 2-hop, ranked common-first then word id, capped at 5.
+    // Runtime thesaurus reads the materialized table, ranked by confidence
+    // then common-then-id, capped at 5.
     const thes = (id: string) => wordThesaurus(db, loadWord(db, id)!);
-    assert.deepEqual(thes("10").synonyms.map((h) => h.word.id), ["20", "30"]);
-    assert.deepEqual(thes("10").antonyms.map((h) => h.word.id), ["50"]);
-    assert.equal(thes("10").antonyms[0]!.gloss, "gloss of フ"); // 2-hop rows fall back to the first gloss
-    assert.deepEqual(thes("20").synonyms.map((h) => h.word.id), ["10", "30"]);
-    assert.deepEqual(thes("20").antonyms.map((h) => h.word.id), ["50", "40"]);
-    // reverse antonym edge: ド (40) never declares an antonym of its own
+    assert.deepEqual(thes("10").synonyms.map((h) => h.word.id), ["20"]);
+    assert.deepEqual(thes("10").related, []);
+    assert.deepEqual(thes("10").antonyms, []);
+    assert.deepEqual(thes("20").synonyms.map((h) => h.word.id), ["10"]);
+    assert.deepEqual(thes("20").related.map((h) => h.word.id), ["30"]);
+    assert.deepEqual(thes("20").antonyms.map((h) => h.word.id), ["50"]);
+    // the backlink shows as related, never as a synonym
+    assert.deepEqual(thes("30").related.map((h) => h.word.id), ["20"]);
+    assert.deepEqual(thes("30").synonyms, []);
     assert.deepEqual(thes("40").antonyms.map((h) => h.word.id), ["30"]);
-    assert.deepEqual(thes("40").synonyms, []);
-    assert.equal(wordThesaurus(db, loadWord(db, "10")!, 1).synonyms.length, 1);
+    // 2-hop closure is gone: ア knows nothing of シ/フ
+    assert.deepEqual(thes("10").related, []);
+    assert.deepEqual(thes("10").antonyms, []);
+    assert.equal(wordThesaurus(db, loadWord(db, "20")!, 1).related.length, 1);
   } finally {
     db.close();
   }
 });
 
-test("gloss fallback fills words with no links; linked words keep explicit thesaurus", () => {
+test("gloss synonyms: real matches kept, the old token-bag false positives gated out", () => {
   const db = buildFixtureDb();
   try {
     const tags = loadTags(db);
-    // 食べる has no cross-reference links -> fallback infers synonyms from glosses.
+    // 食べる has no xrefs: the build infers 食う (same sense "to eat") ...
     const taberu = cmdWord(db, "食べる", tags);
     assert.ok(taberu != null);
-    assert.ok(taberu.includes("Synonyms:"), "fallback adds a Synonyms section");
-    assert.ok(taberu.includes("食う"), "食う shares the 'eat' gloss token");
-    // 暑い has an explicit antonym -> no gloss fallback (and no synonym list).
+    assert.ok(taberu.includes("Synonyms:"), taberu);
+    assert.ok(taberu.includes("食う"), "食う is a real synonym (sense 1 'to eat')");
+    // ... and rejects 有る, which shares only the generic token "live".
+    assert.ok(!taberu.includes("有る"), taberu);
+    // 為る's 17 senses share only glue tokens with anything: below the gate it
+    // stays silent instead of naming five unrelated verbs.
+    const suru = cmdWord(db, "為る", tags);
+    assert.ok(suru != null);
+    assert.ok(!suru.includes("Synonyms:"), suru);
+    // A word with only an explicit antonym keeps it and invents no synonym.
     const atsui = cmdWord(db, "暑い", tags);
-    assert.ok(atsui != null);
-    assert.ok(!atsui.includes("Synonyms:"), "linked word is not given gloss fallback");
-    assert.ok(atsui.includes("Antonyms:"));
+    assert.ok(atsui != null && atsui.includes("Antonyms:") && !atsui.includes("Synonyms:"));
+    // The gloss edge records the matched sense pair (and its confidence).
+    const row = db.prepare(
+      "SELECT source, from_sense, to_sense, score FROM thesaurus_links WHERE from_word='1358280' AND to_word='1592100'",
+    ).get() as { source: string; from_sense: number; to_sense: number; score: number };
+    assert.equal(row.source, "gloss");
+    assert.equal(row.from_sense, 1);
+    assert.equal(row.to_sense, 1);
+    assert.equal(row.score, 1);
   } finally {
     db.close();
   }
 });
 
-test("gloss-thesaurus fallback: shared tokens, POS filter, exclusion, common tie-break", () => {
-  const mk = (id: string, common: boolean, text: string, pos: string[], glosses: string[], extra: { related?: unknown[] } = {}): JmdictWord => ({
+test("gloss synonyms: sense scoring, POS filter, xref exclusion, minimum-score gate", () => {
+  const mk = (id: string, text: string, pos: string[], gloss: string, antonym: unknown[] = []): JmdictWord => ({
     id,
     kanji: [],
-    kana: [{ common, text, tags: [], appliesToKanji: ["*"] }],
+    kana: [{ common: true, text, tags: [], appliesToKanji: ["*"] }],
     sense: [{
       partOfSpeech: pos,
       appliesToKanji: ["*"],
       appliesToKana: ["*"],
-      related: extra.related ?? [],
-      antonym: [],
+      related: [],
+      antonym,
       field: [],
       dialect: [],
       misc: [],
       info: [],
       languageSource: [],
-      gloss: glosses.map((g) => ({ lang: "eng", gender: null, type: null, text: g })),
+      gloss: [{ lang: "eng", gender: null, type: null, text: gloss }],
     }],
   });
   const words: JmdictWord[] = [
-    mk("10", true, "ア", ["v1"], ["to eat"], { related: [["ド", 1]] }),
-    mk("20", false, "ビ", ["v1"], ["to eat"]),
-    mk("30", true, "シ", ["n"], ["eat well"]),
-    mk("40", true, "エ", ["v1"], ["to eat", "to drink"]),
-    mk("60", true, "ド", ["v1"], ["to eat"]),
+    mk("10", "あ", ["v1"], "to eat food", [["え", 1]]), // verb; え is its antonym
+    mk("20", "び", ["v1"], "to eat food"),              // verb, exact sense match
+    mk("30", "ぬ", ["n"], "to eat food"),               // noun -> POS gate
+    mk("40", "し", ["v1"], "to eat food daily"),       // verb, partial match
+    mk("50", "ぜ", ["v1"], "to eat bread"),            // verb, thin overlap -> gate
+    mk("60", "え", ["v1"], "to eat food"),             // verb, 10's antonym
+    mk("70", "ゔぃ", ["v1"], "to sing"),               // no shared token
   ];
   const rows = transform(
     { words } as never,
@@ -393,17 +407,102 @@ test("gloss-thesaurus fallback: shared tokens, POS filter, exclusion, common tie
   const db = buildDb(rows, { tags: "{}" }, { dbPath: ":memory:" });
   try {
     const ids = (hits: { word: { id: string } }[]) => hits.map((h) => h.word.id);
-    // ア has a link (→ ド): explicit thesaurus wins, no gloss fallback.
-    assert.deepEqual(ids(wordThesaurus(db, loadWord(db, "10")!).synonyms), ["60"]);
-    // glossThesaurus directly: skips self, the linked target ド, and noun シ;
-    // ties break common-first then by word id.
-    assert.deepEqual(ids(glossThesaurus(db, loadWord(db, "10")!).synonyms), ["40", "20"]);
-    // ビ has no links: all verbs sharing "eat", common first, id tie-break.
-    assert.deepEqual(ids(wordThesaurus(db, loadWord(db, "20")!).synonyms), []);
-    assert.deepEqual(ids(glossThesaurus(db, loadWord(db, "20")!).synonyms), ["10", "40", "60"]);
-    assert.equal(glossThesaurus(db, loadWord(db, "20")!, 1).synonyms.length, 1);
-    // シ is a noun: no candidates share both a token and a POS class.
-    assert.deepEqual(ids(glossThesaurus(db, loadWord(db, "30")!).synonyms), []);
+    const thes = (id: string) => wordThesaurus(db, loadWord(db, id)!);
+    // Exact sense match (score 1) leads; the "…daily" sense clears the gate behind it.
+    assert.deepEqual(ids(thes("10").synonyms), ["20", "40"]);
+    // The explicit antonym is never re-proposed as a synonym.
+    assert.deepEqual(ids(thes("10").antonyms), ["60"]);
+    assert.ok(!ids(thes("10").synonyms).includes("60"));
+    // A noun sharing the same tokens is filtered by the coarse POS gate.
+    assert.deepEqual(ids(thes("30").synonyms), []);
+    // "to eat bread" shares only one generic token -> below the gate.
+    assert.deepEqual(ids(thes("50").synonyms), []);
+    // No shared content token at all.
+    assert.deepEqual(ids(thes("70").synonyms), []);
+    // The materialized gloss rows are the scored sense pairs only.
+    const glossRows = db.prepare(
+      "SELECT from_word, to_word, from_sense, to_sense, score FROM thesaurus_links WHERE source='gloss' ORDER BY from_word, to_word",
+    ).all() as { from_word: string; to_word: string; from_sense: number; to_sense: number; score: number }[];
+    assert.deepEqual(glossRows.map((r) => [r.from_word, r.to_word, r.from_sense, r.to_sense]), [
+      ["10", "20", 1, 1], ["10", "40", 1, 1],
+      ["20", "10", 1, 1], ["20", "40", 1, 1], ["20", "60", 1, 1],
+      ["40", "10", 1, 1], ["40", "20", 1, 1], ["40", "60", 1, 1],
+      ["60", "20", 1, 1], ["60", "40", 1, 1],
+    ]);
+    assert.ok(glossRows.every((r) => r.score >= 0.5 && r.score <= 1), "every edge clears the gate");
+    assert.equal(wordThesaurus(db, loadWord(db, "10")!, 1).synonyms.length, 1);
+  } finally {
+    db.close();
+  }
+});
+
+test("gloss synonyms: a RECEIVED backlink is not a signal of its own", () => {
+  // 10 declares a one-way `related` to 20; 20 only *receives* the synthetic
+  // backlink. That backlink must not count as 20's own signal: otherwise 20 is
+  // denied the gloss pass even though it declares no xref at all — it would
+  // render a Related block of inbound links and no synonyms, while a word with
+  // no relations whatsoever gets a full gloss thesaurus. (Measured on the full
+  // dictionary before the fix: 18,819 such words, all with zero synonyms.)
+  const mk = (id: string, text: string, gloss: string, related: unknown[] = []): JmdictWord => ({
+    id,
+    kanji: [],
+    kana: [{ common: true, text, tags: [], appliesToKanji: ["*"] }],
+    sense: [{
+      partOfSpeech: ["n"],
+      appliesToKanji: ["*"],
+      appliesToKana: ["*"],
+      related,
+      antonym: [],
+      field: [],
+      dialect: [],
+      misc: [],
+      info: [],
+      languageSource: [],
+      gloss: [{ lang: "eng", gender: null, type: null, text: gloss }],
+    }],
+  });
+  const words: JmdictWord[] = [
+    mk("10", "あ", "zulu", [["え", 1]]),      // cites 20 one-way
+    mk("20", "え", "echo alpha"),              // 20: receives the backlink only
+    mk("30", "お", "echo alpha"),              // 20's gloss twin (2 shared tokens)
+  ];
+  const rows = transform(
+    { words } as never,
+    { characters: [] } as never,
+    { version: "", kanji: {} } as KradfileFile,
+    { version: "", radicals: {} } as RadkfileFile,
+    [],
+  );
+  const db = buildDb(rows, { tags: "{}" }, { dbPath: ":memory:" });
+  try {
+    const ids = (hits: { word: { id: string } }[]) => hits.map((h) => h.word.id);
+    const thes = (id: string) => wordThesaurus(db, loadWord(db, id)!);
+    // The materialized xref rows: a real forward row (source sense 1) plus the
+    // synthetic reverse, whose from_sense is null — the discriminator the
+    // signal check keys on. (20 and 30 share TWO kept tokens, so the pair also
+    // clears GLOSS_MIN_SHARED — a one-token gloss pair is gated out entirely.)
+    const xrefRows = (db.prepare(
+      "SELECT kind, from_word, to_word, from_sense FROM thesaurus_links WHERE source='xref' ORDER BY from_word, to_word",
+    ).all() as { kind: string; from_word: string; to_word: string; from_sense: number | null }[])
+      .map((r) => [r.kind, r.from_word, r.to_word, r.from_sense] as [string, string, string, number | null]);
+    assert.deepEqual(xrefRows, [
+      ["related", "10", "20", 1],
+      ["related", "20", "10", null],
+    ]);
+    // 20 still sees the inbound relation honestly, as Related...
+    assert.deepEqual(ids(thes("20").related), ["10"]);
+    // ...and now also gets the gloss synonym it was previously denied.
+    assert.deepEqual(ids(thes("20").synonyms), ["30"]);
+    assert.deepEqual(ids(thes("30").synonyms), ["20"]);
+    // The word that really declares the xref has a signal of its own and is
+    // still excluded from the gloss pass.
+    assert.deepEqual(ids(thes("10").synonyms), []);
+    // And the related pair is never promoted to a synonym: 20's backlink target
+    // stays in the "already linked" set.
+    const synRows = (db.prepare(
+      "SELECT from_word, to_word FROM thesaurus_links WHERE kind='synonym' ORDER BY from_word, to_word",
+    ).all() as { from_word: string; to_word: string }[]).map((r) => [r.from_word, r.to_word]);
+    assert.deepEqual(synRows, [["20", "30"], ["30", "20"]]);
   } finally {
     db.close();
   }

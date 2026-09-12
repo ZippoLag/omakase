@@ -14,3 +14,9 @@ data/raw/
 *.tgz
 .DS_Store
 web/.certs/
+# temporary working plans — local scaffolding, never commit (their headers say so
+# and AGENTS.md §9 rule 12 has them deleted when their last item lands:
+# REVIEW-FIXES W18, THESAURUS-PLAN P3). Keeping them ignored stops `git add -A`
+# from sweeping them into a release commit.
+REVIEW-FIXES.md
+THESAURUS-PLAN.md

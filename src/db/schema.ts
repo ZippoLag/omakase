@@ -2,7 +2,7 @@
  * SQLite schema for the offline dictionary DB.
  * Mirrors data-model.md §3. Schema version must bump on any DDL change.
  */
-export const SCHEMA_VERSION = 3;
+export const SCHEMA_VERSION = 4;
 
 export const DDL = `
 PRAGMA foreign_keys = ON;
@@ -155,19 +155,30 @@ CREATE TABLE word_sentences (
 );
 
 -- ============ Enrichment: thesaurus links (derived at build time) ============
--- Resolved cross-reference graph from senses.related/antonym: one row per
--- forward link, its reverse (relatedness and antonymy are symmetric), and
--- 2-hop closure rows (related→related gives synonyms-of-synonyms;
--- related→antonym gives indirect antonyms). Materialized offline so the
--- runtime thesaurus is a single indexed query instead of per-xref lookups.
+-- Scored relation graph, materialized offline so the runtime thesaurus is a
+-- single indexed read (no per-xref lookups, no query-time FTS scoring).
+--   kind    synonym  a defensible substitute: real mutual xref "related", or
+--                    a gloss-similarity edge that cleared the score gate
+--           related  a one-directional JMdict "related" ("see also") term
+--           antonym  explicit JMdict "antonym"
+--   source  xref / gloss (a curated 'wn' source may join later)
+--   score   1 for xref edges, the weighted-Dice confidence for gloss ones
+--   from_sense / to_sense  matched sense numbers (1-based), so a hit shows
+--           the gloss of the sense that actually matched
+-- Self-links, unresolvable xrefs and duplicate targets are dropped; the first
+-- link to a target wins. 2-hop closure is deliberately NOT materialized —
+-- synonyms-of-synonyms was the dominant noise source (THESAURUS-PLAN.md).
 CREATE TABLE thesaurus_links (
-  kind      TEXT    NOT NULL CHECK (kind IN ('related','antonym')),
-  from_word TEXT    NOT NULL REFERENCES words(id),
-  to_word   TEXT    NOT NULL REFERENCES words(id),
-  to_sense  INTEGER,              -- referenced sense number (1-based); NULL when unspecified / reverse / 2-hop
-  hops      INTEGER NOT NULL DEFAULT 1 CHECK (hops IN (1,2))
+  kind       TEXT    NOT NULL CHECK (kind IN ('synonym','related','antonym')),
+  source     TEXT    NOT NULL DEFAULT 'xref' CHECK (source IN ('xref','gloss')),
+  from_word  TEXT    NOT NULL REFERENCES words(id),
+  to_word    TEXT    NOT NULL REFERENCES words(id),
+  from_sense INTEGER,                    -- source sense number (1-based); NULL for xref reverse edges
+  to_sense   INTEGER,                    -- target sense number (1-based); NULL when unspecified
+  score      REAL    NOT NULL DEFAULT 1, -- 0..1 confidence (xref edges are 1)
+  hops       INTEGER NOT NULL DEFAULT 1 CHECK (hops IN (1,2)) -- vestigial: always 1, no 2-hop rows
 );
-CREATE INDEX idx_thesaurus_from ON thesaurus_links(kind, from_word);
+CREATE INDEX idx_thesaurus_from ON thesaurus_links(kind, from_word, score DESC);
 CREATE INDEX idx_thesaurus_to   ON thesaurus_links(kind, to_word);
 
 CREATE TABLE stroke_order (

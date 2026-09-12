@@ -85,6 +85,7 @@ All URLs verified as of the research date.
 | Writing strokes (stroke order diagrams) | **KanjiVG** SVGs | Animate by iterating the ordered stroke paths; also gives stroke count cross-check |
 | Kanji → component/radical decomposition | **kradfile-u** + **KanjiVG** element data | Tangorin's "kanji elements" + multi-radical search |
 | Composition into compound terms (jukugo) | **JMdict** (all compounds are entries) + a **kanji→word cross-reference index** | Build the index yourself from JMdict, or use the prebuilt one (see §4) |
+| Thesaurus (synonyms / antonyms / related) | **JMdict** — sense `related`/`antonym` xrefs plus gloss-similarity over the JMdict glosses | No extra source shipped: derived at build time into `thesaurus_links` (see `THESAURUS-PLAN.md`). A curated Japanese **WordNet** ingest is the planned upgrade for the gloss-pass long tail (plan P3, not yet built) |
 | Conjugations | **No data source needed** — generate from JMdict POS tags | Tangorin does exactly this; see options below |
 | Example sentences | **Tatoeba** (curated JA–EN subset) | Tag sentences with their JMdict word IDs for lookups |
 | Proper names | **JMnedict** | Optional big download (~740k entries) |

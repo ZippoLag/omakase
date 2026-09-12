@@ -16,7 +16,6 @@ import {
   displayHeader,
   exampleSentences,
   findWordByWriting,
-  glossThesaurus,
   isKanaInput,
   kanjiLiterals,
   loadKanji,
@@ -56,9 +55,9 @@ export function loadTags(db: DB): Record<string, string> {
 
 /**
  * `word <query> [--limit N] [--offset N]` — exact match on a writing. Renders
- * the entry body, then the thesaurus (top 5 synonyms/antonyms, when present),
- * then example sentences. `offset` starts the thesaurus window `offset` rows
- * in (each list shows rows N..N+5 with the remainder note).
+ * the entry body, then the thesaurus (Synonyms / Antonyms / Related, each up
+ * to 5 rows), then example sentences. `offset` starts every thesaurus window
+ * `offset` rows in (each list shows rows N..N+5 with the remainder note).
  */
 export function cmdWord(
   db: DB,
@@ -70,15 +69,14 @@ export function cmdWord(
   const word = findWordByWriting(db, query);
   if (!word) return null;
   const body = renderWordBody(word, tags, limit);
-  let { synonyms, antonyms, synonymTotal, antonymTotal } = wordThesaurus(db, word, 5, offset);
-  // Fallback for entries with no cross-reference links at all: related words
-  // inferred from shared distinctive English gloss tokens (glosses_fts).
-  if (synonyms.length === 0 && antonyms.length === 0) {
-    const fallback = glossThesaurus(db, word, 5, offset);
-    synonyms = fallback.synonyms;
-    synonymTotal = fallback.synonymTotal;
-  }
-  const thesaurus = renderThesaurus(synonyms, antonyms, { synonymTotal, antonymTotal, offset });
+  const { synonyms, antonyms, related, synonymTotal, antonymTotal, relatedTotal } =
+    wordThesaurus(db, word, 5, offset);
+  const thesaurus = renderThesaurus(synonyms, antonyms, related, {
+    synonymTotal,
+    antonymTotal,
+    relatedTotal,
+    offset,
+  });
   const examples = renderExamples(exampleSentences(db, word));
   return [body, thesaurus, examples].filter(Boolean).join("\n");
 }
@@ -283,11 +281,12 @@ const COMMAND_HELP: Record<Command, string> = {
   omakase word <writing> [--limit N] [--offset N]
 
 Look up a dictionary entry for a word, matching on its kanji or kana spelling,
-with a thesaurus: up to 5 related words (synonyms) and up to 5 antonyms,
-taken from the entry's JMdict cross-references, extended with reverse links
-and 2-hop closure materialized at build time. When an entry has no
-cross-references at all, up to 5 related words are inferred from shared
-English gloss tokens instead.
+with a thesaurus shown after the senses: up to 5 Synonyms, 5 Antonyms and 5
+Related words, each block labeled by provenance and scored at build time.
+Synonyms are reciprocal JMdict cross-references or gloss-similarity edges that
+clear a confidence gate; Related is a one-way JMdict "see also" term. Nothing
+is guessed at query time — when no relation clears the bar the block is
+omitted.
 
 Arguments:
   <writing>      the word to look up (kanji or kana, e.g. 食べる)
