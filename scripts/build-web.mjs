@@ -12,11 +12,11 @@
  * `dist/` is the web server root.
  */
 import { spawnSync } from "node:child_process";
-import { cpSync, existsSync, mkdirSync, readFileSync, statSync, writeFileSync } from "node:fs";
+import { cpSync, existsSync, mkdirSync, readdirSync, readFileSync, statSync, writeFileSync } from "node:fs";
 import { createRequire } from "node:module";
-import { dirname, join, resolve } from "node:path";
+import { dirname, join, relative, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
-import { patchIndexHtml, patchSwCache, versionFromStamp } from "./sw-version.mjs";
+import { assertPrecacheCovers, patchIndexHtml, patchSwCache, versionFromStamp } from "./sw-version.mjs";
 
 const root = resolve(dirname(fileURLToPath(import.meta.url)), "..");
 const require = createRequire(import.meta.url);
@@ -64,12 +64,30 @@ for (const f of ["LICENSE.md", "NOTICE.md"]) {
 // same version on its shell asset links (style.css / web/app/main.js) and the
 // sw's PRECACHE entries match, so a new build can never resolve old cached
 // assets.
+/** Every module tsc emitted under dist/, as web-root-relative paths. */
+function emittedModules() {
+  const walk = (dir) => existsSync(dir)
+    ? readdirSync(dir, { withFileTypes: true }).flatMap((e) =>
+        e.isDirectory() ? walk(join(dir, e.name)) : [join(dir, e.name)],
+      )
+    : [];
+  return [...walk(join(root, "dist", "web", "app")), ...walk(join(root, "dist", "src"))]
+    .filter((p) => p.endsWith(".js"))
+    .map((p) => relative(join(root, "dist"), p).split("\\").join("/"));
+}
+
 const version = versionFromStamp(readFileSync(join(root, "src", "version.ts"), "utf8"));
 if (!version) {
   console.error("src/version.ts has no version stamp — version stamping did not run?");
   process.exit(1);
 }
 try {
+  // The offline shell must precache every module the build emits: a module
+  // missing from PRECACHE is only fetched on first use, so a cold (or
+  // partially cached) start breaks offline while the install looks healthy.
+  // The list is hand-maintained in web/sw.js, so check it against what tsc
+  // actually emitted and fail the build on any gap.
+  assertPrecacheCovers(readFileSync(join(root, "web", "sw.js"), "utf8"), emittedModules());
   writeFileSync(
     join(root, "dist", "index.html"),
     patchIndexHtml(readFileSync(join(root, "web", "index.html"), "utf8"), version),

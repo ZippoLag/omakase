@@ -9,9 +9,21 @@
  */
 import sqlite3InitModule, { type OpfsDatabase, type Sqlite3Static } from "../vendor/index.mjs";
 import { WasmDb } from "./shim.js";
-import { dbLooksHealthy, kanjiStrokePages, loadTags, streamKanji, streamPage, streamSearch, streamWord } from "./commands.js";
+import {
+  dbLooksHealthy,
+  dictionaryAction,
+  kanjiStrokePages,
+  loadTags,
+  readSchemaVersion,
+  schemaMismatchMessage,
+  streamKanji,
+  streamPage,
+  streamSearch,
+  streamWord,
+} from "./commands.js";
 import { OP_LADDERS } from "./worker-api.js";
 import type { PageAnchor, WorkerMessage, WorkerRequest } from "./worker-api.js";
+import { SCHEMA_VERSION } from "../../src/db/schema-version.js";
 
 /** OPFS path of the dictionary (also its URL on the server). */
 const DB_PATH = "/kanji.db";
@@ -81,14 +93,27 @@ async function ensureDb(engine: Sqlite3Static): Promise<OpfsDatabase> {
   // docroot. Best effort: offline (fetch failure) we keep whatever OPFS
   // already holds — the app must still boot from cache.
   let serverStamp: string | null = null;
+  let serverSchema: number | null = null;
   try {
     const metaRes = await fetch("./meta.json");
     if (metaRes.ok) {
-      const meta = (await metaRes.json()) as { version?: unknown };
+      const meta = (await metaRes.json()) as { version?: unknown; schemaVersion?: unknown };
       serverStamp = typeof meta.version === "string" ? meta.version : null;
+      serverSchema = typeof meta.schemaVersion === "number" ? meta.schemaVersion : null;
     }
   } catch {
     /* offline — no update check */
+  }
+
+  // Cheapest mismatch check first: dist/meta.json declares the schema the
+  // served dictionary was built for, so a shell deployed without its matching
+  // dictionary (the shell-only re-deploy that silently broke every thesaurus
+  // lookup) is refused here in milliseconds instead of after downloading
+  // ~341 MB only to fail. A dictionary predating the field reports null and
+  // falls through to requireSchema's post-import check, which also covers a
+  // server whose meta.json lies.
+  if (serverSchema !== null && serverSchema !== SCHEMA_VERSION) {
+    throw new Error(schemaMismatchMessage(serverSchema));
   }
 
   // Already imported on a previous visit? Read its build stamp to detect a
@@ -98,6 +123,7 @@ async function ensureDb(engine: Sqlite3Static): Promise<OpfsDatabase> {
   // (the first table — front of the file) reads fine while data pages past
   // the cut are gone — trusting it boots "ready" while every lookup fails.
   let localStamp: string | null = null;
+  let localSchema: number | null = null;
   let localHealthy = false;
   try {
     const existing = new OpfsDb(DB_PATH, "r");
@@ -105,6 +131,7 @@ async function ensureDb(engine: Sqlite3Static): Promise<OpfsDatabase> {
       const probe = new WasmDb(existing);
       const row = probe.prepare("SELECT value FROM meta WHERE key = 'version'").get() as { value?: string } | undefined;
       localStamp = row?.value ?? null;
+      localSchema = readSchemaVersion(probe);
       localHealthy = dbLooksHealthy(probe);
     } finally {
       existing.close();
@@ -113,19 +140,46 @@ async function ensureDb(engine: Sqlite3Static): Promise<OpfsDatabase> {
     /* no dictionary in OPFS yet (or unreadable copy) — first visit / re-import */
   }
 
-  // A stamped copy that fails the integrity probe is damaged: re-import it
-  // (importDb truncates + rewrites the OPFS file, so no explicit delete is
-  // needed) rather than trust it until the first lookup blows up.
-  if (localStamp !== null && !localHealthy) {
-    send({ kind: "status", text: "Dictionary copy is damaged — re-importing…" });
-    return importDictionary(OpfsDb, "Re-downloading dictionary…");
+  // The decision table lives in commands.ts (dictionaryAction) so every
+  // combination is unit-tested. Note what "reimport" covers: a copy can be
+  // readable and stamped yet unusable — damaged (the integrity probe above)
+  // or built for another schema, in which case this build's thesaurus reads
+  // would fail on the newer columns. Re-import either rather than trust it
+  // until the first lookup blows up (importDb truncates + rewrites the OPFS
+  // file, so no explicit delete is needed), and requireSchema below turns a
+  // still-wrong served dictionary into a loud, actionable failure.
+  switch (dictionaryAction(localStamp, localHealthy, localSchema, serverStamp)) {
+    case "update":
+      send({ kind: "status", text: "Newer dictionary build found — updating…" });
+      return requireSchema(await importDictionary(OpfsDb, "Updating dictionary into device storage…"));
+    case "reimport":
+      send({ kind: "status", text: "Dictionary copy is damaged or out of date — re-importing…" });
+      return requireSchema(await importDictionary(OpfsDb, "Re-downloading dictionary…"));
+    case "import":
+      return requireSchema(await importDictionary(OpfsDb, "Downloading dictionary into device storage…"));
+    case "open":
+      return new OpfsDb(DB_PATH, "r");
   }
-  if (localStamp !== null && serverStamp !== null && serverStamp !== localStamp) {
-    send({ kind: "status", text: "Newer dictionary build found — updating…" });
-    return importDictionary(OpfsDb, "Updating dictionary into device storage…");
+}
+
+/**
+ * After an import, refuse to boot on a dictionary built for another schema.
+ * Without this the app reports "ready" and then fails every thesaurus read on
+ * the newer columns — a shell deployed without its matching dictionary (a
+ * shell-only Pages re-deploy) would look healthy until the first `word`
+ * lookup. Throwing here means boot's one repair retry re-runs the import and
+ * the UI gets a `fatal` naming the actual fix.
+ */
+function requireSchema(raw: OpfsDatabase): OpfsDatabase {
+  const found = readSchemaVersion(new WasmDb(raw));
+  // Unlike the pre-flight check, an unrecorded schema is a mismatch here: we
+  // have actually downloaded this file, so a meta row we cannot read is not
+  // something to boot on.
+  if (found === null || found !== SCHEMA_VERSION) {
+    raw.close();
+    throw new Error(schemaMismatchMessage(found));
   }
-  if (localStamp !== null) return new OpfsDb(DB_PATH, "r");
-  return importDictionary(OpfsDb, "Downloading dictionary into device storage…");
+  return raw;
 }
 
 /** The subset of the sqlite-wasm OpfsDb class the import path needs. */

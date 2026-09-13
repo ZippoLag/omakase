@@ -11,7 +11,14 @@ import assert from "node:assert/strict";
 import { readFileSync } from "node:fs";
 import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
-import { cacheName, patchIndexHtml, patchSwCache, versionFromStamp } from "../scripts/sw-version.mjs";
+import {
+  assertPrecacheCovers,
+  cacheName,
+  missingPrecacheEntries,
+  patchIndexHtml,
+  patchSwCache,
+  versionFromStamp,
+} from "../scripts/sw-version.mjs";
 
 const root = join(dirname(fileURLToPath(import.meta.url)), "..");
 
@@ -80,6 +87,43 @@ test("patchIndexHtml agrees with the real index.html", () => {
   const out = patchIndexHtml(html, "0.1.0-build.7");
   assert.ok(out.includes('href="./style.css?v=0.1.0-build.7"'));
   assert.ok(out.includes('src="./web/app/main.js?v=0.1.0-build.7"'));
+});
+
+test("missingPrecacheEntries reports an emitted module the shell does not precache", () => {
+  assert.deepEqual(missingPrecacheEntries(swSource, ["web/app/main.js", "src/gloss.js"]), []);
+  assert.deepEqual(
+    missingPrecacheEntries(swSource, ["src/lookup.js", "src/nope.js", "web/app/nope.js"]),
+    ["src/nope.js", "web/app/nope.js"],
+  );
+});
+
+test("missingPrecacheEntries sees through the versioned asset URLs", () => {
+  // patchSwCache rewrites some entries to "./style.css?v=<version>"; a query
+  // string must not hide the path from the completeness check.
+  const versioned = patchSwCache(swSource, "0.1.0-build.7");
+  assert.deepEqual(missingPrecacheEntries(versioned, ["style.css", "web/app/main.js"]), []);
+});
+
+test("assertPrecacheCovers fails loudly, naming every missing module", () => {
+  assert.doesNotThrow(() => assertPrecacheCovers(swSource, ["web/app/main.js", "src/gloss.js"]));
+  assert.throws(
+    () => assertPrecacheCovers(swSource, ["web/app/query.js", "src/does-not-exist.js"]),
+    /PRECACHE is missing 1 emitted module\(s\): src\/does-not-exist\.js/,
+  );
+});
+
+test("the real precache list covers the modules the last schema bump added", () => {
+  // Regression pin: src/gloss.ts, web/app/query.ts and web/app/paging.ts were
+  // all added after PRECACHE was last hand-edited, so the emitted modules were
+  // fetched on first use instead of precached. Keep this list honest — the
+  // build now fails loudly on the same drift (assertPrecacheCovers).
+  const required = [
+    "src/gloss.js",
+    "src/db/schema-version.js",
+    "web/app/query.js",
+    "web/app/paging.js",
+  ];
+  assert.deepEqual(missingPrecacheEntries(swSource, required), []);
 });
 
 test("versionFromStamp composes the version from the generated stamp", () => {

@@ -17,6 +17,7 @@ import { LICENSES_SUMMARY } from "./licenses.js";
 import { loadFurigana, loadJmdict, loadKanjidic2, loadKanjivg, loadKradfile, loadRadkfile, RELEASE_TAG } from "./parse.js";
 import { transform } from "./transform.js";
 import { buildDb, summarize } from "./buildDb.js";
+import { SCHEMA_VERSION } from "../../src/db/schema.js";
 import {
   ASSETS,
   DIST_DIR,
@@ -132,6 +133,10 @@ async function main(): Promise<void> {
     version: v.versionFull ?? null,
     build: v.build ?? null,
     commit: v.commit ?? null,
+    // The schema this dictionary was built for — the same number the DB's
+    // meta table carries. A shell deployed without its matching dictionary
+    // can name the mismatch from here instead of failing every lookup.
+    schemaVersion: SCHEMA_VERSION,
     builtAt: new Date().toISOString(),
     counts: summary,
     assets: ASSETS.map((a) => ({ name: a.name, sha256: a.sha256 })),

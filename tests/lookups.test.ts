@@ -13,6 +13,7 @@ import { join } from "node:path";
 import Database from "better-sqlite3";
 import { transform } from "../data/build/transform.js";
 import { buildDb } from "../data/build/buildDb.js";
+import { SCHEMA_VERSION } from "../src/db/schema.js";
 import { cmdWord, cmdKanji, cmdSearch, loadTags } from "../src/cli.js";
 import { renderKanjiWords, renderSearch, renderWordBody, searchSections } from "../src/format.js";
 import {
@@ -98,6 +99,23 @@ function buildFixtureDb(): DB {
 function golden(name: string): string {
   return readFileSync(join(FIXTURES, "golden", name), "utf-8");
 }
+
+test("schema: the built dictionary records the version the app requires", () => {
+  // The web worker refuses to boot on a dictionary whose meta.schema_version
+  // differs from the schema its own build needs (a shell deployed without its
+  // matching dictionary would otherwise report "ready" and fail every
+  // thesaurus read). That check is only as good as this row: buildDb must
+  // write the same constant src/db/schema-version.ts declares.
+  const db = buildFixtureDb();
+  try {
+    const row = db.prepare("SELECT value FROM meta WHERE key = 'schema_version'").get() as
+      | { value: string }
+      | undefined;
+    assert.equal(row?.value, String(SCHEMA_VERSION));
+  } finally {
+    db.close();
+  }
+});
 
 // [golden file, query, (unused), --limit, --offset]
 const WORD_GOLDENS: [string, string, string?, number?, number?][] = [

@@ -1,8 +1,11 @@
 /**
  * SQLite schema for the offline dictionary DB.
  * Mirrors data-model.md §3. Schema version must bump on any DDL change.
+ *
+ * SCHEMA_VERSION itself lives in ./schema-version.js so the web app can import
+ * the number without bundling the DDL (see that module's comment).
  */
-export const SCHEMA_VERSION = 4;
+export { SCHEMA_VERSION } from "./schema-version.js";
 
 export const DDL = `
 PRAGMA foreign_keys = ON;

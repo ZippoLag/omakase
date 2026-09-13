@@ -257,7 +257,7 @@ in W10 — before adding any cache API, grep for callers first.
   caches when the current cache holds every precache entry; navigations are
   network-first, other requests cache-first **scoped to the current cache
   name** (`caches.match(req, { cacheName: CACHE })`).
--  The 289 MB dictionary is **not** precached — it lives in OPFS only;
+-  The ~341 MB dictionary is **not** precached — it lives in OPFS only;
   `/kanji.db` requests always hit the network (browser HTTP cache applies).
 
 ### Free deployment (Cloudflare Pages + R2)
@@ -275,7 +275,7 @@ has since been deleted; the bucket stays, because it holds the dictionary.
 The shell (dist/ minus kanji.db) goes to Pages — `dist/_headers`, emitted by build-web.mjs, supplies
 COOP/COEP/CORP (cross-origin isolation the OPFS engine needs) and
 `Cache-Control: no-cache` for index.html / sw.js / meta.json — while the
-308 MB dictionary (over Pages' 25 MiB per-asset limit) lives in an R2
+~341 MB dictionary (over Pages' 25 MiB per-asset limit) lives in an R2
 bucket and is streamed through the `kanji.db.ts` Function
 (`env.DB.get("kanji.db")`, `Cache-Control: no-cache` so the browser
 revalidates via the object's ETag instead of serving a stale overwritten
@@ -286,6 +286,36 @@ stamp must **always come from the same build** — the worker re-imports
 whenever the stamps differ, so a mismatched pair re-imports every boot.
 Keep `DB_PATH` root-absolute and the shell paths relative; the SW's
 `/kanji.db` bypass is what lets the import always hit the network.
+
+**Two stamps, deliberately.** `build:db` writes the **dictionary** stamp into
+`dist/meta.json` *and* the DB's own `meta` table; `web:build` stamps the
+**shell** (index.html/sw.js asset URLs + the SW cache name) with its own
+number and never rewrites `meta.json`. Clients re-import on the dictionary
+stamp, so a shell-only rebuild costs no 341 MB re-download; do not "fix" the
+two numbers into one.
+
+**A shell-only re-deploy is only safe while the dictionary is unchanged.**
+README documents the credential-free path (park `dist/kanji.db`, then
+`wrangler pages deploy`). It silently broke the app once the schema moved to
+v4: the new shell ran against the old R2 dictionary, opened it fine, reported
+`ready`, and failed every thesaurus read with `no such column: score`. Two
+guards now cover it — the worker compares the opened dictionary's
+`meta.schema_version` (`readSchemaVersion`) with `SCHEMA_VERSION` from
+`src/db/schema-version.ts` and **re-imports on a mismatch, then fails loudly**
+naming the fix, instead of booting into a broken app; and `dist/meta.json`
+carries `schemaVersion` so the served pair is self-describing. Any
+`build:db` that changes the dictionary still requires the full
+`deploy:web` — the guard makes the mistake loud, not harmless.
+
+**The SW precache list is enforced by the build.** `web/sw.js`'s `PRECACHE`
+is hand-maintained, and it drifted twice: `web/app/query.js`,
+`web/app/paging.js` and `src/gloss.ts` all shipped un-precached. A missing
+module is only fetched on first use, so a cold or partially-cached start
+breaks offline while the install itself looks healthy.
+`assertPrecacheCovers` (scripts/sw-version.mjs) now checks the list against
+the files tsc actually emitted in `web:build` and **fails loudly**, naming
+every missing path — add the module to `PRECACHE` in `web/sw.js` when adding
+one.
 
 ## 6. Quality procedures & test conventions
 

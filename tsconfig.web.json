@@ -16,6 +16,7 @@
   },
   "include": [
     "web/**/*.ts",
+    "src/db/schema-version.ts",
     "src/kana.ts",
     "src/kangxi.ts",
     "src/conjugation.ts",

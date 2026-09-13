@@ -1,7 +1,7 @@
 /* omakase offline shell.
  *
  * Caches the app + engine so the UI runs with no network after the first
- * visit. The 289 MB dictionary is NOT cached here — it is imported into OPFS
+ * visit. The ~341 MB dictionary is NOT cached here — it is imported into OPFS
  * once by the worker and served only from device storage. The cache name is
  * stamped from the build version by scripts/build-web.mjs, so every web build
  * publishes a new cache (old caches are deleted on activate).
@@ -22,7 +22,9 @@ const PRECACHE = [
   // attribution documents (linked from the footer)
   "./LICENSE.md",
   "./NOTICE.md",
-  // emitted app modules
+  // emitted app modules (must list every module the build emits —
+  // scripts/build-web.mjs verifies this list against dist/ and fails loudly,
+  // because a gap leaves the offline shell incomplete)
   "./web/app/main.js",
   "./web/app/worker.js",
   "./web/app/shim.js",
@@ -30,6 +32,8 @@ const PRECACHE = [
   "./web/app/worker-api.js",
   "./web/app/tree.js",
   "./web/app/cache.js",
+  "./web/app/paging.js",
+  "./web/app/query.js",
   "./web/app/stroke-widget.js",
   "./web/app/theme.js",
   // compiled shared query/render layer
@@ -39,6 +43,8 @@ const PRECACHE = [
   "./src/kana.js",
   "./src/kangxi.js",
   "./src/conjugation.js",
+  "./src/gloss.js",
+  "./src/db/schema-version.js",
   // SQLite WASM engine
   "./web/vendor/index.mjs",
   "./web/vendor/sqlite3.wasm",

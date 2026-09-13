@@ -9,7 +9,7 @@
  *      dist/ (the shell + strokes/), restoring kanji.db afterwards
  *
  * The dictionary must NOT be uploaded to Pages itself — its 25 MiB per-asset
- * limit rejects the ~308 MB file — so it is streamed to the app through the
+ * limit rejects the ~341 MB file — so it is streamed to the app through the
  * Pages Function at functions/kanji.db.ts, which reads the same R2 object.
  * Both halves come from the same dist/ build, so the served dist/meta.json
  * stamp and the dictionary in R2 always match (the worker re-imports exactly
@@ -33,6 +33,7 @@ import { dirname, join, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 import { S3Client } from "@aws-sdk/client-s3";
 import { Upload } from "@aws-sdk/lib-storage";
+import { versionFromStamp } from "./sw-version.mjs";
 
 const root = resolve(dirname(fileURLToPath(import.meta.url)), "..");
 
@@ -93,28 +94,62 @@ function accountId() {
 }
 
 /**
+ * The R2 credentials this script needs, filled from the project's gitignored
+ * env files (`.env`, then `.dev.vars`) when they aren't already exported.
+ * Both files are already the repo's home for local credentials (wrangler reads
+ * them too), so the release needs no extra shell setup — real environment
+ * variables always win, and only these three keys are read. Returns the file
+ * that supplied them, or null when nothing was loaded.
+ */
+function loadLocalCredentials() {
+  const wanted = ["R2_ACCESS_KEY_ID", "R2_SECRET_ACCESS_KEY", "CLOUDFLARE_ACCOUNT_ID"];
+  if (wanted.every((k) => process.env[k])) return null;
+  for (const file of [".env", ".dev.vars"]) {
+    const path = join(root, file);
+    if (!existsSync(path)) continue;
+    for (const line of readFileSync(path, "utf8").split(/\r?\n/)) {
+      const m = line.match(/^\s*(?:export\s+)?([A-Z_][A-Z0-9_]*)\s*=\s*(.*?)\s*$/);
+      if (!m || !wanted.includes(m[1])) continue;
+      let value = m[2];
+      if (value.length >= 2 && (value.startsWith("\"") || value.startsWith("'"))) {
+        value = value.slice(1, -1);
+      }
+      if (!process.env[m[1]] && value) process.env[m[1]] = value;
+    }
+    if (process.env.R2_ACCESS_KEY_ID && process.env.R2_SECRET_ACCESS_KEY) return file;
+  }
+  return null;
+}
+
+/**
  * Upload dist/kanji.db to the R2 bucket through the S3-compatible API
- * (multipart). wrangler's `r2 object put` caps files at 300 MiB and this
- * one is ~307 MiB, so the object can't go through wrangler; the S3 API has
+ * (multipart). wrangler's `r2 object put` caps files at 300 MiB and this one
+ * is well past that, so the object can't go through wrangler; the S3 API has
  * no such limit and R2's multipart upload handles the size fine.
  *
  * Requires R2 API credentials (separate from the wrangler login):
  * dash.cloudflare.com → R2 → Manage R2 API Tokens → Create API Token
- * (Object Read & Write, bucket-scoped), exported as:
+ * (Object Read & Write, bucket-scoped), as
  *   R2_ACCESS_KEY_ID / R2_SECRET_ACCESS_KEY
- * (CLOUDFLARE_ACCOUNT_ID is optional — it is read from `wrangler whoami`.)
+ * — exported, or written to the gitignored `.env` / `.dev.vars` (this script
+ * picks them up from there). CLOUDFLARE_ACCOUNT_ID is optional: it falls back
+ * to reading the account id from `wrangler whoami`.
  */
 async function uploadDbToR2({ bucket, dbPath }) {
+  const fromFile = loadLocalCredentials();
+  if (fromFile) console.log(`  (using the R2 credentials in ${fromFile})`);
   const accessKeyId = process.env.R2_ACCESS_KEY_ID;
   const secretAccessKey = process.env.R2_SECRET_ACCESS_KEY;
+  const sizeMiB = (statSync(dbPath).size / 1048576).toFixed(0);
   if (!accessKeyId || !secretAccessKey) {
     fail(
-      "the dictionary (307 MiB) exceeds wrangler's 300 MiB r2 object put limit, "
+      `the dictionary (${sizeMiB} MiB) exceeds wrangler's 300 MiB r2 object put limit, `
       + "so the upload needs R2 API credentials. Create an API token:\n"
       + "  dash.cloudflare.com → R2 → Manage R2 API Tokens → Create API Token\n"
-      + "  (Object Read & Write, bucket: " + bucket + "), then:\n"
-      + "  export R2_ACCESS_KEY_ID=<access key id>\n"
-      + "  export R2_SECRET_ACCESS_KEY=<secret access key>\n"
+      + "  (Object Read & Write, bucket: " + bucket + "), then put them in the\n"
+      + "  gitignored .env (or .dev.vars) — or export them:\n"
+      + "  R2_ACCESS_KEY_ID=<access key id>\n"
+      + "  R2_SECRET_ACCESS_KEY=<secret access key>\n"
       + "and re-run.",
     );
   }
@@ -220,14 +255,26 @@ async function main() {
   }
 
   let version = "unknown";
+  let schemaVersion = "unknown";
   try {
     const meta = JSON.parse(readFileSync(join(dist, "meta.json"), "utf8"));
     if (typeof meta.version === "string") version = meta.version;
+    if (meta.schemaVersion != null) schemaVersion = String(meta.schemaVersion);
+  } catch { /* warn below */ }
+  // The shell carries its own stamp (dist/src/version.js, written by
+  // web:build) — a different number from the dictionary's, by design. Print
+  // both: shipping a stale shell is the easiest release mistake, and since the
+  // worker re-imports on the *dictionary* stamp alone, nothing else would
+  // reveal it. A dictionary schema newer than the app's is refused at boot.
+  let shellVersion = "unknown";
+  try {
+    shellVersion = versionFromStamp(readFileSync(join(dist, "src", "version.js"), "utf8")) ?? "unknown";
   } catch { /* warn below */ }
   const dbMb = (statSync(dbPath).size / 1048576).toFixed(0);
 
   console.log(`\nDeploying omakase to Cloudflare (project: ${project}, bucket: ${bucket}):`);
-  console.log(`  dictionary build: ${version}`);
+  console.log(`  dictionary build: ${version} (schema ${schemaVersion})`);
+  console.log(`  shell build:      ${shellVersion}`);
   console.log(`  dist/kanji.db: ${dbMb} MB → r2://${bucket}/${DB_KEY}`);
   console.log(`  ${outDir}/ (minus kanji.db) → Pages (branch: ${args.branch})`);
 
@@ -289,7 +336,7 @@ async function main() {
   }
 
   console.log(`\n✓ Deployed. Open https://${domain} on a phone:`);
-  console.log("  the first visit downloads the dictionary into OPFS (one time, ~300 MB).");
+  console.log("  the first visit downloads the dictionary into OPFS (one time, ~341 MB).");
   console.log("  Re-deploy any time with `pnpm run deploy:web` — the shell and the");
   console.log("  dictionary come from the same build, so updates re-import automatically.");
 }

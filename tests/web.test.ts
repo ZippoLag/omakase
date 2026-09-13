@@ -11,7 +11,8 @@ import assert from "node:assert/strict";
 import { mkdtempSync, rmSync, statSync, truncateSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { dbLooksHealthy } from "../web/app/commands.js";
+import { dbLooksHealthy, dictionaryAction, readSchemaVersion, schemaMismatchMessage } from "../web/app/commands.js";
+import { SCHEMA_VERSION } from "../src/db/schema.js";
 import { ResultCacheManager } from "../web/app/cache.js";
 import { foldAnchors, splicePage } from "../web/app/paging.js";
 import type { PageAnchor, PageSection } from "../web/app/worker-api.js";
@@ -537,6 +538,90 @@ test("dbLooksHealthy: rejects a garbage file that still opens", { skip: sqliteSk
     const db = new DatabaseSync!(path, { readOnly: true });
     assert.strictEqual(dbLooksHealthy(db), false);
     db.close();
+  } finally {
+    rmSync(dir, { recursive: true, force: true });
+  }
+});
+
+// ---------------------------------------------------------------------------
+// readSchemaVersion / dictionaryAction: the boot guard against a dictionary
+// built for another schema (a shell deployed without its matching dictionary
+// would otherwise report "ready" and then fail every thesaurus read on the
+// newer columns), and the decision table that keeps a working copy offline.
+// ---------------------------------------------------------------------------
+
+test("schemaMismatchMessage: names both schemas and the fix", () => {
+  // The one wording both the pre-flight check and the post-import backstop
+  // show, so a user who hits it is told exactly what to run.
+  const msg = schemaMismatchMessage(3);
+  assert.match(msg, /built for schema 3/);
+  assert.match(msg, new RegExp(`this app needs ${SCHEMA_VERSION}`));
+  assert.match(msg, /pnpm run deploy:web/);
+  // Unrecorded/unreadable schema is reported as unknown, not as a number.
+  assert.match(schemaMismatchMessage(null), /built for schema unknown/);
+});
+
+test("dictionaryAction: no readable copy imports, whatever the server says", () => {
+  assert.equal(dictionaryAction(null, false, null, null), "import");
+  // An unreadable copy is also "no copy" — never a re-import loop candidate.
+  assert.equal(dictionaryAction(null, false, null, "v2"), "import");
+});
+
+test("dictionaryAction: a differing served stamp is the update path", () => {
+  assert.equal(dictionaryAction("v1", true, 4, "v2"), "update");
+  // Damage and an out-of-date schema both re-import anyway, so the update
+  // message (the common upgrade) wins for the user.
+  assert.equal(dictionaryAction("v1", false, 3, "v2"), "update");
+});
+
+test("dictionaryAction: a healthy, current copy of the served build opens", () => {
+  assert.equal(dictionaryAction("v1", true, 4, "v1"), "open");
+  // Offline (the meta.json fetch failed) must never force a 341 MB re-import:
+  // a healthy copy of the current schema still opens with no network.
+  assert.equal(dictionaryAction("v1", true, 4, null), "open");
+});
+
+test("dictionaryAction: damage or an older schema re-imports", () => {
+  // Damaged (quick_check failed) under the served stamp.
+  assert.equal(dictionaryAction("v1", false, 4, "v1"), "reimport");
+  // Built for another schema: every thesaurus read would fail on the newer
+  // columns, so it gets the same treatment as damage.
+  assert.equal(dictionaryAction("v1", true, 3, "v1"), "reimport");
+  // A copy from before schema_version was recorded (null) is "unknown", not 4.
+  assert.equal(dictionaryAction("v1", true, null, "v1"), "reimport");
+});
+
+test("readSchemaVersion: reads the schema_version the dictionary was built with", { skip: sqliteSkip }, () => {
+  const dir = mkdtempSync(join(tmpdir(), "omakase-schema-"));
+  try {
+    const path = join(dir, "dict.db");
+    const db = new DatabaseSync!(path);
+    db.exec("CREATE TABLE meta (key TEXT PRIMARY KEY, value TEXT)");
+    db.prepare("INSERT INTO meta VALUES ('version', 'v1')").run();
+    db.prepare("INSERT INTO meta VALUES ('schema_version', '4')").run();
+    db.close();
+    const reopened = new DatabaseSync!(path, { readOnly: true });
+    assert.strictEqual(readSchemaVersion(reopened), 4);
+    reopened.close();
+  } finally {
+    rmSync(dir, { recursive: true, force: true });
+  }
+});
+
+test("readSchemaVersion: null when the row, table or file is unusable", { skip: sqliteSkip }, () => {
+  const dir = mkdtempSync(join(tmpdir(), "omakase-schema-"));
+  try {
+    // A dictionary from before schema_version was recorded (the fixture has
+    // only the `version` row): null, never a throw — the caller decides.
+    const legacy = new DatabaseSync!(makeDictDb(dir), { readOnly: true });
+    assert.strictEqual(readSchemaVersion(legacy), null);
+    legacy.close();
+    // Garbage bytes: the open may succeed and the query throws — still null.
+    const garbagePath = join(dir, "garbage.db");
+    writeFileSync(garbagePath, Buffer.alloc(4096, 0xa5));
+    const garbage = new DatabaseSync!(garbagePath, { readOnly: true });
+    assert.strictEqual(readSchemaVersion(garbage), null);
+    garbage.close();
   } finally {
     rmSync(dir, { recursive: true, force: true });
   }

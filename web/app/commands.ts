@@ -23,6 +23,7 @@ import {
   wordThesaurus,
 } from "../../src/lookup.js";
 import type { PageAnchor, PageRequest, PageSection, StrokePage } from "./worker-api.js";
+import { SCHEMA_VERSION } from "../../src/db/schema-version.js";
 import {
   KANJI_MAX_DEFAULT,
   kanjiCompoundRows,
@@ -54,6 +55,76 @@ export function dbLooksHealthy(db: DbLike): boolean {
   } catch {
     return false;
   }
+}
+
+/**
+ * The `schema_version` a dictionary was built with, or null when the row (or
+ * the whole table) is absent. The worker compares it against the schema its
+ * own build needs: a dictionary from another schema still opens and reports
+ * "ready" — its meta table sits at the front of the file, so a stamp read
+ * succeeds — while every thesaurus read fails on the newer columns. Detecting
+ * the mismatch at boot is what keeps that from surfacing as "the app is
+ * ready but every lookup is broken".
+ */
+export function readSchemaVersion(db: DbLike): number | null {
+  try {
+    const row = db.prepare("SELECT value FROM meta WHERE key = 'schema_version'").get() as { value?: unknown } | undefined;
+    const n = Number(row?.value);
+    return Number.isInteger(n) ? n : null;
+  } catch {
+    return null;
+  }
+}
+
+/** What boot should do with the dictionary copy it found in OPFS. */
+export type DictionaryAction = "open" | "update" | "reimport" | "import";
+
+/**
+ * The actionable boot error for a dictionary built for another schema. One
+ * source for the wording, because two call sites need it: the cheap pre-flight
+ * check (the served `meta.json` declares `schemaVersion`, so a shell deployed
+ * without its matching dictionary is refused *without* downloading ~341 MB
+ * only to fail) and the post-import backstop (`requireSchema`, which also
+ * catches a served file that lies about or omits the field).
+ *
+ * Callers own the null semantics: `null` means "not recorded / unreadable",
+ * which the pre-flight treats as "unknown, go on and import" and the backstop
+ * treats as a mismatch.
+ */
+export function schemaMismatchMessage(found: number | null): string {
+  return `the served dictionary was built for schema ${found ?? "unknown"}, but this app needs ${SCHEMA_VERSION}`
+    + " — the dictionary is older than the deployed shell. Run `pnpm run deploy:web` (it uploads"
+    + " dist/kanji.db and the shell from one build) and reload.";
+}
+
+/**
+ * Decide the dictionary's fate from the probes taken at boot — the pure half
+ * of `ensureDb`, so the (fiddly) combinations are unit-testable:
+ *
+ *   import    no readable copy in OPFS (first visit, or evicted storage)
+ *   update    a readable copy, but the served build stamp differs — the
+ *             common upgrade path, and the only one that is *expected*
+ *   reimport  a readable copy of the served build that cannot be trusted:
+ *             damaged (fails quick_check) or built for another schema
+ *   open      a healthy copy of the served schema and build — the offline path
+ *
+ * Order matters. The stamp is checked before health/schema so a normal update
+ * reports "newer dictionary found" rather than "damaged"; a mismatched schema
+ * is treated like damage (re-import, then `requireSchema` in the worker fails
+ * loudly if the served dictionary is wrong too); and `serverStamp === null`
+ * (offline, the meta.json fetch failed) must never force a re-import — a
+ * healthy copy still opens and the app works with no network.
+ */
+export function dictionaryAction(
+  localStamp: string | null,
+  localHealthy: boolean,
+  localSchema: number | null,
+  serverStamp: string | null,
+): DictionaryAction {
+  if (localStamp === null) return "import";
+  if (serverStamp !== null && serverStamp !== localStamp) return "update";
+  if (!localHealthy || localSchema !== SCHEMA_VERSION) return "reimport";
+  return "open";
 }
 
 /** JMdict tag -> description map, stored in the meta table (like cli.loadTags). */

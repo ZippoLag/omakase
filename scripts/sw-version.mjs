@@ -55,6 +55,38 @@ export function patchIndexHtml(htmlSource, version) {
  * reformatted sw.js can never ship with a stale cache name or unversioned
  * assets.
  */
+/**
+ * The precache list is hand-maintained, so nothing stops a new module (e.g. a
+ * freshly extracted shared helper) from shipping un-precached: the module
+ * would then be fetched on first use, leaving a cold or partially-cached start
+ * broken offline while the install itself looks healthy.
+ * scripts/build-web.mjs checks the list against the files tsc actually emitted
+ * and fails the build on any gap, so the drift cannot ship — same discipline
+ * as patchIndexHtml/patchSwCache failing loudly on a missing asset link.
+ *
+ * `emitted` are web-root-relative paths (e.g. "src/gloss.js"). Returns the
+ * paths PRECACHE is missing, deduped and sorted; empty when complete.
+ */
+export function missingPrecacheEntries(swSource, emitted) {
+  // PRECACHE entries may carry the `?v=<version>` patchSwCache adds — the
+  // query string must not hide the path from the check.
+  const listed = new Set(
+    [...swSource.matchAll(/"\.\/([^"?]+)(?:\?[^"]*)?"/g)].map((m) => m[1]),
+  );
+  return [...new Set(emitted)].filter((p) => !listed.has(p)).sort();
+}
+
+/** Fail loudly when PRECACHE is incomplete, naming every missing module. */
+export function assertPrecacheCovers(swSource, emitted) {
+  const missing = missingPrecacheEntries(swSource, emitted);
+  if (missing.length > 0) {
+    throw new Error(
+      `sw.js: PRECACHE is missing ${missing.length} emitted module(s): ${missing.join(", ")}`
+      + " — add them to PRECACHE in web/sw.js (the offline shell must list every emitted module).",
+    );
+  }
+}
+
 export function patchSwCache(swSource, version) {
   const cache = cacheName(version);
   let patched = swSource.replace(/const CACHE = "[^"]*";/, `const CACHE = "${cache}";`);

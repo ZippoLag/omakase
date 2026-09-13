@@ -435,7 +435,7 @@ certificate on each phone (the path is printed by `web:gen-cert`):
 ### Install on the phone
 
 Open `https://<your-lan-ip>:8443` in the phone browser (same Wi-Fi as your
-computer), wait for the one-time import (progress bar; ~300 MB), then
+computer), wait for the one-time import (progress bar; ~340 MB), then
 **Add to Home Screen** (Android Chrome: menu → *Add to Home screen*; iOS
 Safari: *Share → Add to Home Screen*). Afterwards the app opens full-screen
 and works offline — airplane mode included. The computer only needs to be on
@@ -447,7 +447,7 @@ when you (re)install or update.
   iPhone/iPad Safari 16.x can't run the OPFS engine. The server must stay
   https with the COOP/COEP headers — the provided `serve-web` script does
   this.
-- The dictionary occupies ~300 MB of phone storage (it lives in the
+- The dictionary occupies ~340 MB of phone storage (it lives in the
   browser's private origin storage, so iOS may evict it only under extreme
   storage pressure; re-opening the app re-imports if it is gone). Stroke
   diagrams are separate small files (~6.4k KanjiVG svgs, ~40 MB in `dist/`,
@@ -468,7 +468,7 @@ when you (re)install or update.
 The same `dist/` can be published to the **permanent free tier** of
 Cloudflare — no server, no credit card, no bandwidth bill. This is the
 "host it forever" path: anyone opens the URL (or installs the PWA from it)
-and the ~300 MB dictionary is downloaded once per device into its own
+and the ~340 MB dictionary is downloaded once per device into its own
 storage, exactly like the LAN install.
 
 Why Cloudflare, specifically:
@@ -479,12 +479,12 @@ Why Cloudflare, specifically:
   free host that lets you set custom headers (via `dist/_headers`, emitted
   by `web:build`); GitHub Pages, Neocities, Surge, etc. cannot, so the app
   can't run there.
-- The 308 MB `kanji.db` exceeds every free host's per-file limit (Pages
+- The ~341 MB `kanji.db` exceeds every free host's per-file limit (Pages
   itself caps assets at 25 MiB), so it is stored in **Cloudflare R2** (10 GB
   free, no egress fees) and streamed to the app through a tiny Pages
   Function at `/kanji.db`.
 - Pages and R2 charge **nothing for bandwidth** on the free tier — each
-  device's 308 MB one-time import costs $0, forever. Netlify/Vercel's free
+  device's ~341 MB one-time import costs $0, forever. Netlify/Vercel's free
   100 GB/month would be exhausted after ~300 imports.
 
 ```
@@ -504,10 +504,13 @@ browser / phone
 3. **Log in wrangler**: `pnpm exec wrangler login` (opens a browser). For
    CI, set `CLOUDFLARE_API_TOKEN` + `CLOUDFLARE_ACCOUNT_ID` instead.
 4. **Create R2 API credentials** (for the dictionary upload — wrangler's
-   `r2 object put` caps files at 300 MiB, and `kanji.db` is ~307 MiB, so
+   `r2 object put` caps files at 300 MiB, and `kanji.db` is ~341 MB
+   (325 MiB), so
    the upload goes through R2's S3-compatible multipart API instead):
    dash.cloudflare.com → R2 → **Manage R2 API Tokens** → **Create API
-   Token** (Object Read & Write, bucket: `omakase-db`), then:
+   Token** (Object Read & Write, bucket: `omakase-db`), then either export
+   them or write them to the gitignored `.env` / `.dev.vars` (which
+   `deploy:web` reads for you — no shell setup needed on later releases):
    ```bash
    export R2_ACCESS_KEY_ID=<access key id>
    export R2_SECRET_ACCESS_KEY=<secret access key>
@@ -523,7 +526,7 @@ browser / phone
    project landed at `omakase-cub.pages.dev` for exactly that reason), so
    trust the printed URL over a hardcoded one.
 7. **Open the printed URL** — the first visit shows the one-time
-   import progress bar (~300 MB); afterwards the app works offline exactly
+   import progress bar (~340 MB); afterwards the app works offline exactly
    like the LAN install, and can be added to the home screen.
 
 #### Every release
@@ -544,25 +547,40 @@ twice. (Run `node scripts/deploy-web.mjs --help` for options: `--build`,
 
 Notes:
 
-- **Stamp sync is by construction** — never upload a `kanji.db` to R2 from a
-  different build than the `dist/` you deploy, or the worker would re-import
-  on every boot (its update check compares the served `meta.json` stamp with
-  the copy in OPFS).
+- **Stamp sync is by construction** — `build:db` writes `dist/kanji.db` and
+  `dist/meta.json` together, and `deploy:web` ships both halves from that one
+  `dist/`, so the dictionary in R2 and the served `meta.json` always agree.
+  Never upload a `kanji.db` to R2 from a different build than the `dist/` you
+  deploy: the worker's update check compares the served `meta.json` stamp
+  with the copy in OPFS, so a mismatched pair would re-import on every boot.
+- **The shell and the dictionary carry separate build stamps.** `build:db`
+  stamps `dist/meta.json` (and the dictionary's own `meta` table) with the
+  **dictionary** build; `web:build` stamps the **shell** (index.html/sw.js
+  asset URLs and the service-worker cache name) with its own number and does
+  **not** touch `meta.json`. Clients re-import based on the dictionary stamp,
+  so rebuilding only the shell never forces a ~341 MB re-download, and the
+  About dialog shows both.
+- **A `build:db` that changed the dictionary must ship with the shell** —
+  run the full `pnpm run deploy:web`. A *shell-only* re-deploy (parking
+  `dist/kanji.db` aside and running `pnpm exec wrangler pages deploy --branch
+  main`, which needs no R2 credentials) is only safe while the dictionary in
+  R2 is unchanged: after a schema bump the app refuses to boot on the older
+  dictionary with an explicit "the served dictionary was built for schema N,
+  but this app needs M" error instead of silently failing every thesaurus
+  lookup — but the fix is still the full deploy.
 - **Shell-only re-deploys need no R2 credentials**: when the bucket already
   holds the dictionary for the current build (e.g. a second Pages project
-  bound to the same bucket), parking `dist/kanji.db` aside and running
-  `pnpm exec wrangler pages deploy --branch main` publishes the shell on its
-  own — the `/kanji.db` route keeps streaming the R2 object unchanged.
+  bound to the same bucket), the parked-dictionary Pages deploy above
+  publishes the shell on its own — the `/kanji.db` route keeps streaming the
+  R2 object unchanged.
 - **Several projects can share one bucket** — they then serve the same
   dictionary, so one `deploy:web` release updates all of them at once (and
   they can never drift apart).
 - **Custom domain**: add it in the Pages dashboard (free plan: 100 custom
   domains); the app's root-relative paths work unchanged.
-- **Free-tier budget**: R2 storage 10 GB (this app: ~0.3 GB), Pages 20,000
+- **Free-tier budget**: R2 storage 10 GB (this app: ~0.34 GB), Pages 20,000
   files (we ship ~6.5k), Pages Functions 100k requests/day; bandwidth is
-  unmetered on both. `web:build` stamps a fresh build number into the shell
-  and `meta.json` on every release, so the header badge always shows the
-  deployed version.
+  unmetered on both.
 
 ## Development
 

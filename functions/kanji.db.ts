@@ -1,6 +1,6 @@
 /**
  * Cloudflare Pages Function: serves the dictionary (`kanji.db`) from the R2
- * bucket bound as `DB`. The ~308 MB file exceeds Pages' 25 MiB per-asset
+ * bucket bound as `DB`. The ~341 MB file exceeds Pages' 25 MiB per-asset
  * limit, so it lives in R2 (free tier: 10 GB storage, zero egress fees) and
  * is streamed to the app through this route.
  *
